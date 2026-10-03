@@ -1,0 +1,37 @@
+# Matches .clang-format for C++ and keeps everything else consistent for
+# editors that do not run clang-format on save.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+max_line_length = 100
+
+[*.{c,cc,cpp,h,hpp}]
+indent_size = 4
+
+[*.{cmake,txt}]
+indent_size = 4
+
+[CMakeLists.txt]
+indent_size = 4
+
+[*.{yml,yaml,json}]
+indent_size = 2
+
+[*.py]
+indent_size = 4
+max_line_length = 88
+
+# Markdown is soft wrapped: one line per paragraph. A one-word edit then
+# produces a one-line diff instead of reflowing the whole paragraph.
+[*.md]
+trim_trailing_whitespace = false
+max_line_length = off
+
+[Makefile]
+indent_style = tab

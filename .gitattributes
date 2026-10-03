@@ -1,2 +1,10 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Normalise line endings on the way in so that a checkout on another platform
+# cannot produce a diff by itself.
+* text=auto eol=lf
+
+# Shell scripts and git hooks must keep LF even on Windows checkouts.
+*.sh text eol=lf
+hooks/* text eol=lf
+
+# Formats that are byte-exact by definition.
+*.patch -text -whitespace

@@ -1,0 +1,62 @@
+# Checks are listed one per line so that each exclusion can carry the reason
+# it exists. Anything disabled here should either be re-enabled later or
+# explained.
+Checks: >
+  bugprone-*,
+  cppcoreguidelines-*,
+  misc-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -bugprone-easily-swappable-parameters,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -misc-include-cleaner,
+  -misc-non-private-member-variables-in-classes,
+  -modernize-use-trailing-return-type,
+  -readability-identifier-length
+
+# Rationale for the exclusions above:
+#
+# bugprone-easily-swappable-parameters fires on parsers that legitimately take
+#   several offsets and sizes of the same type.
+# cppcoreguidelines-avoid-magic-numbers duplicates readability-magic-numbers,
+#   which stays enabled and is the check the no-magic-numbers rule relies on.
+# cppcoreguidelines-pro-bounds-constant-array-index wants gsl::at, which would
+#   pull in a dependency for no benefit over a span.
+# cppcoreguidelines-pro-type-reinterpret-cast is unavoidable when reading
+#   little-endian fields out of a byte span; those casts are localised in the
+#   container parsers.
+# misc-include-cleaner is too noisy against transitively included standard
+#   headers to be useful as a gate.
+# misc-non-private-member-variables-in-classes fires on plain data structs
+#   that model on-disk layouts.
+# modernize-use-trailing-return-type is a style preference, not a correctness
+#   matter, and the codebase uses leading return types.
+# readability-identifier-length rejects conventional short names such as the
+#   loop variable in a bounded loop.
+
+WarningsAsErrors: ''
+HeaderFilterRegex: '.*'
+FormatStyle: file
+
+CheckOptions:
+  readability-magic-numbers.IgnoredIntegerValues: '0;1;2;3;4;8;16;32;64'
+  readability-function-cognitive-complexity.Threshold: '25'
+  readability-identifier-naming.NamespaceCase: lower_case
+  readability-identifier-naming.ClassCase: CamelCase
+  readability-identifier-naming.StructCase: CamelCase
+  readability-identifier-naming.EnumCase: CamelCase
+  readability-identifier-naming.EnumConstantCase: CamelCase
+  readability-identifier-naming.FunctionCase: CamelCase
+  readability-identifier-naming.VariableCase: lower_case
+  readability-identifier-naming.ParameterCase: lower_case
+  readability-identifier-naming.MemberCase: lower_case
+  readability-identifier-naming.PrivateMemberSuffix: '_'
+  readability-identifier-naming.ConstantCase: CamelCase
+  readability-identifier-naming.ConstexprVariableCase: CamelCase
+  readability-identifier-naming.GlobalConstantCase: CamelCase
+  readability-identifier-naming.TypeAliasCase: CamelCase
+  readability-identifier-naming.TemplateParameterCase: CamelCase
