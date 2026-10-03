@@ -34,6 +34,9 @@ struct Digest {
 // in either case.
 Result<Digest> ParseDigestHex(std::string_view text);
 
+// A digest stored in a container header, read from the bytes at offset.
+Result<Digest> ReadDigestAt(ByteSpan data, std::size_t offset);
+
 // Incremental SHA-256, for content too large to hold in memory. The 2 GiB
 // cartridge image is hashed in chunks by the filesystem adapter rather than
 // read into a buffer first.

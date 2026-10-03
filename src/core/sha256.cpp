@@ -89,6 +89,19 @@ Result<Digest> ParseDigestHex(std::string_view text) {
     return digest;
 }
 
+Result<Digest> ReadDigestAt(ByteSpan data, std::size_t offset) {
+    const Result<ByteSpan> stored = ReadBytesAt(data, offset, Digest::SizeInBytes);
+    if (!stored) {
+        return stored.Failure();
+    }
+
+    Digest digest;
+    for (std::size_t index = 0; index < Digest::SizeInBytes; ++index) {
+        digest.bytes[index] = stored.Value()[index];
+    }
+    return digest;
+}
+
 Sha256::Sha256() : context_(std::make_unique<Context>()) {}
 
 Sha256::~Sha256() = default;
