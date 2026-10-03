@@ -28,10 +28,10 @@ It is not affiliated with or endorsed by Nintendo, Game Freak or The Pokémon Co
 
 ## Building
 
-Requires a C++20 compiler, CMake 3.25 or later, Ninja and GoogleTest. On Fedora:
+Requires a C++20 compiler, CMake 3.25 or later, Ninja, OpenSSL and GoogleTest. On Fedora:
 
 ```sh
-sudo dnf install gcc-c++ cmake ninja-build gtest-devel ccache pre-commit
+sudo dnf install gcc-c++ cmake ninja-build gtest-devel openssl-devel ccache pre-commit
 ```
 
 ```sh
@@ -43,11 +43,11 @@ ctest --preset debug
 
 [`AGENTS.md`](AGENTS.md) covers the conventions, the workflow and the commit rules.
 
-## Licence
+## License
 
 Original contributions are licensed under the GNU General Public License, version 3 or, at your option, any later version. The full text is in [`LICENSE`](LICENSE).
 
-Third-party components keep their own licences and notices. See [`LICENSE_SCOPE.md`](LICENSE_SCOPE.md) for what the licence does and does not cover, and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for origins and attributions.
+Third-party components keep their own licenses and notices. See [`LICENSE_SCOPE.md`](LICENSE_SCOPE.md) for what the license does and does not cover, and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for origins and attributions.
 
 ## AI assistance
 

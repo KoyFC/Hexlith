@@ -49,6 +49,8 @@ Presets are the local path. CI configures explicitly with `-DCMAKE_CXX_COMPILER`
 
 GoogleTest comes from the system (`gtest-devel` on Fedora). Configure with `-DHEXLITH_FETCH_GOOGLETEST=ON` to download it instead. A plain build never touches the network.
 
+OpenSSL's development package (`openssl-devel` on Fedora) is required, not optional. CMake fails at configure time without it.
+
 ## Architecture
 
 Dependencies point inward. A layer may use the one below it and never the one above.
@@ -57,7 +59,7 @@ Dependencies point inward. A layer may use the one below it and never the one ab
 tools  ->  adapters  ->  ports  ->  application  ->  domain  ->  core
 ```
 
-- `src/core` holds small utilities with no dependencies at all.
+- `src/core` holds small utilities: a `Result` type, bounds-checked byte reading, SHA-256. Its one external dependency is OpenSSL's libcrypto, linked privately by the SHA-256 wrapper. ADR 0009 records why.
 - `src/domain` holds pure logic: the ARM model, the memory map, kernel abstractions, the CTR container and CRO formats, the analysis types, the GameProfile. No I/O lives here, which is what makes it testable with synthetic data.
 - `src/application` holds use cases such as extract, validate and analyze.
 - `src/ports` holds the interfaces the outside world is reached through: `RomSource`, `BlobSink`, `GpuBackend`, `AudioSink`, `InputSource`.

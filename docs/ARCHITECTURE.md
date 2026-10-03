@@ -38,7 +38,7 @@ Dependencies point inward. A layer uses the one below it and never the one above
 tools  ->  adapters  ->  ports  ->  application  ->  domain  ->  core
 ```
 
-**`src/core`** holds small utilities with no dependencies: a `Result` type, byte span helpers, deterministic text output. Nothing here knows what a 3DS is.
+**`src/core`** holds small utilities: a `Result` type, bounds-checked byte reading, SHA-256, deterministic text output. Nothing here knows what a 3DS is. Its one external dependency is OpenSSL's libcrypto, linked privately by the SHA-256 wrapper so that it reaches nothing else. See [ADR 0009](adr/0009-sha256-from-openssl.md).
 
 **`src/domain`** holds pure logic and no I/O at all. The ARM processor model, the guest memory map, kernel abstractions, the CTR container and CRO formats, the analysis types, the `GameProfile`. Everything here is testable against synthetic data, which is what makes the test suite able to run without a cartridge.
 

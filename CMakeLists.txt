@@ -27,6 +27,10 @@ option(HEXLITH_WERROR "Treat compiler warnings as errors" OFF)
 option(HEXLITH_FETCH_GOOGLETEST
        "Download GoogleTest when it is not installed on the system" OFF)
 
+# SHA-256 comes from libcrypto. It is a hard requirement rather than an
+# option, since the extractor cannot write a manifest without it. ADR 0009.
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+
 include(HexlithCompilerCache)
 include(HexlithWarnings)
 

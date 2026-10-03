@@ -8,6 +8,17 @@ Origins and attributions for code and documentation Hexlith takes from elsewhere
 
 This file exists from the start so that the first adoption has somewhere to go, and so that the format is settled before anyone is in a hurry.
 
+## Linked dependencies
+
+Libraries Hexlith links against rather than vendors. No source from them is present in this repository, and each comes from the platform's package manager.
+
+| Library | Licence | Used for |
+| --- | --- | --- |
+| [OpenSSL](https://www.openssl.org/) libcrypto | `Apache-2.0` | SHA-256, through the EVP interface. See `docs/adr/0009-sha256-from-openssl.md` |
+| [GoogleTest](https://github.com/google/googletest) | `BSD-3-Clause` | The unit tests, which are not part of any distributed binary |
+
+Apache-2.0 and BSD-3-Clause both permit a combined work to be conveyed under GPL-3.0-or-later, so neither restricts Hexlith's own licensing.
+
 ## Reference material
 
 Hexlith's format documentation is written against these sources. Reading documentation to learn a file layout creates no licensing obligation, but the sources are recorded because the project rule is that no format or address is asserted without one.
