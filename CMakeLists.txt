@@ -30,6 +30,8 @@ option(HEXLITH_FETCH_GOOGLETEST
 include(HexlithCompilerCache)
 include(HexlithWarnings)
 
+add_subdirectory(src)
+
 if(HEXLITH_BUILD_TESTS)
     include(HexlithTesting)
     enable_testing()

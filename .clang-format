@@ -67,7 +67,7 @@ UseTab: Never
 # standard library block is last so that a missing include in a Hexlith
 # header is caught by the compiler instead of being masked.
 IncludeCategories:
-  - Regex: '^"hexlith/'
+  - Regex: '^"(core|domain|application|ports|adapters)/'
     Priority: 1
   - Regex: '^"'
     Priority: 2
