@@ -11,6 +11,7 @@ Checks: >
   readability-*,
   -bugprone-easily-swappable-parameters,
   -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
   -cppcoreguidelines-pro-bounds-constant-array-index,
   -cppcoreguidelines-pro-type-reinterpret-cast,
   -misc-include-cleaner,
@@ -24,6 +25,9 @@ Checks: >
 #   several offsets and sizes of the same type.
 # cppcoreguidelines-avoid-magic-numbers duplicates readability-magic-numbers,
 #   which stays enabled and is the check the no-magic-numbers rule relies on.
+# cppcoreguidelines-pro-bounds-avoid-unchecked-container-access fires on every
+#   span subscript, including the ones a parser reaches only after checking the
+#   range itself. The check it wants is the one already performed.
 # cppcoreguidelines-pro-bounds-constant-array-index wants gsl::at, which would
 #   pull in a dependency for no benefit over a span.
 # cppcoreguidelines-pro-type-reinterpret-cast is unavoidable when reading
@@ -39,7 +43,10 @@ Checks: >
 #   loop variable in a bounded loop.
 
 WarningsAsErrors: ''
-HeaderFilterRegex: '.*'
+# Only Hexlith's own headers. Left as '.*' the checks run over GoogleTest and
+# the standard library too, which buries the project's own diagnostics under
+# ten thousand it cannot act on.
+HeaderFilterRegex: '(^|/)(src|tests)/'
 FormatStyle: file
 
 CheckOptions:
@@ -56,6 +63,16 @@ CheckOptions:
   readability-identifier-naming.MemberCase: lower_case
   readability-identifier-naming.PrivateMemberSuffix: '_'
   readability-identifier-naming.ConstantCase: CamelCase
+  readability-identifier-naming.StaticConstantCase: CamelCase
+  readability-identifier-naming.ConstexprFunctionCase: CamelCase
+  # ConstantCase alone covers every const local as well, which would rename
+  # `const Result<ByteSpan> field` to `Field`. A named constant is CamelCase;
+  # an ordinary local that happens to be const is not a constant.
+  readability-identifier-naming.LocalConstantCase: lower_case
+  readability-identifier-naming.LocalConstantPointerCase: lower_case
+  readability-identifier-naming.ConstantParameterCase: lower_case
+  readability-identifier-naming.ConstantPointerParameterCase: lower_case
+  readability-identifier-naming.ConstantMemberCase: lower_case
   readability-identifier-naming.ConstexprVariableCase: CamelCase
   readability-identifier-naming.GlobalConstantCase: CamelCase
   readability-identifier-naming.TypeAliasCase: CamelCase
