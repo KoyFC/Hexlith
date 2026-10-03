@@ -1,0 +1,112 @@
+# CI repeats, for anyone who skipped scripts/install-hooks.sh, the checks the
+# git hooks run locally, and adds the build and the tests.
+#
+# The build and format jobs run in a Fedora container rather than on the
+# GitHub runner image. Hexlith is developed on Fedora, and clang-format output
+# differs between major versions, so a runner with an older clang-format would
+# reformat the tree on every push. Matching the development toolchain is worth
+# more here than using the default image.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  guardrails:
+    name: Guardrails
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reject game-derived content
+        run: python3 scripts/check_no_game_data.py --all
+
+      - name: Game data guard self-test
+        run: python3 scripts/check_no_game_data.py --self-test
+
+      - name: Commit message checker self-test
+        run: python3 scripts/check_commit_message.py --self-test
+
+      - name: Check commit messages
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          # A first push, a force push and a new branch all report a base that
+          # cannot be resolved. Fall back to the most recent commits so the
+          # step checks something useful instead of silently passing.
+          if [ -z "$BASE_SHA" ] || ! git cat-file -e "$BASE_SHA" 2> /dev/null; then
+              range="HEAD~20..HEAD"
+              git cat-file -e HEAD~20 2> /dev/null || range="HEAD"
+          else
+              range="$BASE_SHA..HEAD"
+          fi
+          echo "Checking $range"
+          python3 scripts/check_commit_message.py --revision-range "$range"
+
+  format:
+    name: Formatting
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Install clang-format
+        run: dnf install -y --setopt=install_weak_deps=False clang-tools-extra git
+
+      - uses: actions/checkout@v4
+
+      - name: Report clang-format version
+        run: clang-format --version
+
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Check formatting
+        run: |
+          files=$(git ls-files '*.c' '*.cc' '*.cpp' '*.h' '*.hpp')
+          if [ -z "$files" ]; then
+              echo "No C or C++ sources to check yet"
+              exit 0
+          fi
+          # shellcheck disable=SC2086
+          clang-format --dry-run -Werror $files
+
+  build:
+    name: Build (${{ matrix.compiler }})
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+    steps:
+      - name: Install the toolchain
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+              gcc-c++ clang cmake ninja-build git gtest-devel
+
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+              -DCMAKE_BUILD_TYPE=Debug \
+              -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} \
+              -DHEXLITH_WERROR=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --no-tests=error
