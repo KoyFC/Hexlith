@@ -1,5 +1,7 @@
 add_library(
     hexlith_application STATIC
+    command_line.cpp
+    command_line.h
     extract.cpp
     extract.h
     manifest.cpp

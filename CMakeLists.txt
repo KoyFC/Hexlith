@@ -35,6 +35,7 @@ include(HexlithCompilerCache)
 include(HexlithWarnings)
 
 add_subdirectory(src)
+add_subdirectory(tools)
 
 if(HEXLITH_BUILD_TESTS)
     include(HexlithTesting)
