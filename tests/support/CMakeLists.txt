@@ -11,7 +11,7 @@ add_library(Hexlith::TestSupport ALIAS hexlith_test_support)
 
 target_include_directories(hexlith_test_support PUBLIC "${PROJECT_SOURCE_DIR}/tests")
 
-target_link_libraries(hexlith_test_support PUBLIC Hexlith::Core)
+target_link_libraries(hexlith_test_support PUBLIC Hexlith::Domain)
 
 target_link_libraries(hexlith_test_support PRIVATE Hexlith::Warnings)
 

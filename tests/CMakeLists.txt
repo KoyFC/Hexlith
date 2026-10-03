@@ -2,4 +2,5 @@ hexlith_add_test(hexlith_build_configuration_test build_configuration_test.cpp)
 
 add_subdirectory(support)
 add_subdirectory(core)
+add_subdirectory(domain)
 add_subdirectory(application)
