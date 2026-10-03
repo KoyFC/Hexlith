@@ -4,4 +4,5 @@
 # way visible in a diff.
 add_subdirectory(core)
 add_subdirectory(domain)
+add_subdirectory(ports)
 add_subdirectory(application)

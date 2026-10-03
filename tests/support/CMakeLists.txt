@@ -5,6 +5,8 @@ add_library(
     hexlith_test_support STATIC
     crafted_lzss_stream.cpp
     crafted_lzss_stream.h
+    memory_workspace.cpp
+    memory_workspace.h
     synthetic_cro.cpp
     synthetic_cro.h
     synthetic_ctr_image.cpp
@@ -17,7 +19,7 @@ add_library(Hexlith::TestSupport ALIAS hexlith_test_support)
 
 target_include_directories(hexlith_test_support PUBLIC "${PROJECT_SOURCE_DIR}/tests")
 
-target_link_libraries(hexlith_test_support PUBLIC Hexlith::Domain)
+target_link_libraries(hexlith_test_support PUBLIC Hexlith::Domain Hexlith::Ports)
 
 target_link_libraries(hexlith_test_support PRIVATE Hexlith::Warnings)
 
