@@ -2,7 +2,7 @@
 
 How Hexlith is put together, and why. Decisions with lasting consequences are recorded separately in [`adr/`](adr/); this document is the map that makes those decisions legible.
 
-Most of what follows does not exist yet. Phase 0 built the guardrails and wrote this down. Each section marks what is present and what is planned, because a design document that reads as though the system already works is worse than no document at all.
+Most of what follows does not exist yet. The container formats are read, the profile is checked and a cartridge can be unpacked; everything from analysis onwards is planned. Each section marks what is present and what is not, because a design document that reads as though the system already works is worse than no document at all.
 
 ## What is being built
 
@@ -26,7 +26,7 @@ cartridge image
 native executable
 ```
 
-Only the first stage exists. It is Phase 1.
+Only the first stage exists. [`extraction.md`](extraction.md) describes it.
 
 The repository holds the tools and the runtime. The workspace, which holds the cartridge image and everything derived from it, lives outside the repository and is never redistributed. See [ADR 0007](adr/0007-no-game-data-in-the-repository.md) and [ADR 0008](adr/0008-workspace-configuration.md).
 
@@ -44,9 +44,9 @@ tools  ->  adapters  ->  ports  ->  application  ->  domain  ->  core
 
 **`src/application`** holds use cases. Extract a title, validate an image against a profile, analyse a code region, lift a function. A use case orchestrates domain types and reaches the outside world only through a port.
 
-**`src/ports`** holds the interfaces through which the outside world is reached: `RomSource`, `BlobSink`, `GpuBackend`, `AudioSink`, `InputSource`.
+**`src/ports`** holds the interfaces through which the outside world is reached: `RomSource`, `BlobSink`, `GpuBackend`, `AudioSink`, `InputSource`. The first two exist, and they are narrow on purpose: a `RomSource` can only be read, and a `BlobSink` owns the directory its relative paths resolve against, so a use case never sees an absolute path and cannot construct one.
 
-**`src/adapters`** holds the implementations: the filesystem, Vulkan, SDL.
+**`src/adapters`** holds the implementations: the filesystem, Vulkan, SDL. Only the filesystem ones exist.
 
 **`tools`** holds the command-line programs. A tool wires adapters to a use case and does nothing else, so that the interesting code is never trapped inside a `main`.
 

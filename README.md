@@ -8,7 +8,9 @@ The goal is to run the game natively rather than emulate it: translate its ARM11
 
 Early. Nothing is playable and nothing runs.
 
-As of now the repository holds the project's guardrails, its build skeleton, its architecture and decision records, and verified notes on the cartridge formats. The tool that extracts a cartridge image is the next piece of work.
+What works is extraction. `hexlith-extract` validates a cartridge image against a game profile and writes its contents into a working directory: the extended header, the ExeFS with its executable decompressed, the RomFS as a directory tree, and a manifest of every file with its hash. Two runs produce identical manifests. [`docs/extraction.md`](docs/extraction.md) describes it.
+
+The repository also holds the project's guardrails, its build skeleton, its architecture and decision records, and verified notes on the cartridge formats. Analysing the extracted code is the next piece of work.
 
 The design is documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), the decisions behind it in [`docs/adr/`](docs/adr/), and the formats in [`docs/formats/`](docs/formats/). Those documents mark what exists against what is planned.
 

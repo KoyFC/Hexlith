@@ -47,6 +47,8 @@ Presets are the local path. CI configures explicitly with `-DCMAKE_CXX_COMPILER`
 
 `HEXLITH_WERROR` is off by default locally and on in CI, so a warning does not block exploratory work but does block a merge. Build with the `ci` preset to get CI's strictness locally.
 
+`clang-tidy` is not run by CI, but the configuration is kept correct and the tree is kept clean against it: `clang-tidy -p build/ci $(git ls-files '*.cpp' '*.h')`.
+
 GoogleTest comes from the system (`gtest-devel` on Fedora). Configure with `-DHEXLITH_FETCH_GOOGLETEST=ON` to download it instead. A plain build never touches the network.
 
 OpenSSL's development package (`openssl-devel` on Fedora) is required, not optional. CMake fails at configure time without it.
