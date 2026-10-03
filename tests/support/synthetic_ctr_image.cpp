@@ -43,8 +43,9 @@ constexpr std::uint64_t WildcardProgramId = 0x00040000FFFFFF00;
 // A CARD1 cartridge has no writable region, which it reports this way.
 constexpr std::uint32_t Card1WritableAddress = 0xFFFFFFFF;
 
-// Filesystem type 1 is what a decrypted retail partition reports.
-constexpr std::uint8_t NormalFilesystemType = 1;
+// The reference image reports zero for every partition's filesystem type,
+// so that is what a synthetic image reports too.
+constexpr std::uint8_t CartridgeFilesystemType = 0;
 
 constexpr std::uint32_t AciCoreVersion = 2;
 
@@ -327,7 +328,7 @@ void WriteNcsd(Placer& place,
 
     // Filesystem type 1 and crypt type 0 for the executable partition, which
     // is what a decrypted retail image reports.
-    place.U8(PartitionFsTypesOffset + ExecutableContentPartition, NormalFilesystemType);
+    place.U8(PartitionFsTypesOffset + ExecutableContentPartition, CartridgeFilesystemType);
 
     place.U32(PartitionTableOffset + (ExecutableContentPartition * PartitionTableEntrySize),
               InMediaUnits(partition_offset));
@@ -339,7 +340,9 @@ void WriteNcsd(Placer& place,
     place.U32(SectorZeroOffsetOffset, 0);
 
     place.U32(card_info::WritableAddressOffset, Card1WritableAddress);
-    place.U32(card_info::FilledSizeOffset, InMediaUnits(image_size));
+    // A byte count rather than a count of media units, which is how the
+    // reference image writes it.
+    place.U32(card_info::FilledSizeOffset, static_cast<std::uint32_t>(image_size));
     place.U16(card_info::TitleVersionOffset, spec.title_version);
     place.U16(card_info::CardRevisionOffset, 0);
     place.Fill(card_info::InitialDataOffset, card_info::InitialDataSize, SignatureFiller);

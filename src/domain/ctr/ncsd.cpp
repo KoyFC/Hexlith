@@ -58,8 +58,11 @@ void ReadCardInfo(core::ByteSpan image, NcsdHeader& header) {
     header.card_info_present = true;
     header.title_version = core::ReadU16At(image, ncsd::card_info::TitleVersionOffset).ValueOr(0);
     header.card_revision = core::ReadU16At(image, ncsd::card_info::CardRevisionOffset).ValueOr(0);
-    header.filled_size =
-        BytesFromMediaUnits(core::ReadU32At(image, ncsd::card_info::FilledSizeOffset).ValueOr(0));
+    // In bytes, unlike every other size in an NCSD. Measured against the
+    // reference image, where the field equals the end of the last partition
+    // exactly; read as media units the same value would describe a 939 GB
+    // cartridge.
+    header.filled_size = core::ReadU32At(image, ncsd::card_info::FilledSizeOffset).ValueOr(0);
 }
 
 }  // namespace

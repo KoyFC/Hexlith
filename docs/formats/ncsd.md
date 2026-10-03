@@ -46,7 +46,7 @@ Present in cartridge images, immediately after the NCSD header.
 | --- | --- | --- |
 | 0x200 | 4 | Writable address for CARD2, or 0xFFFFFFFF for CARD1 |
 | 0x204 | 4 | Card info bitmask |
-| 0x300 | 4 | Filled size of the cartridge |
+| 0x300 | 4 | Filled size of the cartridge, in bytes |
 | 0x310 | 2 | Title version |
 | 0x312 | 2 | Card revision |
 | 0x320 | 8 | Title ID of the CVer in the included update partition |
@@ -56,3 +56,7 @@ Present in cartridge images, immediately after the NCSD header.
 ## Observed in the reference image
 
 Partitions 0, 1 and 7 are present and partitions 2 through 6 are empty, which matches a retail cartridge with no Download Play child. The image size field accounts for the whole 2 GiB file.
+
+**The filled size at 0x300 is a byte count and not a count of media units.** It reads 0x6D8E5000, which is exactly where partition 7 ends: that partition starts at 0x6BB94000 and runs for 0x1D51000 bytes. Read as media units the same field would describe a 939 GB cartridge. Every other offset and size in an NCSD is in media units, so this one is worth writing down.
+
+The partition filesystem types at 0x110 read zero for every partition, the executable one included, and so do the crypt types at 0x118.
