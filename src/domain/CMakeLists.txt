@@ -10,3 +10,4 @@ target_link_libraries(hexlith_domain PUBLIC Hexlith::Core)
 target_link_libraries(hexlith_domain PRIVATE Hexlith::Warnings)
 
 add_subdirectory(ctr)
+add_subdirectory(profile)
