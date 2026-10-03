@@ -3,3 +3,4 @@
 # then names the layer, which is what makes a dependency pointing the wrong
 # way visible in a diff.
 add_subdirectory(core)
+add_subdirectory(application)

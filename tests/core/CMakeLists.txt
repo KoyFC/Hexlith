@@ -1,6 +1,7 @@
 hexlith_add_test(
     hexlith_core_test
     byte_reader_test.cpp
+    key_value_text_test.cpp
     result_test.cpp
     sha256_test.cpp
 )

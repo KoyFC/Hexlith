@@ -2,6 +2,8 @@ add_library(
     hexlith_core STATIC
     byte_reader.cpp
     byte_reader.h
+    key_value_text.cpp
+    key_value_text.h
     result.h
     sha256.cpp
     sha256.h

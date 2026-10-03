@@ -1,0 +1,3 @@
+hexlith_add_test(hexlith_application_test workspace_test.cpp)
+
+target_link_libraries(hexlith_application_test PRIVATE Hexlith::Application)
