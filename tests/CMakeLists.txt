@@ -1,0 +1,1 @@
+hexlith_add_test(hexlith_build_configuration_test build_configuration_test.cpp)
