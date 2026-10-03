@@ -43,10 +43,28 @@ Decoding walks backwards. Each control byte carries eight flags, consumed from t
 
 The decompressed buffer starts as a copy of the compressed input placed at its front, because the encoding is designed to be decompressed in place.
 
+The output buffer starts as a copy of the compressed input placed at its front, because the encoding is designed to be decompressed in place.
+
+Two consequences of that follow, and both are easier to get wrong than to read. The bottom of the output is not encoded at all: it is whatever the input held there, left in place by that initial copy, and the encoded region covers only the top. A stream therefore cannot be larger than what it decompresses to, which also means a stream of nothing but literals is impossible, since literals cost nine bytes for every eight they produce. Decoding also stops when the read cursor reaches the start of the encoded region rather than when the output is full, so a stream that stops early leaves the verbatim bottom untouched instead of failing.
+
 ### Verification
 
 The decoder was run against the reference image. The compressed section is 2,858,188 bytes and the output is 5,156,864 bytes, which equals the sum of the three page-aligned segment sizes in the extended header exactly. An output that agrees with an independently stated size to the byte is strong evidence the decoder is correct.
 
+Two implementations written separately, one in Python during the initial survey and one in C++ for the extractor, produce byte-identical output over those 5,156,864 bytes, with SHA-256 `0f6d3e1d66cbcd55d46fa453db4b6aa489e03c3537c6b24026f2a53af142797a`.
+
+**The footer size field reads 11 on the reference image, not 8.** The field is the distance from the end of the section at which decoding starts reading, so the three bytes above the eight byte footer are padding that is skipped. An implementation that assumed eight would start reading inside that padding and treat it as a control byte. The field exists precisely so that it does not have to be assumed.
+
+The encoded size reads 2,858,116, which puts the start of the encoded region 72 bytes into the section. Those 72 bytes are the verbatim bottom, and they appear unchanged at the front of the output.
+
 ## Observed in the reference image
 
 Three entries are present: `.code`, `banner` and `icon`. The remaining seven headers are zeroed.
+
+| File | Offset | Size |
+| --- | --- | --- |
+| `.code` | 0x0 | 2,858,188 |
+| `banner` | 0x2B9E00 | 290,504 |
+| `icon` | 0x300E00 | 14,016 |
+
+The SHA-256 of each file's data matches the hash the header stores for it, which confirms the offsets, the sizes and the reversed order of the hash table at the same time.

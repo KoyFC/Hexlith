@@ -3,6 +3,8 @@
 # tool. Nothing generated here is written to disk or checked in.
 add_library(
     hexlith_test_support STATIC
+    crafted_lzss_stream.cpp
+    crafted_lzss_stream.h
     synthetic_ctr_image.cpp
     synthetic_ctr_image.h
 )
@@ -15,6 +17,10 @@ target_link_libraries(hexlith_test_support PUBLIC Hexlith::Domain)
 
 target_link_libraries(hexlith_test_support PRIVATE Hexlith::Warnings)
 
-hexlith_add_test(hexlith_test_support_test synthetic_ctr_image_test.cpp)
+hexlith_add_test(
+    hexlith_test_support_test
+    crafted_lzss_stream_test.cpp
+    synthetic_ctr_image_test.cpp
+)
 
 target_link_libraries(hexlith_test_support_test PRIVATE Hexlith::TestSupport)
