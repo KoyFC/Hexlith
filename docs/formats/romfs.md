@@ -90,4 +90,12 @@ The hash tables exist so the console can look a path up without walking the tree
 
 ## Observed in the reference image
 
-653 files in 1,797,873,664 bytes. The root holds 133 CRO modules, `static.crs` and a `.crr` directory, described in [`cro0.md`](cro0.md). Bulk data sits under `a/`, as numbered GARC archives, with video under `m/`, audio under `sound/` and shader binaries under `shaders/`.
+653 files across 37 directories. The region is 1,797,873,664 bytes and the files in it total 1,783,776,455, the difference being the metadata tables, the padding between files and the hash levels stored after level 3.
+
+Level 3 starts at 0x1000 as expected and its file data area at 0xAAA0, so the four metadata and hash tables occupy a little under 39 KiB between them.
+
+The root holds 135 files: 133 CRO modules, `static.crs` and nothing else, with `.crr/static.crr` one level down. Those are described in [`cro0.md`](cro0.md). The top-level directories are `.crr`, `a`, `m`, `shaders`, `sound` and `sounddebug`.
+
+Bulk data sits under `a/`, as numbered GARC archives with no extension, which accounts for the 271 files whose names carry none. Audio is 232 `.aac` files under `sound/`, video 5 `.moflex` files under `m/`, and shader binaries 4 `.shbin` files under `shaders/`.
+
+Reading `static.crs` back through the resulting offsets yields a file whose `CRO0` magic sits at 0x80 where the format puts it, which is the cross-check that the directory walk and the file data offsets agree.

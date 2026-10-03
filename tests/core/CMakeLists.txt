@@ -4,6 +4,7 @@ hexlith_add_test(
     key_value_text_test.cpp
     result_test.cpp
     sha256_test.cpp
+    text_test.cpp
 )
 
 target_link_libraries(hexlith_core_test PRIVATE Hexlith::Core)

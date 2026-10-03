@@ -11,4 +11,6 @@ target_sources(
             ncch.h
             ncsd.cpp
             ncsd.h
+            romfs.cpp
+            romfs.h
 )

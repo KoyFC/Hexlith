@@ -7,6 +7,8 @@ add_library(
     result.h
     sha256.cpp
     sha256.h
+    text.cpp
+    text.h
 )
 
 add_library(Hexlith::Core ALIAS hexlith_core)

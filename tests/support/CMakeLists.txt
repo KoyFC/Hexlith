@@ -7,6 +7,8 @@ add_library(
     crafted_lzss_stream.h
     synthetic_ctr_image.cpp
     synthetic_ctr_image.h
+    synthetic_romfs.cpp
+    synthetic_romfs.h
 )
 
 add_library(Hexlith::TestSupport ALIAS hexlith_test_support)
@@ -21,6 +23,7 @@ hexlith_add_test(
     hexlith_test_support_test
     crafted_lzss_stream_test.cpp
     synthetic_ctr_image_test.cpp
+    synthetic_romfs_test.cpp
 )
 
 target_link_libraries(hexlith_test_support_test PRIVATE Hexlith::TestSupport)

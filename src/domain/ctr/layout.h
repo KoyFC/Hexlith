@@ -243,6 +243,74 @@ constexpr std::uint32_t EncodedSizeMask = 0x00FFFFFF;
 constexpr unsigned FooterSizeShift = 24;
 
 }  // namespace exefs
+
+// RomFS, the title's read-only data filesystem, wrapped in an IVFC hash tree.
+// Source: docs/formats/romfs.md, 3dbrew RomFS, and
+// azahar/src/core/file_sys/ncch_container.cpp for the level 3 offset.
+namespace romfs {
+
+constexpr std::string_view IvfcMagic = "IVFC";
+constexpr std::size_t IvfcMagicOffset = 0x00;
+constexpr std::size_t IvfcMagicNumberOffset = 0x04;
+constexpr std::uint32_t IvfcMagicNumber = 0x10000;
+constexpr std::size_t MasterHashSizeOffset = 0x08;
+constexpr std::size_t Level1LogicalOffsetOffset = 0x0C;
+constexpr std::size_t Level2LogicalOffsetOffset = 0x24;
+constexpr std::size_t Level3LogicalOffsetOffset = 0x3C;
+constexpr std::size_t OptionalInfoSizeOffset = 0x58;
+
+// The level 3 filesystem begins 0x1000 bytes into the RomFS region, which
+// Azahar hardcodes and this project confirmed by observation.
+//
+// The logical offsets in the IVFC header are not file offsets. They address
+// the hash level space: on the reference image level 3 reports 0xD66000,
+// where the header length field reads 0x1E7F5 and nothing parses. Using one
+// as a file offset produces a failure that looks like a corrupt image rather
+// than like a wrong constant.
+constexpr std::size_t Level3Offset = 0x1000;
+
+// The level 3 header. Every offset in it is relative to the start of level 3.
+constexpr std::uint32_t Level3HeaderLength = 0x28;
+constexpr std::size_t HeaderLengthOffset = 0x00;
+constexpr std::size_t DirectoryHashTableOffsetOffset = 0x04;
+constexpr std::size_t DirectoryHashTableLengthOffset = 0x08;
+constexpr std::size_t DirectoryMetadataOffsetOffset = 0x0C;
+constexpr std::size_t DirectoryMetadataLengthOffset = 0x10;
+constexpr std::size_t FileHashTableOffsetOffset = 0x14;
+constexpr std::size_t FileHashTableLengthOffset = 0x18;
+constexpr std::size_t FileMetadataOffsetOffset = 0x1C;
+constexpr std::size_t FileMetadataLengthOffset = 0x20;
+constexpr std::size_t FileDataOffsetOffset = 0x24;
+
+// A directory metadata entry, followed by its name.
+constexpr std::size_t DirectoryParentOffset = 0x00;
+constexpr std::size_t DirectoryNextSiblingOffset = 0x04;
+constexpr std::size_t DirectoryFirstChildOffset = 0x08;
+constexpr std::size_t DirectoryFirstFileOffset = 0x0C;
+constexpr std::size_t DirectoryNextInBucketOffset = 0x10;
+constexpr std::size_t DirectoryNameLengthOffset = 0x14;
+constexpr std::size_t DirectoryEntrySize = 0x18;
+
+// A file metadata entry, followed by its name.
+constexpr std::size_t FileParentOffset = 0x00;
+constexpr std::size_t FileNextSiblingOffset = 0x04;
+constexpr std::size_t FileDataOffsetField = 0x08;
+constexpr std::size_t FileDataLengthField = 0x10;
+constexpr std::size_t FileNextInBucketOffset = 0x18;
+constexpr std::size_t FileNameLengthOffset = 0x1C;
+constexpr std::size_t FileEntrySize = 0x20;
+
+// Terminates a sibling chain or a hash bucket.
+constexpr std::uint32_t NoEntry = 0xFFFFFFFF;
+
+// A name is padded to a multiple of four bytes.
+constexpr std::size_t NameAlignment = 4;
+
+// The root directory is the entry at offset zero of the directory metadata
+// table, and it has no name.
+constexpr std::uint32_t RootDirectory = 0;
+
+}  // namespace romfs
 }  // namespace hexlith::domain::ctr
 
 #endif  // HEXLITH_DOMAIN_CTR_LAYOUT_H
