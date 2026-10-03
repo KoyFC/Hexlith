@@ -1,0 +1,44 @@
+# Every hook is local and runs a tool already present on the system, so
+# `pre-commit install --install-hooks` needs no network access. That keeps the
+# guardrails working offline and stops a hook mirror from becoming a
+# dependency of being able to commit at all.
+
+default_install_hook_types: [pre-commit, commit-msg]
+
+repos:
+  - repo: local
+    hooks:
+      - id: no-game-data
+        name: Reject game-derived content
+        entry: scripts/check_no_game_data.py
+        language: system
+        stages: [pre-commit]
+
+      - id: no-game-data-self-test
+        name: Game data guard self-test
+        entry: scripts/check_no_game_data.py --self-test
+        language: system
+        pass_filenames: false
+        files: '^scripts/check_no_game_data\.py$'
+        stages: [pre-commit]
+
+      - id: clang-format
+        name: clang-format
+        entry: clang-format -i
+        language: system
+        types_or: [c, c++]
+        stages: [pre-commit]
+
+      - id: commit-message
+        name: Check commit message
+        entry: scripts/check_commit_message.py
+        language: system
+        stages: [commit-msg]
+
+      - id: commit-message-self-test
+        name: Commit message checker self-test
+        entry: scripts/check_commit_message.py --self-test
+        language: system
+        pass_filenames: false
+        files: '^scripts/check_commit_message\.py$'
+        stages: [pre-commit]
