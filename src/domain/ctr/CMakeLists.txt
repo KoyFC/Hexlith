@@ -2,6 +2,8 @@ target_sources(
     hexlith_domain
     PRIVATE backwards_lzss.cpp
             backwards_lzss.h
+            cro.cpp
+            cro.h
             exefs.cpp
             exefs.h
             exheader.cpp

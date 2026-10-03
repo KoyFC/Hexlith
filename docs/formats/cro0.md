@@ -122,14 +122,16 @@ Hexlith does not verify modules. The CRR is noted here so that its presence in t
 
 133 `.cro` files, `static.crs` and `.crr/static.crr`, all in the RomFS root. The 134 CRO-family modules total 7,651,328 bytes on disk.
 
-Summed across segment types:
+Summed across segment types, **over the 133 loadable modules and not over the static module**, whose segments belong to the main executable and are counted with it:
 
-| Segment type | Total bytes |
-| --- | --- |
-| Code | 4,342,512 |
-| ROData | 1,157,492 |
-| Data | 186,008 |
-| BSS | 493,632 |
+| Segment type | 133 modules | With `static.crs` |
+| --- | --- | --- |
+| Code | 4,342,512 | 8,782,284 |
+| ROData | 1,157,492 | 1,590,700 |
+| Data | 186,008 | 950,192 |
+| BSS | 493,632 | 493,632 |
+
+The code column with the static module is the whole lift, which is the figure [ADR 0004](../adr/0004-cro-modules-and-the-ldr-ro-hle.md) reasons about. BSS is the same in both columns because the static module declares no BSS segment.
 
 Against the static module's 4,439,772 byte text segment, that puts 49.4 percent of the title's executable code in dynamically loaded modules, and the whole lift at 8,782,284 bytes of ARM, which is about 2.2 million instructions.
 
@@ -147,4 +149,10 @@ The largest modules by code segment size are `DllField.cro` at 970,532 bytes and
 
 Many modules are developer test stubs, named after individuals, each 8,192 bytes with a single export and no imports. They are presumably unreachable in a retail build and are low-priority targets for the lifter.
 
-One open question: `static.crs` declares a fifth segment of 0x1F4 ROData bytes at virtual address 0x04000000, which does not correspond to any extended header code set. It is recorded here as unexplained rather than guessed at.
+Every module declares six segment table entries, with the ones it does not use left zeroed. `DllField.cro` uses four of them and `static.crs` five. A parser that stopped at the first empty entry would therefore still read the right segments, and one that trusted the count has to tolerate empty entries among the real ones.
+
+`static.crs` declares no internal relocations, which follows from what it is: it describes code that is already at its final addresses, so there is nothing in it to relocate.
+
+`DllField.cro` imports from 30 modules and carries a 60 byte export string table, against the 78 modules and 17,559 bytes of the static module. The comparison is the shape of the problem in one line: the main executable publishes names and the modules consume them.
+
+One open question: `static.crs` declares a fifth segment of 0x1F4 ROData bytes at virtual address 0x04000000, which does not correspond to any extended header code set. It is recorded here as unexplained rather than guessed at. Its three real segments sit at 0x00100000, 0x0053C000 and 0x005A6000, matching the extended header's code set addresses exactly, which is what cross-checks both readings.

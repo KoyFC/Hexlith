@@ -311,6 +311,107 @@ constexpr std::size_t NameAlignment = 4;
 constexpr std::uint32_t RootDirectory = 0;
 
 }  // namespace romfs
+
+// CRO, a dynamically loaded code module, and the CRS that describes the main
+// executable. Source: docs/formats/cro0.md, 3dbrew CRO0, and
+// azahar/src/core/hle/service/ldr_ro/cro_helper.h for the field layout.
+namespace cro {
+
+constexpr std::string_view Magic = "CRO0";
+
+// A module the loader has already relocated reports this instead. Hexlith
+// only ever reads modules straight out of the RomFS, so finding it would mean
+// reading something that had been through a console.
+constexpr std::string_view FixedUpMagic = "FIXD";
+
+// Four SHA-256 hashes covering different regions of the module. Hexlith does
+// not verify them; the CRR exists to check them and the project checks
+// nothing.
+constexpr std::size_t HashesSize = 0x80;
+
+// From 0x80 the header is a flat array of 32-bit fields, so the field at
+// index n sits at 0x80 + 4n. docs/formats/cro0.md carries the index of every
+// one, because the table offsets and counts alternate and a pair is easy to
+// slip by one. That mistake was made during the initial survey.
+constexpr std::size_t FieldArrayOffset = 0x80;
+constexpr std::size_t FieldSize = 4;
+
+constexpr std::size_t FieldOffset(std::size_t index) {
+    return FieldArrayOffset + (index * FieldSize);
+}
+
+constexpr std::size_t MagicField = 0;
+constexpr std::size_t NameOffsetField = 1;
+constexpr std::size_t NextModuleField = 2;
+constexpr std::size_t PreviousModuleField = 3;
+constexpr std::size_t FileSizeField = 4;
+constexpr std::size_t BssSizeField = 5;
+constexpr std::size_t FixedSizeField = 6;
+constexpr std::size_t OnLoadSegmentTagField = 9;
+constexpr std::size_t OnExitSegmentTagField = 10;
+constexpr std::size_t OnUnresolvedSegmentTagField = 11;
+constexpr std::size_t CodeOffsetField = 12;
+constexpr std::size_t CodeSizeField = 13;
+constexpr std::size_t DataOffsetField = 14;
+constexpr std::size_t DataSizeField = 15;
+constexpr std::size_t ModuleNameOffsetField = 16;
+constexpr std::size_t ModuleNameSizeField = 17;
+constexpr std::size_t SegmentTableOffsetField = 18;
+constexpr std::size_t SegmentCountField = 19;
+constexpr std::size_t NamedExportTableOffsetField = 20;
+constexpr std::size_t NamedExportCountField = 21;
+constexpr std::size_t IndexedExportTableOffsetField = 22;
+constexpr std::size_t IndexedExportCountField = 23;
+constexpr std::size_t ExportStringsOffsetField = 24;
+constexpr std::size_t ExportStringsSizeField = 25;
+constexpr std::size_t ExportTreeTableOffsetField = 26;
+constexpr std::size_t ExportTreeNodeCountField = 27;
+constexpr std::size_t ImportModuleTableOffsetField = 28;
+constexpr std::size_t ImportModuleCountField = 29;
+
+// The field at index 30 is the external relocation table, not an import
+// table. It was labelled as one during the initial survey and the numbers
+// reported before that was caught were wrong.
+constexpr std::size_t ExternalRelocationTableOffsetField = 30;
+constexpr std::size_t ExternalRelocationCountField = 31;
+constexpr std::size_t NamedImportTableOffsetField = 32;
+constexpr std::size_t NamedImportCountField = 33;
+constexpr std::size_t IndexedImportTableOffsetField = 34;
+constexpr std::size_t IndexedImportCountField = 35;
+constexpr std::size_t AnonymousImportTableOffsetField = 36;
+constexpr std::size_t AnonymousImportCountField = 37;
+constexpr std::size_t ImportStringsOffsetField = 38;
+constexpr std::size_t ImportStringsSizeField = 39;
+constexpr std::size_t StaticAnonymousSymbolTableOffsetField = 40;
+constexpr std::size_t StaticAnonymousSymbolCountField = 41;
+constexpr std::size_t InternalRelocationTableOffsetField = 42;
+constexpr std::size_t InternalRelocationCountField = 43;
+constexpr std::size_t StaticRelocationTableOffsetField = 44;
+constexpr std::size_t StaticRelocationCountField = 45;
+constexpr std::size_t FixLevel0BarrierField = 46;
+
+constexpr std::size_t FieldCount = 47;
+constexpr std::size_t HeaderSize = FieldOffset(FieldCount);
+
+// A segment table entry: an offset, a size and a type.
+constexpr std::size_t SegmentEntrySize = 12;
+constexpr std::size_t SegmentOffsetOffset = 0x0;
+constexpr std::size_t SegmentSizeOffset = 0x4;
+constexpr std::size_t SegmentTypeOffset = 0x8;
+
+// A named export entry: an offset into the export string table, and the
+// symbol's position within its own segment.
+constexpr std::size_t NamedExportEntrySize = 8;
+constexpr std::size_t NamedExportNameOffsetOffset = 0x0;
+constexpr std::size_t NamedExportPositionOffset = 0x4;
+
+// The module name of the CRS, with the pipe characters included, which is how
+// the loader tells it apart from a loadable module. Its segment offsets are
+// absolute virtual addresses rather than file offsets, because the segments
+// it describes are already mapped.
+constexpr std::string_view StaticModuleName = "|static|";
+
+}  // namespace cro
 }  // namespace hexlith::domain::ctr
 
 #endif  // HEXLITH_DOMAIN_CTR_LAYOUT_H

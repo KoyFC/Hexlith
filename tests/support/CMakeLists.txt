@@ -5,6 +5,8 @@ add_library(
     hexlith_test_support STATIC
     crafted_lzss_stream.cpp
     crafted_lzss_stream.h
+    synthetic_cro.cpp
+    synthetic_cro.h
     synthetic_ctr_image.cpp
     synthetic_ctr_image.h
     synthetic_romfs.cpp
