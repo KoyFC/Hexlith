@@ -1,0 +1,85 @@
+# Hexlith never stores anything derived from the game. The workspace that
+# holds the ROM and every extracted artefact lives outside this repository;
+# these rules are the first of several layers that keep it that way. See
+# docs/adr/0007-no-game-data-in-repository.md once it exists.
+
+# Workspace directories, in case one is ever created inside the tree by
+# mistake or by a misconfigured tool.
+/work/
+/rom/
+/recomp-data/
+
+# Cartridge images and content containers.
+*.3ds
+*.cci
+*.cxi
+*.cfa
+*.cia
+*.ncch
+*.ncsd
+*.app
+*.tmd
+*.tik
+
+# Dynamically loaded modules and their hash descriptors.
+*.cro
+*.crs
+*.crr
+
+# Extracted title content and anything that looks like a raw blob. Synthetic
+# test fixtures are generated at build time into the build directory, so no
+# legitimate binary payload is ever tracked here.
+*.bin
+*.code
+*.exefs
+*.romfs
+*.garc
+*.shbin
+*.moflex
+*.aac
+*.cdc
+*.bch
+*.bcres
+
+# Console secrets. This project does not handle keys and never will.
+*.key
+*.keys
+aes_keys.txt
+seeddb.bin
+
+# Disassembly and lifter output.
+*.disasm
+*.lst
+/generated/
+
+# Build output.
+/build/
+/build-*/
+/out/
+cmake-build-*/
+CMakeUserPresets.json
+compile_commands.json
+
+# Object files, libraries and coverage data.
+*.o
+*.a
+*.so
+*.so.*
+*.d
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+
+# Tool caches.
+.cache/
+.ccache/
+__pycache__/
+*.pyc
+
+# Editor state.
+.vscode/
+.idea/
+.vs/
+*.swp
+*~
