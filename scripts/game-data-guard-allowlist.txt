@@ -1,0 +1,11 @@
+# Files exempt from the size, binary-content and entropy checks in
+# check_no_game_data.py. One repository-relative path per line.
+#
+# An entry here is a decision that a non-text or oversized file belongs in
+# Hexlith. Give the reason on the line above it. Game content is never a
+# valid reason; if a file came out of the cartridge, it belongs in the
+# workspace directory instead.
+#
+# The extension and container-signature checks are not exemptible.
+#
+# (empty)
