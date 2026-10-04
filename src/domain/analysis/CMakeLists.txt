@@ -4,6 +4,8 @@ target_sources(
             code_walk.h
             export_seed.cpp
             export_seed.h
+            function_bounds.cpp
+            function_bounds.h
             merge.h
             provenance.cpp
             provenance.h

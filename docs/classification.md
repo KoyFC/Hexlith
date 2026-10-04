@@ -63,12 +63,47 @@ Against the reference image, from 286 seeds and the sweep:
 
 Six stops in 659,708 instructions is worth being suspicious of rather than pleased about. It is low because ARM decoding almost never fails, which is the same fact that makes the walk necessary, so a stop is not what ends most paths: an unconditional branch or a return is.
 
+## Where each function ends
+
+The classification pass answers where functions start. The gap to the next one is not where they end: a function is followed by whatever the linker put next, which may be padding, a literal pool, or a function nothing has found yet.
+
+So the extent is measured the same way the entry points were, by following control flow. From the entry every branch that stays inside the function is followed and the furthest instruction reached is the end. A call is not followed, because it comes back. A branch to another known entry point is not followed either, because that is a tail call and the function it reaches is its own.
+
+An entry point the body runs through is not a function of its own. It is a second way into this one, which is what a compiler produces when it folds two functions whose endings agree, and it goes in the `alt-entries` field [ADR 0006](adr/0006-analysis-layer-format.md) put there for it.
+
+On the reference image:
+
+| | |
+| --- | --- |
+| Entry points measured | 12,126 |
+| Functions | 11,824 |
+| Secondary entry points folded in | 314 |
+| Without a measurable extent | 0 |
+| Overlapping another function | 8 |
+| Bytes attributed to a function | 2,426,600 |
+| Largest function | 0x190C bytes |
+
+The size distribution is the shape compiled code has, which is the useful part of this measurement:
+
+| Extent | Functions |
+| --- | --- |
+| At most 0x20 | 2,087 |
+| At most 0x80 | 4,689 |
+| At most 0x200 | 4,006 |
+| At most 0x800 | 1,011 |
+| At most 0x2000 | 31 |
+| Larger | 0 |
+
+An average of 205 bytes, nothing over 6.5 KB, and eight overlaps out of 11,824. A measurement that had run two functions together would show up as a handful of enormous extents, and a measurement that had stopped early would show up as thousands of tiny ones.
+
+The 188 KB between the code the walk reached and the code attributed to a function is reached by falling into a region from outside any function this pass knows about, which is a gap worth closing rather than a discrepancy.
+
 ## What is not done yet
 
 **The 41 percent the walk does not reach.** Some of it is code reached through a dispatch the analysis cannot follow, some is data, and nothing here can say which without more work. The honest form of that is a gap in the tables.
 
 **Jump tables.** A computed branch through a table ends a path. The tables are not found, the entries are not followed, and no region is marked as one. This is the largest single gap and the hardest case, which is why [ADR 0006](adr/0006-analysis-layer-format.md) gave `jump-table` a region kind of its own before anything could produce one.
 
-**The nine conflicts.** Each is a place where two paths disagree about an encoding, and each is worth reading rather than counting.
+**The nine conflicts and the eight overlaps.** Each is a place where two paths disagree, about an encoding or about which function owns a byte, and each is worth reading rather than counting.
 
 **The CRO modules.** The walk runs on the main executable only. A module's own code is reached through its relocation tables, which are not read yet.
