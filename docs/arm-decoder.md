@@ -14,7 +14,7 @@ Two details in Thumb are easy to get wrong and are both measurable against the i
 
 **A branch with link that exchanges into ARM lands on a word boundary**, and the architecture rounds down to reach one. Hexlith had this wrong until the comparison found 109 branch targets in the text segment where it disagreed, all of them a `blx` at an address that was not a multiple of four.
 
-Of the 65,536 halfwords, 58,852 are instructions, which is 89.8 percent. Thumb leaves far less of its space undefined than ARM does, having sixteen bits to spend rather than thirty-two, which makes "does this decode" even weaker evidence there than in ARM.
+Of the 65,536 halfwords, 58,847 are instructions, which is 89.8 percent. Thumb leaves far less of its space undefined than ARM does, having sixteen bits to spend rather than thirty-two, which makes "does this decode" even weaker evidence there than in ARM.
 
 ## How it is verified
 

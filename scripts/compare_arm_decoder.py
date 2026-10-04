@@ -136,6 +136,11 @@ NOT_IN_V6K = {
 }
 
 
+# The 16-bit Thumb hints, which ARMv6T2 added. ARMv6K has the hints in ARM state
+# only, and Unicorn's ARM11 MPCore refuses these.
+THUMB_HINTS = {"nop", "yield", "wfe", "wfi", "sev"}
+
+
 def is_if_then(name):
     """An IT block, which ARMv6T2 added. Its mnemonic spells out the block."""
     return name is not None and name.startswith("it") and set(name) <= {"i", "t", "e"}
@@ -151,6 +156,7 @@ STRICTER = {
     "strex", "ldrexb", "strexb", "ldrexh", "strexh", "ldrexd", "strexd",
     "smlald", "smlsld", "smmul", "smmla", "smmls", "usad8", "usada8", "smc",
     "pkhbt", "pkhtb", "ssat", "usat", "nop", "yield", "wfe", "wfi", "sev",
+    "ldrh", "strh", "ldrsb", "ldrsh",
 }
 
 COPROCESSOR = {"ldc", "stc", "cdp", "mcr", "mrc", "mcrr", "mrrc"}
@@ -307,6 +313,8 @@ class Comparison:
             agreed = theirs == fields["lanes"]
         elif mine == "undefined":
             if theirs is None or theirs in NOT_IN_V6K or theirs in PARALLEL or is_if_then(theirs):
+                agreed = True
+            elif self.thumb and theirs in THUMB_HINTS:
                 agreed = True
             elif looks_floating_point(theirs) and theirs in VFP:
                 reason = later_float_reason(word, insn, theirs)

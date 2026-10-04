@@ -375,11 +375,16 @@ Instruction DecodeExtraTransfer(std::uint32_t word) {
     if (Bit(word, 22)) {
         instruction.operand = OperandForm::Immediate;
         instruction.immediate = (Bits(word, 11, 8) << RegisterFieldWidth) | Bits(word, 3, 0);
-    } else {
-        instruction.operand = OperandForm::Register;
-        instruction.second = RegisterAt(word, 0);
+        return instruction;
     }
 
+    // The register form leaves bits 11 to 8 empty, where the immediate form
+    // keeps the top half of its offset, and anything in them is unpredictable.
+    if (!AllZero(word, 11, 8)) {
+        return Undefined(word);
+    }
+    instruction.operand = OperandForm::Register;
+    instruction.second = RegisterAt(word, 0);
     return instruction;
 }
 
@@ -966,8 +971,10 @@ Operation SignedMultiplyOperation(std::uint32_t op1, std::uint32_t op2, bool acc
         }
         return subtracts ? Operation::Smlsld : Operation::Smlald;
     case 0b101:
+        // SMMLS has no form without an accumulator, so the all-ones field that
+        // turns SMMLA into SMMUL makes it an unpredictable SMMLS instead.
         if ((op2 & 0b110) == 0b110) {
-            return Operation::Smmls;
+            return accumulates ? Operation::Smmls : Operation::Undefined;
         }
         if ((op2 & 0b110) == 0b000) {
             return accumulates ? Operation::Smmla : Operation::Smmul;

@@ -296,10 +296,11 @@ Stop ExecuteLoadMultiple(Execution<Memory>& execution) {
     const bool base_listed = Holds(registers, base_register);
 
     // The S bit loads user mode registers or restores the saved status, neither
-    // of which means anything from user mode. In ARM, writing back into a
+    // of which means anything from user mode. A base of r15 is unpredictable
+    // with or without write-back. In ARM, writing back into a
     // register the transfer also loads is unpredictable; Thumb defines it as no
     // write-back, and the loaded value wins.
-    if (instruction.saved_status || (instruction.writes_back && base_register == ProgramCounter) ||
+    if (instruction.saved_status || base_register == ProgramCounter ||
         (instruction.writes_back && base_listed && !execution.Thumb())) {
         return Halt(execution, StopReason::Unpredictable);
     }
@@ -344,7 +345,7 @@ Stop ExecuteLoadMultiple(Execution<Memory>& execution) {
 
 // STM, and PUSH in Thumb. Writing back into a register the transfer also stores
 // is defined when it is the lowest one, which stores the original value, and
-// unpredictable otherwise.
+// unpredictable otherwise. A base of r15 is unpredictable either way.
 template<class Memory>
 Stop ExecuteStoreMultiple(Execution<Memory>& execution) {
     const Instruction& instruction = execution.instruction;
@@ -353,7 +354,7 @@ Stop ExecuteStoreMultiple(Execution<Memory>& execution) {
 
     const auto below_base = static_cast<RegisterSet>((1U << base_register) - 1U);
     const bool base_not_lowest = Holds(registers, base_register) && (registers & below_base) != 0;
-    if (instruction.saved_status || (instruction.writes_back && base_register == ProgramCounter) ||
+    if (instruction.saved_status || base_register == ProgramCounter ||
         (instruction.writes_back && base_not_lowest)) {
         return Halt(execution, StopReason::Unpredictable);
     }

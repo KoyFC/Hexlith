@@ -401,30 +401,9 @@ Instruction DecodeReverse(std::uint16_t first) {
     return instruction;
 }
 
-Instruction DecodeThumbHint(std::uint16_t first) {
-    if (Bits(first, 3, 0) != 0) {
-        return Undefined(first);
-    }
-
-    static constexpr std::array<Operation, 5> Operations = {Operation::NoOperation,
-                                                            Operation::Yield,
-                                                            Operation::WaitForEvent,
-                                                            Operation::WaitForInterrupt,
-                                                            Operation::SendEvent};
-
-    const std::uint32_t which = Bits(first, 7, 4);
-    if (which >= Operations.size()) {
-        return Undefined(first);
-    }
-
-    Instruction instruction = Start(first, Operations.at(which));
-    instruction.updates_flags = false;
-    return instruction;
-}
-
 // The corner of the encoding that holds everything that did not fit elsewhere:
 // adjusting the stack, extending and reversing, pushing and popping, the
-// breakpoint, the hints, and the two instructions that change processor state.
+// breakpoint, and the two instructions that change processor state.
 Instruction DecodeMiscellaneous(std::uint16_t first) {
     const std::uint32_t row = Bits(first, 11, 8);
 
@@ -442,7 +421,12 @@ Instruction DecodeMiscellaneous(std::uint16_t first) {
         return instruction;
     }
     case 0b1111:
-        return DecodeThumbHint(first);
+        // The 16-bit hints and the if-then instruction live here in ARMv6T2 and
+        // later, and in ARMv6K the row is empty: the reference manual gives the
+        // Thumb encodings of NOP, YIELD, WFE, WFI and SEV as ARMv6T2, and
+        // Unicorn's ARM11 MPCore refuses them. None appears in the reference
+        // image's Thumb code. ARM state has the hints and Thumb does not.
+        return Undefined(first);
     case 0b0110: {
         // Setting the byte order and changing the interrupt mask, told apart by
         // one bit, with the rest of each fixed.

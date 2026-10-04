@@ -418,6 +418,21 @@ TEST(DecodeArm, ReadsCoprocessorAccess) {
     EXPECT_EQ(floating.immediate, 0U);
 }
 
+TEST(DecodeArm, RefusesAHalfwordTransferWithBitsInItsEmptyField) {
+    // ldrsb r11, [r2], r4 with bits 11 to 8 set, which the register form leaves
+    // empty. Capstone decodes it; Unicorn refuses it, and so does Hexlith.
+    EXPECT_EQ(DecodeArm(0xE092B4D4).operation, Operation::Undefined);
+
+    // The same instruction with the field clear.
+    EXPECT_EQ(DecodeArm(0xE09240D4).operation, Operation::LoadSignedByte);
+}
+
+TEST(DecodeArm, RefusesAMostSignificantWordSubtractWithoutAnAccumulator) {
+    // smmlsr r10, r3, r11, with the accumulator field all ones, which would be
+    // SMMUL in the accumulating row and is nothing in this one.
+    EXPECT_EQ(DecodeArm(0xE75AFBF3).operation, Operation::Undefined);
+}
+
 TEST(DecodeArm, RefusesAWordThatIsNotAnInstruction) {
     // A block transfer of no registers.
     EXPECT_EQ(DecodeArm(0xE8BD0000).operation, Operation::Undefined);

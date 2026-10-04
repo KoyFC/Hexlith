@@ -198,6 +198,13 @@ TEST(Interpreter, RefusesALoadMultipleThatWritesBackIntoItsOwnList) {
     EXPECT_EQ(machine.Step().reason, StopReason::Unpredictable);
 }
 
+TEST(Interpreter, RefusesABlockTransferBasedOnTheProgramCounter) {
+    Machine machine;
+    // ldmia pc, {r1, r3}, which Unicorn and the reference manual both refuse
+    machine.Arm({0xE89F000A});
+    EXPECT_EQ(machine.Step().reason, StopReason::Unpredictable);
+}
+
 TEST(Interpreter, LeavesTheStateAloneOnAReadFault) {
     Machine machine;
     // ldr r0, [r1], #4, from an unmapped address

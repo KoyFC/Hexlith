@@ -316,13 +316,10 @@ TEST(DecodeThumb, ReadsTheInstructionsArmv6Added) {
     EXPECT_EQ(Decode(0xBA91).operation, Operation::Undefined)
         << "the fourth entry of that row is not an instruction in ARMv6K";
 
-    // The five hints, and the fact that the rest of the row is not one.
-    EXPECT_EQ(Decode(0xBF00).operation, Operation::NoOperation);
-    EXPECT_EQ(Decode(0xBF10).operation, Operation::Yield);
-    EXPECT_EQ(Decode(0xBF20).operation, Operation::WaitForEvent);
-    EXPECT_EQ(Decode(0xBF30).operation, Operation::WaitForInterrupt);
-    EXPECT_EQ(Decode(0xBF40).operation, Operation::SendEvent);
-    EXPECT_EQ(Decode(0xBF50).operation, Operation::Undefined);
+    // nop and yield in their 16-bit Thumb encodings, which ARMv6T2 added. The
+    // ARM11 has the hints in ARM state only.
+    EXPECT_EQ(Decode(0xBF00).operation, Operation::Undefined);
+    EXPECT_EQ(Decode(0xBF10).operation, Operation::Undefined);
 
     // An if-then block, which belongs to ARMv6T2 and not to this core.
     EXPECT_EQ(Decode(0xBF08).operation, Operation::Undefined);
@@ -395,14 +392,14 @@ TEST(DecodeThumb, DecodesEveryHalfwordWithoutFailing) {
         }
     }
 
-    // 58,852 of the 65,536 halfwords are instructions, which is 89.8 percent.
+    // 58,847 of the 65,536 halfwords are instructions, which is 89.8 percent.
     // Thumb leaves far less of its space undefined than ARM does, because it has
     // sixteen bits to spend rather than thirty-two.
     //
     // The number is exact on purpose. A change in it is a change in what the
     // decoder accepts, which should be deliberate and should be read alongside a
     // run of scripts/compare_arm_decoder.py rather than discovered later.
-    EXPECT_EQ(defined, 58852U);
+    EXPECT_EQ(defined, 58847U);
 }
 
 }  // namespace
