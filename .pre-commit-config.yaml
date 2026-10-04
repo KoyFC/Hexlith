@@ -29,6 +29,14 @@ repos:
         types_or: [c, c++]
         stages: [pre-commit]
 
+      - id: ldr-ro-trace-self-test
+        name: ldr:ro trace reader self-test
+        entry: scripts/read_ldr_ro_trace.py --self-test
+        language: system
+        pass_filenames: false
+        files: '^scripts/read_ldr_ro_trace\.py$'
+        stages: [pre-commit]
+
       - id: commit-message
         name: Check commit message
         entry: scripts/check_commit_message.py

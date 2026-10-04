@@ -52,6 +52,8 @@ If the bases are deterministic, the optimisation is enabled with the loader asse
 
 This is Phase 2 work. Until then the lifter is written against the position-independent model, which is the one that is correct either way.
 
+The instrumented build this asked for turned out to be unnecessary: Azahar already logs each load with the module name and the resulting address, at a level a release build compiles in. [`docs/ldr-ro-trace.md`](../ldr-ro-trace.md) has the procedure and what each answer means. The measurement has not been made, because it needs somebody to play a boot, a field transition and a battle.
+
 ## Consequences
 
 The `ldr:ro` reimplementation and the CRO parser have to exist early, before lifting is useful, which moves them forward in the schedule.
