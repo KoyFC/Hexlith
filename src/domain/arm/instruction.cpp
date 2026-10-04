@@ -1,0 +1,207 @@
+#include "domain/arm/instruction.h"
+
+namespace hexlith::domain::arm {
+namespace {
+
+// How far ahead of the instruction the program counter reads. Two instructions
+// in ARM and one in Thumb, which is what the pipeline exposed when the
+// encodings were fixed and what every displacement is counted from since.
+constexpr std::uint32_t ArmPipelineOffset = 8;
+constexpr std::uint32_t ThumbPipelineOffset = 4;
+
+std::uint32_t PipelineOffset(InstructionSet set) {
+    return set == InstructionSet::Arm ? ArmPipelineOffset : ThumbPipelineOffset;
+}
+
+bool TransfersSingleWord(Operation operation) {
+    switch (operation) {
+    case Operation::LoadWord:
+    case Operation::LoadByte:
+    case Operation::LoadHalf:
+    case Operation::LoadSignedByte:
+    case Operation::LoadSignedHalf:
+    case Operation::LoadDouble:
+    case Operation::StoreWord:
+    case Operation::StoreByte:
+    case Operation::StoreHalf:
+    case Operation::StoreDouble:
+        return true;
+    default:
+        return false;
+    }
+}
+
+}  // namespace
+
+std::string_view ShiftName(ShiftKind kind) {
+    switch (kind) {
+    case ShiftKind::LogicalLeft:
+        return "lsl";
+    case ShiftKind::LogicalRight:
+        return "lsr";
+    case ShiftKind::ArithmeticRight:
+        return "asr";
+    case ShiftKind::RotateRight:
+        return "ror";
+    case ShiftKind::RotateRightExtended:
+        return "rrx";
+    }
+    return "?";
+}
+
+bool WritesDestination(Operation operation) {
+    switch (operation) {
+    // The four comparisons exist to set flags and have no destination.
+    case Operation::Tst:
+    case Operation::Teq:
+    case Operation::Cmp:
+    case Operation::Cmn:
+    // A store reads its destination field as a source.
+    case Operation::StoreWord:
+    case Operation::StoreByte:
+    case Operation::StoreHalf:
+    case Operation::StoreDouble:
+    case Operation::StoreWordUnprivileged:
+    case Operation::StoreByteUnprivileged:
+    case Operation::StoreMultiple:
+    case Operation::StoreCoprocessor:
+    case Operation::StoreReturnState:
+    // These write somewhere other than a general register, or nowhere.
+    case Operation::Undefined:
+    case Operation::Branch:
+    case Operation::BranchLink:
+    case Operation::BranchExchange:
+    case Operation::BranchLinkExchangeRegister:
+    case Operation::BranchLinkExchangeImmediate:
+    case Operation::MoveToStatus:
+    case Operation::MoveToCoprocessor:
+    case Operation::MoveToCoprocessorPair:
+    case Operation::CoprocessorDataOperation:
+    case Operation::SoftwareInterrupt:
+    case Operation::Breakpoint:
+    case Operation::SecureMonitorCall:
+    case Operation::Preload:
+    case Operation::NoOperation:
+    case Operation::Yield:
+    case Operation::WaitForEvent:
+    case Operation::WaitForInterrupt:
+    case Operation::SendEvent:
+    case Operation::SetEndianness:
+    case Operation::ChangeProcessorState:
+    case Operation::ClearExclusive:
+    case Operation::ReturnFromException:
+    case Operation::ParallelArithmetic:
+        return false;
+    default:
+        return true;
+    }
+}
+
+bool WritesProgramCounter(const Instruction& instruction) {
+    switch (instruction.operation) {
+    case Operation::Branch:
+    case Operation::BranchLink:
+    case Operation::BranchExchange:
+    case Operation::BranchLinkExchangeRegister:
+    case Operation::BranchLinkExchangeImmediate:
+    case Operation::ReturnFromException:
+        return true;
+    case Operation::LoadMultiple:
+        return Holds(instruction.registers, ProgramCounter);
+    default:
+        break;
+    }
+
+    if (WritesDestination(instruction.operation) && instruction.destination == ProgramCounter) {
+        return true;
+    }
+
+    // A transfer that writes back leaves the address in its base register, and
+    // the base can be r15 as easily as anything else.
+    return instruction.writes_back && instruction.first == ProgramCounter &&
+           TransfersSingleWord(instruction.operation);
+}
+
+bool HasKnownTarget(const Instruction& instruction) {
+    switch (instruction.operation) {
+    case Operation::Branch:
+    case Operation::BranchLink:
+    case Operation::BranchLinkExchangeImmediate:
+        return true;
+    default:
+        return false;
+    }
+}
+
+std::uint32_t BranchTarget(const Instruction& instruction, std::uint32_t address) {
+    const std::uint32_t origin = address + PipelineOffset(instruction.instruction_set);
+    return origin + static_cast<std::uint32_t>(instruction.branch_offset);
+}
+
+bool IsCall(const Instruction& instruction) {
+    switch (instruction.operation) {
+    case Operation::BranchLink:
+    case Operation::BranchLinkExchangeRegister:
+    case Operation::BranchLinkExchangeImmediate:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool IsReturn(const Instruction& instruction) {
+    if (instruction.operation == Operation::BranchExchange) {
+        return instruction.second == LinkRegister;
+    }
+
+    if (instruction.operation == Operation::Mov && instruction.destination == ProgramCounter) {
+        return instruction.operand == OperandForm::Register && instruction.second == LinkRegister;
+    }
+
+    // A function that saved the link register returns by loading it straight
+    // into the program counter, which is what makes a pop a return rather than
+    // a branch to wherever the stack points.
+    if (instruction.operation == Operation::LoadMultiple) {
+        return Holds(instruction.registers, ProgramCounter) && instruction.first == StackPointer;
+    }
+
+    return false;
+}
+
+bool ContinuesToTheNextInstruction(const Instruction& instruction) {
+    if (!WritesProgramCounter(instruction)) {
+        return true;
+    }
+
+    // A call writes the program counter and comes back, so the instruction
+    // after it is reachable. That it might not come back, because the function
+    // called never returns, is not something the instruction can say.
+    if (IsCall(instruction)) {
+        return true;
+    }
+
+    // A condition that can fail leaves the following instruction reachable, and
+    // one that cannot does not.
+    return IsConditional(instruction.condition);
+}
+
+std::optional<std::uint32_t> ProgramCounterRelativeAddress(const Instruction& instruction,
+                                                           std::uint32_t address) {
+    if (!TransfersSingleWord(instruction.operation)) {
+        return std::nullopt;
+    }
+    if (instruction.first != ProgramCounter || instruction.operand != OperandForm::Immediate) {
+        return std::nullopt;
+    }
+
+    // A post-indexed transfer reads the base before the offset is applied, so
+    // the address is the program counter itself.
+    const std::uint32_t origin = address + PipelineOffset(instruction.instruction_set);
+    if (!instruction.preindexed) {
+        return origin;
+    }
+
+    return instruction.add_offset ? origin + instruction.immediate : origin - instruction.immediate;
+}
+
+}  // namespace hexlith::domain::arm

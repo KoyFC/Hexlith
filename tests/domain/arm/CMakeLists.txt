@@ -1,0 +1,3 @@
+hexlith_add_test(hexlith_domain_arm_test instruction_test.cpp)
+
+target_link_libraries(hexlith_domain_arm_test PRIVATE Hexlith::Domain)
