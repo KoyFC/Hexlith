@@ -13,6 +13,13 @@ target_sources(
             instruction.h
             instruction_set.cpp
             instruction_set.h
+            interpreter/execute_data.h
+            interpreter/execute_system.h
+            interpreter/execute_transfer.h
+            interpreter/execution.h
+            interpreter/interpreter.cpp
+            interpreter/interpreter.h
+            interpreter/step.h
             operation.cpp
             operation.h
             primitives/integer.h

@@ -56,6 +56,14 @@ struct CpuState {
     // which address it tagged. A store exclusive succeeds only while it is open.
     bool exclusive_open = false;
     std::uint32_t exclusive_address = 0;
+
+    // The two thread ID registers of CP15 that user mode can reach, c13 c0 2
+    // and c13 c0 3. The first is read-write; the second is read-only in user
+    // mode, and Horizon keeps the address of the thread's local storage in it,
+    // which is why every thread in the game reads it. Source: the ARM11 MPCore
+    // technical reference manual, c13 thread and process ID registers.
+    std::uint32_t thread_id_read_write = 0;
+    std::uint32_t thread_id_read_only = 0;
 };
 
 // CPSR bit positions. Source: ARM Architecture Reference Manual, ARMv6 edition

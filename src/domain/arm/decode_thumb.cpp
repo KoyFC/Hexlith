@@ -189,6 +189,13 @@ Instruction DecodeRegisterOperation(std::uint16_t first) {
         instruction.operand = OperandForm::Immediate;
         instruction.immediate = 0;
         return instruction;
+    case Operation::Mul:
+        // The destination is also the second factor. The fields are those of an
+        // ARM MUL, Rm in `second` and Rs in `third`, so that whatever executes a
+        // multiply reads both encodings the same way.
+        instruction.destination = destination;
+        instruction.third = destination;
+        return instruction;
     default:
         break;
     }

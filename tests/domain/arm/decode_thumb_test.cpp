@@ -126,8 +126,14 @@ TEST(DecodeThumb, ReadsTheRegisterOperations) {
     EXPECT_EQ(negate.operand, OperandForm::Immediate);
     EXPECT_EQ(negate.immediate, 0U);
 
-    // muls r0, r1
-    EXPECT_EQ(Decode(0x4348).operation, Operation::Mul);
+    // muls r0, r1, which multiplies r0 by r1. The factors sit where an ARM MUL
+    // keeps them, and there is no accumulator.
+    const Instruction multiply = Decode(0x4348);
+    EXPECT_EQ(multiply.operation, Operation::Mul);
+    EXPECT_EQ(multiply.destination, 0);
+    EXPECT_EQ(multiply.second, 1);
+    EXPECT_EQ(multiply.third, 0);
+    EXPECT_EQ(multiply.first, NoRegister);
     // mvns r0, r1
     EXPECT_EQ(Decode(0x43C8).operation, Operation::Mvn);
 }
