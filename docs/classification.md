@@ -174,7 +174,7 @@ The walk sees the code segment and nothing else, so a path that runs off its end
 | `DllBox` | 128,340 | 95.8 percent | 984 |
 | `DllZukan` | 121,716 | 95.7 percent | 1,161 |
 
-Against the main executable's 61.1 percent, with ten conflicts, the difference is what the relocation tables are worth: every function a module reaches only through a table of pointers is a seed here, where in the main executable it has to be guessed at. The 5.4 percent not reached includes the literal pools inside functions, which are data and not counted as code, and whatever padding sits between functions. How it splits between those and code that nothing reaches has not been measured.
+Against the main executable's 80.4 percent, with 25 conflict reports, the difference is what the relocation tables are worth: every function a module reaches only through a table of pointers is a seed here, where in the main executable it has to be guessed at. The 5.4 percent not reached includes the literal pools inside functions, which are data and not counted as code, and whatever padding sits between functions. How it splits between those and code that nothing reaches has not been measured.
 
 20 modules carry at most 172 bytes of code each and reach about two thirds of it. Most are the developer stubs [`formats/cro0.md`](formats/cro0.md) describes, one exported function each.
 
