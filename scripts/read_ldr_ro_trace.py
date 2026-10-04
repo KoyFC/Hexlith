@@ -6,10 +6,11 @@ instrumented run of the title recording every load and unload with the module
 name and the resulting base address. The instrumentation turned out to be
 unnecessary. Azahar logs it already:
 
-    [   12.345678] Service_LDR <Info> ldr_ro.cpp:LoadCRO:531: CRO "DllField" loaded at 0x0A1B2000, fixed_end=0x0A2C3000
+    [   3.072226] Service.LDR <Info> ldr_ro.cpp:LoadCRO:331: CRO "DllLangSelect" loaded at 0x006A5000, fixed_end=0x006A9000
 
-That is LOG_INFO, which a release build compiles in, so the stock Flatpak build
-produces the trace with nothing more than a log filter.
+That line is from a real run, which is where the format here comes from. It is
+LOG_INFO, which a release build compiles in and the default filter passes, so the
+stock Flatpak build produces the trace with no configuration at all.
 
 What this answers is whether a module lands at the same address every time. If it
 does, cross-module calls can be lifted as direct calls with the loader asserting
@@ -146,9 +147,9 @@ def self_test():
     """The parser, against logs written here rather than taken from a run."""
     fixed = Trace("fixed")
     fixed.read(
-        '[   1.0] Service_LDR <Info> ldr_ro.cpp:LoadCRO:531: CRO "DllField" loaded at 0x0A1B2000, fixed_end=0x0A2C3000\n'
-        '[   2.0] Service_LDR <Info> ldr_ro.cpp:UnloadCRO:600: Unloading CRO "DllField"\n'
-        '[   3.0] Service_LDR <Info> ldr_ro.cpp:LoadCRO:531: CRO "DllBattle" loaded at 0x0A1B2000, fixed_end=0x0A200000\n')
+        '[   1.0] Service.LDR <Info> ldr_ro.cpp:LoadCRO:331: CRO "DllField" loaded at 0x0A1B2000, fixed_end=0x0A2C3000\n'
+        '[   2.0] Service.LDR <Info> ldr_ro.cpp:UnloadCRO:600: Unloading CRO "DllField"\n'
+        '[   3.0] Service.LDR <Info> ldr_ro.cpp:LoadCRO:331: CRO "DllBattle" loaded at 0x0A1B2000, fixed_end=0x0A200000\n')
     assert fixed.load_counts["DllField"] == 1, fixed.load_counts
     assert fixed.unload_counts["DllField"] == 1
     assert fixed.bases["DllField"] == {0x0A1B2000}
@@ -167,8 +168,15 @@ def self_test():
     # A line that is not about loading a module is ignored, including one that
     # merely mentions one.
     quiet = Trace("quiet")
-    quiet.read('Service_LDR <Debug> ldr_ro.cpp:LoadCRO:400: called (DllField), cro_buffer_ptr=0x1\n')
+    quiet.read('Service.LDR <Debug> ldr_ro.cpp:LoadCRO:300: called (DllField), cro_buffer_ptr=0x1\n')
     assert not quiet.loads, quiet.loads
+
+    # The import and export counts cro_helper.cpp logs beside each load are not
+    # loads, however much they look like one.
+    counted = Trace("counted")
+    counted.read(
+        '[   3.072159] Service.LDR <Info> cro_helper.cpp:operator():886: CRO "DllLangSelect" imports 93 anonymous symbols from "|static|"\n')
+    assert not counted.loads, counted.loads
 
     # Two modules resident at once, which is what the question is about.
     both = Trace("both")
@@ -197,7 +205,7 @@ def main():
         trace = Trace(path.name)
         trace.read(path.read_text(errors="replace"))
         if not trace.loads:
-            print(f"{path}: no module loads in it. Is Service_LDR at Info in log_filter?")
+            print(f"{path}: no module loads in it. Is Service.LDR at Info in log_filter?")
         traces.append(trace)
 
     return report(traces)
