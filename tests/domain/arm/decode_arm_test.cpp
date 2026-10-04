@@ -410,11 +410,12 @@ TEST(DecodeArm, ReadsCoprocessorAccess) {
     EXPECT_EQ(write.operation, Operation::MoveToCoprocessor);
     EXPECT_EQ(write.coprocessor, 15);
 
-    // A floating point instruction is a coprocessor instruction on 10 or 11.
-    // This one reads the floating point system identity register.
+    // A floating point instruction is encoded as a coprocessor instruction on 10
+    // or 11 and decoded as the floating point instruction it is. This one reads
+    // the floating point system identity register.
     const Instruction floating = DecodeArm(0xEEF00A10);
-    EXPECT_EQ(floating.operation, Operation::MoveFromCoprocessor);
-    EXPECT_EQ(floating.coprocessor, 10);
+    EXPECT_EQ(floating.operation, Operation::VfpMoveFromSystem);
+    EXPECT_EQ(floating.immediate, 0U);
 }
 
 TEST(DecodeArm, RefusesAWordThatIsNotAnInstruction) {

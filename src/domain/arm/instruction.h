@@ -150,6 +150,33 @@ struct Instruction {
     // The arithmetic and the lanes of a parallel instruction.
     ParallelPrefix parallel_prefix = ParallelPrefix::Signed;
     ParallelShape parallel_shape = ParallelShape::Add16;
+
+    // The floating point registers a VFP instruction names, each numbered in its
+    // own bank: s0 to s31 in single precision, d0 to d15 in double. VFPv2 has
+    // sixteen double registers and they overlap the singles, d0 holding s0 and
+    // s1.
+    //
+    // A move or a transfer names its floating point register in vfp_destination
+    // whichever way the data goes, the way `destination` names Rt for both MCR
+    // and MRC; the operation says the direction. A block transfer names the
+    // first register it moves. A comparison with zero leaves vfp_second empty.
+    RegisterIndex vfp_destination = NoRegister;
+    RegisterIndex vfp_first = NoRegister;
+    RegisterIndex vfp_second = NoRegister;
+
+    // Which bank vfp_destination is in, and which bank the sources are in.
+    // They differ only in a conversion.
+    bool vfp_destination_double = false;
+    bool vfp_sources_double = false;
+
+    // How many registers a block transfer moves, counting from vfp_destination.
+    std::uint8_t vfp_count = 0;
+
+    // A conversion between floating point and an integer: whether the integer is
+    // signed, and whether a conversion to an integer rounds towards zero rather
+    // than in the rounding mode FPSCR selects.
+    bool integer_signed = false;
+    bool rounds_towards_zero = false;
 };
 
 // Whether the instruction can be reached as a value: whether it decoded at all.

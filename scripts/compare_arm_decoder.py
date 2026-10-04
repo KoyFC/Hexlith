@@ -17,13 +17,15 @@ disagreements. Both are documented in that note.
 
 Hexlith refuses a word that breaks a field the architecture fixes, which
 Capstone decodes anyway because it implements a later architecture where some of
-those fields mean something. Hexlith reports a floating point instruction as
-what it is encoded as, a coprocessor instruction on coprocessor 10 or 11, and
-does not decode the operation itself.
+those fields mean something. Hexlith decodes the floating point of VFPv2, which
+is what the ARM11 has, and refuses what VFPv3, VFPv4, Advanced SIMD and ARMv8
+added to the same space later; the script names which of those each refused
+word is.
 
 Usage:
     scripts/compare_arm_decoder.py --image ~/recomp-data/work/.../exefs/.code
     scripts/compare_arm_decoder.py --random 1000000
+    scripts/compare_arm_decoder.py --random 1000000 --float
 """
 
 import argparse
@@ -85,6 +87,27 @@ ALIAS = {
     "smladx": "smlad", "smlsdx": "smlsd", "smuadx": "smuad", "smusdx": "smusd",
     "smlaldx": "smlald", "smlsldx": "smlsld",
     "smmlar": "smmla", "smmlsr": "smmls", "smmulr": "smmul",
+    # Floating point block transfers, which an assembler spells by direction,
+    # and as a push or a pop when the base is the stack pointer.
+    "vldmia": "vldm", "vldmdb": "vldm", "vstmia": "vstm", "vstmdb": "vstm",
+    "vpush": "vstm", "vpop": "vldm",
+    "fldmiax": "vldm", "fldmdbx": "vldm", "fstmiax": "vstm", "fstmdbx": "vstm",
+    # A conversion to an integer that rounds in the FPSCR mode rather than
+    # towards zero, which Hexlith records as a field.
+    "vcvtr": "vcvt",
+}
+
+# What Hexlith decodes in the floating point space, VFPv2.
+VFP = {
+    "vmla", "vmls", "vnmla", "vnmls", "vmul", "vnmul", "vadd", "vsub", "vdiv",
+    "vmov", "vabs", "vneg", "vsqrt", "vcmp", "vcmpe", "vcvt", "vmsr", "vmrs",
+    "vldr", "vstr", "vldm", "vstm",
+}
+
+# Added to the floating point space after VFPv2, by VFPv3, VFPv4 or Advanced
+# SIMD. The ARM11 has none of them, so answering Undefined is right.
+LATER_FLOAT = {
+    "vfma", "vfms", "vfnma", "vfnms", "vcvtb", "vcvtt", "vdup",
 }
 
 # The thirty-six instructions Hexlith reports as one operation, with the lanes
@@ -131,7 +154,6 @@ STRICTER = {
 }
 
 COPROCESSOR = {"ldc", "stc", "cdp", "mcr", "mrc", "mcrr", "mrrc"}
-FLOAT_COPROCESSORS = (9, 10, 11)
 
 TRANSFERS = {
     "ldr", "ldrb", "str", "strb", "ldrt", "ldrbt", "strt", "strbt",
@@ -142,14 +164,77 @@ TRANSFERS = {
 def base_name(insn):
     """Capstone's mnemonic without the condition, the flag suffix or the width."""
     name = insn.mnemonic
-    for part in (".w", ".n", ".f16", ".f32", ".f64", ".8", ".16", ".32", ".64"):
-        name = name.replace(part, "")
+    name = name.split(".")[0]
     suffix = CONDITION_SUFFIX.get(insn.cc)
     if suffix and name.endswith(suffix) and len(name) > len(suffix):
         name = name[: -len(suffix)]
-    if insn.update_flags and name.endswith("s") and len(name) > 1:
+    # vmrs into the flags sets them without an S suffix to strip.
+    if insn.update_flags and name.endswith("s") and len(name) > 1 and not name.startswith("v"):
         name = name[:-1]
     return ALIAS.get(name, name)
+
+
+def register_names(insn):
+    """The names of every register Capstone lists, memory bases included."""
+    names = []
+    for operand in insn.operands:
+        if operand.type == capstone_arm.ARM_OP_REG:
+            names.append(insn.reg_name(operand.reg))
+        elif operand.type == capstone_arm.ARM_OP_MEM and operand.mem.base != 0:
+            names.append(insn.reg_name(operand.mem.base))
+    return names
+
+
+def is_float_register(name):
+    return name is not None and name[0] in "sdq" and name[1:].isdigit()
+
+
+def vfp_unpredictable(word, theirs):
+    """Whether a VFPv2 word breaks a rule that makes it unpredictable.
+
+    Written from the architecture reference independently of the decoder, so
+    that the two have to agree rather than one excusing the other.
+    """
+    double = (word >> 8) & 1
+    rt, rt2 = (word >> 12) & 0xF, (word >> 16) & 0xF
+    to_core = (word >> 20) & 1
+    if theirs in ("vldm", "vstm"):
+        imm8 = word & 0xFF
+        count = imm8 // 2 if double else imm8
+        vd, d = (word >> 12) & 0xF, (word >> 22) & 1
+        first = (d << 4 | vd) if double else (vd << 1 | d)
+        writes_back = (word >> 21) & 1
+        return count == 0 or first + count > (16 if double else 32) or (writes_back and rt2 == 15)
+    if theirs == "vmov" and (word >> 25) & 7 == 0b110:
+        single = ((word & 0xF) << 1) | ((word >> 5) & 1)
+        return rt == 15 or rt2 == 15 or (to_core and rt == rt2) or (not double and single == 31) \
+            or (word >> 6) & 3 != 0
+    if theirs == "vmov":
+        return rt == 15 or (word >> 5) & 3 != 0 or word & 0xF != 0
+    if theirs in ("vmsr", "vmrs"):
+        # Only FPSCR can be read into r15, which means its flags into the CPSR.
+        return (word >> 5) & 7 != 0 or word & 0xF != 0 or (rt == 15 and theirs == "vmsr") \
+            or (rt == 15 and rt2 != 1)
+    return False
+
+
+def later_float_reason(word, insn, theirs):
+    """Why a floating point word Hexlith refuses is not VFPv2, or None."""
+    if (word >> 28) == 0xF:
+        return "advanced simd"
+    if theirs in LATER_FLOAT or "mvfr2" in insn.op_str:
+        return "later floating point"
+    names = register_names(insn)
+    if any(n.startswith("q") or (n.startswith("d") and n[1:].isdigit() and int(n[1:]) >= 16)
+           for n in names if is_float_register(n)):
+        return "d16 to d31"
+    if any(o.type in (capstone_arm.ARM_OP_FP, capstone_arm.ARM_OP_IMM) for o in insn.operands) \
+            and theirs in ("vmov", "vcvt"):
+        return "later floating point"
+    mnemonic = insn.mnemonic
+    if theirs == "vmov" and any(f".{w}" in mnemonic for w in ("8", "16", "s8", "u8", "s16", "u16")):
+        return "advanced simd"
+    return None
 
 
 def looks_floating_point(name):
@@ -223,17 +308,33 @@ class Comparison:
         elif mine == "undefined":
             if theirs is None or theirs in NOT_IN_V6K or theirs in PARALLEL or is_if_then(theirs):
                 agreed = True
+            elif looks_floating_point(theirs) and theirs in VFP:
+                reason = later_float_reason(word, insn, theirs)
+                if reason is None and vfp_unpredictable(word, theirs):
+                    self.counts["stricter"] += 1
+                    return
+                if reason is None:
+                    agreed = False
+                else:
+                    self.counts[reason] += 1
+                    return
             elif looks_floating_point(theirs):
                 agreed = True
             elif theirs in STRICTER:
                 self.counts["stricter"] += 1
                 return
+            elif theirs in COPROCESSOR and (word >> 28) == 0xF and ((word >> 8) & 0xF) in (10, 11):
+                # The unconditional coprocessor encodings on 10 and 11 reach the
+                # floating point unit, which defines nothing there in VFPv2.
+                self.counts["advanced simd"] += 1
+                return
             else:
                 agreed = False
-        elif mine in COPROCESSOR and (
-            ((word >> 8) & 0xF) in FLOAT_COPROCESSORS or looks_floating_point(theirs)
-        ):
-            self.counts["floating point"] += 1
+        elif mine in COPROCESSOR and looks_floating_point(theirs):
+            # ARMv8 put half precision on coprocessor 9 and the dot products on
+            # 13. On an ARM11 those are coprocessor instructions for coprocessors
+            # that do not exist, which is what Hexlith reports.
+            self.counts["later floating point"] += 1
             return
         elif mine in ("ldr", "str") and theirs in ("ldm", "stm"):
             # A transfer of one register through the stack pointer is spelt push
@@ -266,6 +367,9 @@ class Comparison:
             if memory:
                 self.check_transfer(fields, insn, memory[0], operands)
 
+        if mine in VFP:
+            self.check_float_registers(fields, insn)
+
         if mine in ("ldm", "stm") and "regs" in fields:
             listed = [o.reg for o in operands if o.type == capstone_arm.ARM_OP_REG]
             if insn.insn_name() not in ("push", "pop"):
@@ -275,6 +379,37 @@ class Comparison:
                 if mask != int(fields["regs"], 16):
                     self.note("register list", f"{fields['encoding']} {insn.mnemonic} {insn.op_str}")
                 self.counts["register lists checked"] += 1
+
+    def check_float_registers(self, fields, insn):
+        """Both name the same floating point and general registers."""
+        mine = set()
+        for key in ("vd", "vn", "vm"):
+            if key in fields:
+                mine.add(fields[key])
+        if "vcount" in fields:
+            bank, first = fields["vd"][0], int(fields["vd"][1:])
+            mine = {f"{bank}{first + n}" for n in range(int(fields["vcount"]))}
+        if fields["op"] == "vmov" and "rdhi" in fields and fields["vd"].startswith("s"):
+            mine.add(f"s{int(fields['vd'][1:]) + 1}")
+        for key in ("rd", "rdhi", "rn"):
+            if key in fields:
+                mine.add(fields[key])
+
+        theirs = set()
+        for name in register_names(insn):
+            if is_float_register(name):
+                theirs.add(name)
+            elif name in ("sb", "sl", "fp", "ip"):
+                theirs.add({"sb": "r9", "sl": "r10", "fp": "r11", "ip": "r12"}[name])
+            elif name.startswith("r") or name in ("sp", "lr", "pc"):
+                theirs.add(name)
+        if fields["op"] in ("vldm", "vstm") and insn.insn_name() in ("vpush", "vpop"):
+            theirs.add("sp")
+
+        if mine != theirs:
+            self.note(f"{fields['op']} registers",
+                      f"{fields['encoding']} {insn.mnemonic} {insn.op_str} hexlith={sorted(mine)}")
+        self.counts["float registers checked"] += 1
 
     def check_transfer(self, fields, insn, memory, operands):
         base = memory.mem.base
@@ -310,9 +445,10 @@ class Comparison:
         print(f"agreed                {self.counts['agreed']}")
         print(f"disagreed             {self.counts['disagreed']}")
         print(f"hexlith stricter      {self.counts['stricter']}")
-        print(f"floating point        {self.counts['floating point']}")
+        for key in ("advanced simd", "later floating point", "d16 to d31"):
+            print(f"{key:21} {self.counts[key]}")
         for key in ("targets checked", "bases checked", "offsets checked",
-                    "register lists checked"):
+                    "register lists checked", "float registers checked"):
             print(f"{key:21} {self.counts[key]}")
 
         for key, count in self.disagreements.most_common(20):
@@ -321,9 +457,22 @@ class Comparison:
         return 1 if self.disagreements else 0
 
 
-def words_from_random(count, seed):
+# Bits 27 and 26 set, which is the coprocessor space, and bits 11 to 9 at 101,
+# which addresses coprocessors 10 and 11. A random word lands there one time in
+# two hundred, too rarely to cover the floating point decoder.
+FLOAT_SPACE_MASK = 0x0C000E00
+FLOAT_SPACE_BITS = 0x0C000A00
+
+
+def words_from_random(count, seed, float_space=False):
     generator = random.Random(seed)
-    return "\n".join(f"0x{generator.getrandbits(32):08X}" for _ in range(count))
+    words = []
+    for _ in range(count):
+        word = generator.getrandbits(32)
+        if float_space:
+            word = (word & ~FLOAT_SPACE_MASK) | FLOAT_SPACE_BITS
+        words.append(f"0x{word:08X}")
+    return "\n".join(words)
 
 
 def main():
@@ -337,6 +486,8 @@ def main():
     parser.add_argument("--thumb", action="store_true", help="decode as Thumb rather than ARM")
     parser.add_argument("--random", type=int, default=0, help="how many random words to sweep")
     parser.add_argument("--seed", type=int, default=1, help="the seed those words come from")
+    parser.add_argument("--float", action="store_true",
+                        help="draw the random words from the floating point space only")
     options = parser.parse_args()
 
     if not options.dump.exists():
@@ -357,7 +508,8 @@ def main():
 
     if options.random:
         output = subprocess.run(prefix + ["-"],
-                                input=words_from_random(options.random, options.seed),
+                                input=words_from_random(options.random, options.seed,
+                                                        options.float),
                                 capture_output=True, text=True, check=True).stdout
         for line in output.splitlines():
             comparison.check(line)

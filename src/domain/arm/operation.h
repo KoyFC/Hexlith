@@ -176,7 +176,60 @@ enum class Operation : std::uint8_t {
     ChangeProcessorState,
     StoreReturnState,
     ReturnFromException,
+
+    // Floating point, VFPv2. The architecture encodes it as coprocessor
+    // instructions on coprocessors 10 and 11, single and double precision, and
+    // a word in that space decodes as one of these or as nothing. Named after
+    // the unified assembler mnemonics, which is what a disassembler prints.
+    //
+    // Arithmetic, in the order the encoding table gives it.
+    VfpMultiplyAccumulate,
+    VfpMultiplySubtract,
+    VfpNegatedMultiplyAccumulate,
+    VfpNegatedMultiplySubtract,
+    VfpMultiply,
+    VfpNegatedMultiply,
+    VfpAdd,
+    VfpSubtract,
+    VfpDivide,
+
+    // One source, and the comparisons.
+    VfpCopy,
+    VfpAbsolute,
+    VfpNegate,
+    VfpSquareRoot,
+    VfpCompare,
+    VfpCompareSignalling,
+    VfpConvertPrecision,
+    VfpConvertFromInteger,
+    VfpConvertToInteger,
+
+    // Moves between the general registers and the floating point ones: a single
+    // register, half of a double, a pair, and the system registers.
+    VfpMoveToSingle,
+    VfpMoveFromSingle,
+    VfpMoveToHalf,
+    VfpMoveFromHalf,
+    VfpMoveToPair,
+    VfpMoveFromPair,
+    VfpMoveToSystem,
+    VfpMoveFromSystem,
+
+    // Transfers to and from memory.
+    VfpLoad,
+    VfpStore,
+    VfpLoadMultiple,
+    VfpStoreMultiple,
 };
+
+// Whether the operation belongs to the floating point unit.
+//
+// The floating point operations are declared as one block at the end of the
+// enumeration, and this relies on it: a new one goes inside the block.
+[[nodiscard]] constexpr bool IsFloatingPoint(Operation operation) {
+    return operation >= Operation::VfpMultiplyAccumulate &&
+           operation <= Operation::VfpStoreMultiple;
+}
 
 // The mnemonic an assembler spells, without the condition suffix and without
 // the operand syntax.

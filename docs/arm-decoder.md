@@ -25,6 +25,7 @@ So the decoder is compared against Capstone, over the reference image and over r
 ```sh
 cmake --build --preset ci
 scripts/compare_arm_decoder.py --random 1000000
+scripts/compare_arm_decoder.py --random 1000000 --float
 scripts/compare_arm_decoder.py --image ~/recomp-data/work/<id>/exefs/.code \
     --length 0x43BEDC --address 0x00100000
 ```
@@ -35,12 +36,14 @@ Current result:
 
 | | ARM, random | ARM, text segment | Thumb, random | Thumb, text segment |
 | --- | --- | --- | --- | --- |
-| Instructions compared | 5,000,000 | 1,053,596 | 1,000,000 | 2,218,060 |
+| Instructions compared | 4,757,115 | 1,108,725 | 1,000,000 | 2,218,060 |
 | Disagreements | 0 | 0 | 0 | 0 |
-| Hexlith stricter | 3.7 percent | 0.11 percent | 0.08 percent | 71 words |
-| Floating point | 3.4 percent | 5.2 percent | none | none |
+| Hexlith stricter | 4.0 percent | 0.11 percent | 0.08 percent | 71 words |
+| Later than ARMv6K and VFPv2 | 0.9 percent | 45 words | none | none |
 
-The comparison checks more than the operation. Over the text segment read as ARM it agreed on 166,430 branch targets, 308,516 transfer base registers, 298,228 transfer offsets with their direction and write-back, and 52,542 register lists; read as Thumb, on 774,368 branch targets and 180,720 transfer bases. The Thumb sweep is run from offset 0 and from offset 2, so that every halfword position is covered.
+The comparison checks more than the operation. Over the text segment read as ARM it agreed on 166,430 branch targets, 308,516 transfer base registers, 298,228 transfer offsets with their direction and write-back, 52,542 register lists, and the registers of 55,004 floating point instructions; read as Thumb, on 774,368 branch targets and 180,720 transfer bases. The Thumb sweep is run from offset 0 and from offset 2, so that every halfword position is covered.
+
+A random word lands in the floating point space one time in two hundred, which is too rarely to test that decoder, so `--float` draws every word from it. Three runs of a million such words, with seeds 1 to 3, agree everywhere and check the registers of 412,977 instructions.
 
 Add `--thumb` to compare the Thumb decoder:
 
@@ -71,14 +74,13 @@ Both are counted rather than hidden, so that a real disagreement cannot hide amo
 
 This is deliberate and it is not pedantry. A compiler emits those fields correctly without exception, so a word that gets them wrong is far more likely to be data, and this decoder's answer is what the classification pass is built on. The cost is visible: 3.7 percent of random words fall in the gap, against 0.11 percent of the real text segment, and the second number is the one that matters.
 
-**Floating point is identified, not decoded.** VFP is encoded as coprocessor instructions on coprocessors 10 and 11, and that is how they are reported, with the coprocessor number saying which they are. The ARM11 in the 3DS has VFPv2, and there are 55,072 words in the text segment that read as a coprocessor instruction on 10 or 11, so this is not a corner that can stay empty forever. It can stay empty until something needs float semantics.
+**Capstone knows later floating point.** VFP is encoded as coprocessor instructions on coprocessors 10 and 11, and the ARM11 in the 3DS has VFPv2, the version before VFPv3 doubled the register file to d31 and added immediate moves, and before VFPv4 added fused multiplies. ARMv7 also put Advanced SIMD in the unconditional encodings of the same space, and ARMv8 put half precision on coprocessor 9. Capstone decodes all of it. Hexlith refuses what VFPv2 does not have, and the script names the reason for each word it excuses: a register above d15, an instruction a later version added, or the unconditional space. The unpredictable floating point transfers, such as a block of registers running past s31, are judged by rules the script writes out from the architecture reference on its own, so that the decoder cannot excuse itself.
+
+Floating point was identified and not decoded until the interpreter needed it, and decoding it fixed a mistake in the analysis. [`classification.md`](classification.md) has the numbers.
 
 ## Identified rather than decoded
 
-Two places, each because nothing needs the detail yet and the encoding is kept on the instruction, so filling one in later means reading a field rather than finding the instructions again.
-
-- Floating point, as above.
-- The lane selectors of the halfword multiplies are recorded on the instruction, but the mnemonic does not spell them.
+One place, because nothing needs the detail yet and the encoding is kept on the instruction, so filling it in later means reading a field rather than finding the instructions again: the lane selectors of the halfword multiplies are recorded on the instruction, but the mnemonic does not spell them.
 
 The thirty-six parallel arithmetic instructions are one operation, `ParallelArithmetic`, with the prefix and the lane shape as two fields beside it. They used to be identified and nothing more; the interpreter needs to know which one it is running, so the fields are filled in and the comparison checks the full mnemonic against Capstone's.
 

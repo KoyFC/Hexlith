@@ -63,6 +63,21 @@ Against the reference image, from 286 seeds and the sweep:
 
 Six stops in 659,708 instructions is worth being suspicious of rather than pleased about. It is low because ARM decoding almost never fails, which is the same fact that makes the walk necessary, so a stop is not what ends most paths: an unconditional branch or a return is.
 
+### Floating point comparisons ended functions early
+
+The tables above were measured before the decoder read floating point. Until then a `vmrs apsr_nzcv, fpscr`, which copies the flags of a floating point comparison into the CPSR so that a conditional branch can test them, decoded as a coprocessor read into r15. A write to r15 is a branch, so the walk ended the function at every floating point comparison and never reached the code after it.
+
+Decoding VFPv2 fixed that, and the same run picks up floating point literal pools, which a `vldr` relative to the program counter reads the way an `ldr` reads an integer one:
+
+| | Before | After |
+| --- | --- | --- |
+| Text segment reached | 58.9 percent | 61.1 percent |
+| Functions | 11,824 | 11,941 |
+| Stops at a word that is not an instruction | 6 | 9 |
+| Instruction set conflicts | 9 | 10 |
+
+The other tables in this note still describe the earlier run.
+
 ## Where each function ends
 
 The classification pass answers where functions start. The gap to the next one is not where they end: a function is followed by whatever the linker put next, which may be padding, a literal pool, or a function nothing has found yet.
@@ -114,10 +129,10 @@ The tables are written beside the extraction and not into this repository. [ADR 
 
 ## What is not done yet
 
-**The 41 percent the walk does not reach.** Some of it is code reached through a dispatch the analysis cannot follow, some is data, and nothing here can say which without more work. The honest form of that is a gap in the tables.
+**The 39 percent the walk does not reach.** Some of it is code reached through a dispatch the analysis cannot follow, some is data, and nothing here can say which without more work. The honest form of that is a gap in the tables.
 
 **Jump tables.** A computed branch through a table ends a path. The tables are not found, the entries are not followed, and no region is marked as one. This is the largest single gap and the hardest case, which is why [ADR 0006](adr/0006-analysis-layer-format.md) gave `jump-table` a region kind of its own before anything could produce one.
 
-**The nine conflicts and the eight overlaps.** Each is a place where two paths disagree, about an encoding or about which function owns a byte, and each is worth reading rather than counting.
+**The ten conflicts, the nine overlaps and the nine stops.** Each is a place where two paths disagree, about an encoding or about which function owns a byte, and each is worth reading rather than counting.
 
 **The CRO modules.** The walk runs on the main executable only. A module's own code is reached through its relocation tables, which are not read yet.

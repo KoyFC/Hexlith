@@ -131,6 +131,34 @@ bool WritesDestination(Operation operation) {
     case Operation::ClearExclusive:
     case Operation::ReturnFromException:
     case Operation::ParallelArithmetic:
+    // Floating point writes floating point registers, memory or FPSCR. The four
+    // moves that write a general register are the exception.
+    case Operation::VfpMultiplyAccumulate:
+    case Operation::VfpMultiplySubtract:
+    case Operation::VfpNegatedMultiplyAccumulate:
+    case Operation::VfpNegatedMultiplySubtract:
+    case Operation::VfpMultiply:
+    case Operation::VfpNegatedMultiply:
+    case Operation::VfpAdd:
+    case Operation::VfpSubtract:
+    case Operation::VfpDivide:
+    case Operation::VfpCopy:
+    case Operation::VfpAbsolute:
+    case Operation::VfpNegate:
+    case Operation::VfpSquareRoot:
+    case Operation::VfpCompare:
+    case Operation::VfpCompareSignalling:
+    case Operation::VfpConvertPrecision:
+    case Operation::VfpConvertFromInteger:
+    case Operation::VfpConvertToInteger:
+    case Operation::VfpMoveToSingle:
+    case Operation::VfpMoveToHalf:
+    case Operation::VfpMoveToPair:
+    case Operation::VfpMoveToSystem:
+    case Operation::VfpLoad:
+    case Operation::VfpStore:
+    case Operation::VfpLoadMultiple:
+    case Operation::VfpStoreMultiple:
         return false;
     default:
         return true;
@@ -237,7 +265,10 @@ bool ContinuesToTheNextInstruction(const Instruction& instruction) {
 
 std::optional<std::uint32_t> ProgramCounterRelativeAddress(const Instruction& instruction,
                                                            std::uint32_t address) {
-    if (!TransfersSingleWord(instruction.operation)) {
+    // A floating point constant is loaded from a pool the same way an integer
+    // one is, by a single transfer relative to the program counter.
+    if (!TransfersSingleWord(instruction.operation) &&
+        instruction.operation != Operation::VfpLoad) {
         return std::nullopt;
     }
     if (instruction.first != ProgramCounter || instruction.operand != OperandForm::Immediate) {

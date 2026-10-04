@@ -6,6 +6,8 @@ target_sources(
             decode_arm.h
             decode_thumb.cpp
             decode_thumb.h
+            decode_vfp.cpp
+            decode_vfp.h
             instruction.cpp
             instruction.h
             instruction_set.cpp

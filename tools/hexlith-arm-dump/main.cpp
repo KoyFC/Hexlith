@@ -131,9 +131,54 @@ bool UsesAddressing(arm::Operation operation) {
     case arm::Operation::Preload:
     case arm::Operation::StoreReturnState:
     case arm::Operation::ReturnFromException:
+    case arm::Operation::VfpLoad:
+    case arm::Operation::VfpStore:
+    case arm::Operation::VfpLoadMultiple:
+    case arm::Operation::VfpStoreMultiple:
         return true;
     default:
         return false;
+    }
+}
+
+// A floating point register under the name an assembler gives it, s0 to s31 or
+// d0 to d15 depending on the bank.
+void FloatRegisterField(std::string& line,
+                        std::string_view key,
+                        arm::RegisterIndex index,
+                        bool is_double) {
+    if (index != arm::NoRegister) {
+        Field(line, key, std::format("{}{}", is_double ? 'd' : 's', index));
+    }
+}
+
+void FloatFields(std::string& line, const arm::Instruction& decoded) {
+    FloatRegisterField(line, "vd", decoded.vfp_destination, decoded.vfp_destination_double);
+    FloatRegisterField(line, "vn", decoded.vfp_first, decoded.vfp_sources_double);
+    FloatRegisterField(line, "vm", decoded.vfp_second, decoded.vfp_sources_double);
+
+    switch (decoded.operation) {
+    case arm::Operation::VfpLoadMultiple:
+    case arm::Operation::VfpStoreMultiple:
+        Field(line, "vcount", std::format("{}", decoded.vfp_count));
+        break;
+    case arm::Operation::VfpMoveToSystem:
+    case arm::Operation::VfpMoveFromSystem:
+        Field(line, "sysreg", std::format("{}", decoded.immediate));
+        break;
+    case arm::Operation::VfpMoveToHalf:
+    case arm::Operation::VfpMoveFromHalf:
+        Field(line, "half", decoded.immediate == 0 ? "low" : "high");
+        break;
+    case arm::Operation::VfpConvertFromInteger:
+    case arm::Operation::VfpConvertToInteger:
+        Field(line, "int", decoded.integer_signed ? "s32" : "u32");
+        if (decoded.rounds_towards_zero) {
+            Field(line, "rz", "yes");
+        }
+        break;
+    default:
+        break;
     }
 }
 
@@ -179,6 +224,10 @@ std::string Record(std::uint32_t address, const arm::Instruction& decoded) {
     case arm::OperandForm::Register:
     case arm::OperandForm::None:
         break;
+    }
+
+    if (arm::IsFloatingPoint(decoded.operation)) {
+        FloatFields(line, decoded);
     }
 
     if (decoded.operation == arm::Operation::ParallelArithmetic) {

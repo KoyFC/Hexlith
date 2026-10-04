@@ -247,6 +247,59 @@ std::string_view Mnemonic(Operation operation) {
         return "srs";
     case Operation::ReturnFromException:
         return "rfe";
+    case Operation::VfpMultiplyAccumulate:
+        return "vmla";
+    case Operation::VfpMultiplySubtract:
+        return "vmls";
+    case Operation::VfpNegatedMultiplyAccumulate:
+        return "vnmla";
+    case Operation::VfpNegatedMultiplySubtract:
+        return "vnmls";
+    case Operation::VfpMultiply:
+        return "vmul";
+    case Operation::VfpNegatedMultiply:
+        return "vnmul";
+    case Operation::VfpAdd:
+        return "vadd";
+    case Operation::VfpSubtract:
+        return "vsub";
+    case Operation::VfpDivide:
+        return "vdiv";
+    case Operation::VfpCopy:
+        return "vmov";
+    case Operation::VfpAbsolute:
+        return "vabs";
+    case Operation::VfpNegate:
+        return "vneg";
+    case Operation::VfpSquareRoot:
+        return "vsqrt";
+    case Operation::VfpCompare:
+        return "vcmp";
+    case Operation::VfpCompareSignalling:
+        return "vcmpe";
+    case Operation::VfpConvertPrecision:
+    case Operation::VfpConvertFromInteger:
+    case Operation::VfpConvertToInteger:
+        return "vcvt";
+    case Operation::VfpMoveToSingle:
+    case Operation::VfpMoveFromSingle:
+    case Operation::VfpMoveToHalf:
+    case Operation::VfpMoveFromHalf:
+    case Operation::VfpMoveToPair:
+    case Operation::VfpMoveFromPair:
+        return "vmov";
+    case Operation::VfpMoveToSystem:
+        return "vmsr";
+    case Operation::VfpMoveFromSystem:
+        return "vmrs";
+    case Operation::VfpLoad:
+        return "vldr";
+    case Operation::VfpStore:
+        return "vstr";
+    case Operation::VfpLoadMultiple:
+        return "vldm";
+    case Operation::VfpStoreMultiple:
+        return "vstm";
     }
     return "undefined";
 }

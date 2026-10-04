@@ -1,5 +1,7 @@
 #include "domain/arm/decode_arm.h"
 
+#include "domain/arm/decode_vfp.h"
+
 #include <array>
 #include <bit>
 #include <optional>
@@ -1230,6 +1232,14 @@ Instruction DecodeUnconditional(std::uint32_t word) {
         return Undefined(word);
     }
 
+    // Floating point is conditional only. The unconditional encodings on
+    // coprocessors 10 and 11 are where ARMv7 put Advanced SIMD, which the ARM11
+    // does not have, and on an ARM11 they reach the floating point unit as
+    // instructions it does not define.
+    if (AddressesFloatingPoint(word)) {
+        return Undefined(word);
+    }
+
     Instruction instruction =
         group == 0b110 ? DecodeCoprocessorTransfer(word) : DecodeCoprocessorOperation(word);
     instruction.condition = Condition::Unconditional;
@@ -1257,8 +1267,13 @@ Instruction DecodeArm(std::uint32_t word) {
     case 0b101:
         return DecodeBranch(word);
     case 0b110:
-        return DecodeCoprocessorTransfer(word);
+        return AddressesFloatingPoint(word) ? DecodeVfp(word) : DecodeCoprocessorTransfer(word);
     case 0b111:
+        // Bit 24 makes the word a software interrupt, whatever the coprocessor
+        // field would have said.
+        if (!Bit(word, 24) && AddressesFloatingPoint(word)) {
+            return DecodeVfp(word);
+        }
         return DecodeCoprocessorOperation(word);
     default:
         break;
