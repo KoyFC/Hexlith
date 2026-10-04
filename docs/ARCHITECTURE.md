@@ -2,7 +2,7 @@
 
 How Hexlith is put together, and why. Decisions with lasting consequences are recorded separately in [`adr/`](adr/); this document is the map that makes those decisions legible.
 
-Most of what follows does not exist yet. The container formats are read, the profile is checked and a cartridge can be unpacked; everything from analysis onwards is planned. Each section marks what is present and what is not, because a design document that reads as though the system already works is worse than no document at all.
+Much of what follows does not exist yet. The container formats are read, the profile is checked, a cartridge can be unpacked, and the main executable can be analysed into function and region tables; lifting and the runtime are planned. Each section marks what is present and what is not, because a design document that reads as though the system already works is worse than no document at all.
 
 ## What is being built
 
@@ -26,7 +26,7 @@ cartridge image
 native executable
 ```
 
-Only the first stage exists. [`extraction.md`](extraction.md) describes it.
+The first two stages exist. [`extraction.md`](extraction.md) describes extraction, and [`classification.md`](classification.md) and [`analysis-tables.md`](analysis-tables.md) describe analysis. Analysis covers the main executable only: the CRO modules need their relocation tables read first, and those are not read yet.
 
 The repository holds the tools and the runtime. The workspace, which holds the cartridge image and everything derived from it, lives outside the repository and is never redistributed. See [ADR 0007](adr/0007-no-game-data-in-the-repository.md) and [ADR 0008](adr/0008-workspace-configuration.md).
 
@@ -97,6 +97,8 @@ Only Pokémon X, program ID `0004000000055D00`, base version, is supported or te
 Lifting needs to know where functions begin and end, which bytes are code and which are data, and what to call things. That knowledge accumulates over the life of the project, some of it derived automatically and some of it entered by hand, so it is stored as text that a person can edit and that regenerates without reordering. Every record carries where it came from. See [ADR 0006](adr/0006-analysis-layer-format.md).
 
 The starting point is the 461 named exports in `static.crs`, which is the only symbol information the cartridge gives away.
+
+`hexlith-analyze` writes the four tables beside the extraction in the workspace, not into the repository. It walks the main executable from its known entry points with the ARM and Thumb decoders in `src/domain/arm`, which are checked against Capstone as [`arm-decoder.md`](arm-decoder.md) describes.
 
 ## Formats
 
