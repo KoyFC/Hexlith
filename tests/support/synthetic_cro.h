@@ -114,6 +114,19 @@ struct SyntheticCroSpec {
 
 std::vector<std::uint8_t> BuildSyntheticCro(const SyntheticCroSpec& spec);
 
+// The imports of each kind, spelt out. Each takes the batch of relocations the
+// import resolves.
+SyntheticCroImport AnonymousImport(std::uint32_t segment_index,
+                                   std::uint32_t offset_in_segment,
+                                   std::vector<SyntheticCroRelocation> batch);
+
+SyntheticCroImport NamedImport(std::string name, std::vector<SyntheticCroRelocation> batch);
+
+SyntheticCroImport IndexedImport(std::uint32_t export_index,
+                                 std::vector<SyntheticCroRelocation> batch);
+
+SyntheticCroImportModule ImportsFrom(std::string name, std::vector<SyntheticCroImport> anonymous);
+
 // A module shaped like one of the title's: four segments, almost no exports
 // and a great many relocations and imports, which is the shape
 // docs/formats/cro0.md measured.

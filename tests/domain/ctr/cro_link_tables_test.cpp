@@ -13,9 +13,11 @@
 namespace hexlith::domain::ctr {
 namespace {
 
+using test::AnonymousImport;
 using test::BuildSyntheticCro;
-using test::SyntheticCroImport;
-using test::SyntheticCroImportModule;
+using test::ImportsFrom;
+using test::IndexedImport;
+using test::NamedImport;
 using test::SyntheticCroRelocation;
 using test::SyntheticCroSegment;
 using test::SyntheticCroSpec;
@@ -68,38 +70,6 @@ constexpr std::uint8_t AbsentSegment = 9;
 SyntheticCroRelocation PatchCodeAt(std::uint32_t offset, std::uint32_t addend = 0) {
     return SyntheticCroRelocation{
         .segment_index = CodeSegment, .offset_in_segment = offset, .addend = addend};
-}
-
-SyntheticCroImport AnonymousImport(std::uint32_t segment_index,
-                                   std::uint32_t offset_in_segment,
-                                   std::vector<SyntheticCroRelocation> batch) {
-    SyntheticCroImport entry;
-    entry.segment_index = segment_index;
-    entry.offset_in_segment = offset_in_segment;
-    entry.batch = std::move(batch);
-    return entry;
-}
-
-SyntheticCroImport NamedImport(std::string name, std::vector<SyntheticCroRelocation> batch) {
-    SyntheticCroImport entry;
-    entry.name = std::move(name);
-    entry.batch = std::move(batch);
-    return entry;
-}
-
-SyntheticCroImport IndexedImport(std::uint32_t export_index,
-                                 std::vector<SyntheticCroRelocation> batch) {
-    SyntheticCroImport entry;
-    entry.export_index = export_index;
-    entry.batch = std::move(batch);
-    return entry;
-}
-
-SyntheticCroImportModule ImportsFrom(std::string name, std::vector<SyntheticCroImport> anonymous) {
-    SyntheticCroImportModule module;
-    module.name = std::move(name);
-    module.anonymous = std::move(anonymous);
-    return module;
 }
 
 // A module shaped like the title's: it imports by position from the static

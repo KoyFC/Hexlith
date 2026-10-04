@@ -1,0 +1,3 @@
+hexlith_add_test(hexlith_domain_linker_test cro_linker_test.cpp)
+
+target_link_libraries(hexlith_domain_linker_test PRIVATE Hexlith::Domain Hexlith::TestSupport)

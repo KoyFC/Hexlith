@@ -5,6 +5,7 @@
 #include "support/synthetic_ctr_image.h"
 
 #include <string_view>
+#include <utility>
 
 namespace hexlith::test {
 namespace {
@@ -502,6 +503,38 @@ std::vector<std::uint8_t> BuildSyntheticCro(const SyntheticCroSpec& spec) {
     WriteImports(spec, plan, write);
     WriteInternalRelocations(spec, plan, write);
     WriteContents(spec, plan, write);
+    return module;
+}
+
+SyntheticCroImport AnonymousImport(std::uint32_t segment_index,
+                                   std::uint32_t offset_in_segment,
+                                   std::vector<SyntheticCroRelocation> batch) {
+    SyntheticCroImport entry;
+    entry.segment_index = segment_index;
+    entry.offset_in_segment = offset_in_segment;
+    entry.batch = std::move(batch);
+    return entry;
+}
+
+SyntheticCroImport NamedImport(std::string name, std::vector<SyntheticCroRelocation> batch) {
+    SyntheticCroImport entry;
+    entry.name = std::move(name);
+    entry.batch = std::move(batch);
+    return entry;
+}
+
+SyntheticCroImport IndexedImport(std::uint32_t export_index,
+                                 std::vector<SyntheticCroRelocation> batch) {
+    SyntheticCroImport entry;
+    entry.export_index = export_index;
+    entry.batch = std::move(batch);
+    return entry;
+}
+
+SyntheticCroImportModule ImportsFrom(std::string name, std::vector<SyntheticCroImport> anonymous) {
+    SyntheticCroImportModule module;
+    module.name = std::move(name);
+    module.anonymous = std::move(anonymous);
     return module;
 }
 

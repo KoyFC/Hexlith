@@ -80,7 +80,7 @@ The interpreter and the primitive library exist, in `src/domain/arm/interpreter`
 
 **Services** implement a common interface and live in a registry, keyed by the port name the game connects to. The extended header's service access control list names every service the title can reach, which makes it the work list. See [`formats/exheader.md`](formats/exheader.md).
 
-**Dynamic modules** are the hard part. Roughly half the title's executable code sits in 133 CRO modules that are relocated at load time. [ADR 0004](adr/0004-cro-modules-and-the-ldr-ro-hle.md) records the approach, and the trace that showed a module can land at a different address each time it is loaded.
+**Dynamic modules** are the hard part. Roughly half the title's executable code sits in 133 CRO modules that are relocated at load time. [ADR 0004](adr/0004-cro-modules-and-the-ldr-ro-hle.md) records the approach, and the trace that showed a module can land at a different address each time it is loaded. The linking itself exists already, offline, in `src/domain/linker`: given the modules and the addresses chosen for them, it computes what every relocated word holds, the way the service does. [`cro-linking.md`](cro-linking.md) describes it.
 
 **Graphics** translate PICA200 state and command lists into Vulkan. Azahar's `video_core` is the reference for PICA behaviour and `nihstro` for its shader format.
 
