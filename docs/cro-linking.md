@@ -46,16 +46,21 @@ That says the import graph is closed. It does not say that the words hold the ri
 
 1. In `qt-config.ini`, `log_filter=*:Info Service.LDR:Debug` and `use_gdbstub=true`, port 24689.
 2. Play to the moment to be compared and leave the game running.
-3. Write the dump commands from the log as it stands, then connect, dump and detach. Connecting pauses the game.
+3. Write the dump commands from the log as it stands, then connect, run some of them, and detach. Connecting pauses the game.
 
 ```sh
 D=~/recomp-data/work/<id>/traces/dump-<moment>
 scripts/compare_cro_link.py gdb ~/.var/app/org.azahar_emu.Azahar/data/azahar-emu/log/azahar_log.txt $D > $D.gdb
-gdb -batch -ex 'set architecture arm' -ex 'target remote 127.0.0.1:24689' -x $D.gdb
+head -1 $D.gdb > $D.first.gdb
+gdb -batch -ex 'set architecture arm' \
+    -ex 'set remote memory-read-packet-size 512' -ex 'set remote memory-read-packet-size fixed' \
+    -ex 'target remote 127.0.0.1:24689' -x $D.first.gdb -ex detach
 scripts/compare_cro_link.py compare $D --romfs ~/recomp-data/work/<id>/romfs --tool build/ci/tools/hexlith-cro-link/hexlith-cro-link
 ```
 
 The first command also writes the resident modules and their addresses beside the dumps, so the comparison does not depend on the log surviving the next run.
+
+Azahar's stub is the limit. A read of more than a few hundred bytes in one packet overflows its reply buffer, which is what the packet size setting is for. At that size it delivers about 5 KB a second, and on 2026-10-04 it froze the emulator twice, once during a read of a megabyte and once right after a read of 64 KiB. So the dumps are written in chunks of 64 KiB, one gdb command each, and the comparison uses whichever chunks exist and reports how many relocated words they left out. Getting all of a large module means several sessions, and a run of the game for each.
 
 What is compared, and what counts as a failure:
 
@@ -64,3 +69,20 @@ What is compared, and what counts as a failure:
 - Each word of the main executable that the static module's own relocations patch, which tests the unresolved hook as well as the resolved imports.
 
 Connecting and then resuming the game with `continue` closed the emulation in one attempt on 2026-10-04, so the procedure connects only once the game is where it should be, and detaches when the dump is written.
+
+### What the first chunk showed
+
+Captured on 2026-10-04 inside a building on the first route, with `DllField` resident at `0x006A5000` and `DllUSMirror`, which imports from it, at `0x007E5000`. One chunk was dumped before the emulator froze: the first 64 KiB of `DllField`'s code, from `0x006A5180`.
+
+| | |
+| --- | --- |
+| Relocated words in the chunk | 2,880 |
+| Holding the value Hexlith computes | 2,880 |
+| Other bytes of code compared | 54,016 |
+| Differing from the file | 0 |
+
+The 2,880 words cover every path through the loader that this title uses. 136 are internal relocations. 2,607 are imports from the static module. 135 are imports from modules that were not loaded, holding the addend alone because `DllField` has no OnUnresolved hook. And 2 are imports from `DllUSMirror`, which was loaded after `DllField`, so they were written by the export step of the later load rather than by the import step of the earlier one.
+
+The first words of the chunk are a run of `ldr pc, [pc, #-4]` each followed by an address in the main executable: the module's calls into the static image go through these, and the loader has patched every one.
+
+That is 2,880 of the 14,561 words the two modules and the static module have between them, about a fifth. The rest of `DllField`, its data buffer, `DllUSMirror` and the main executable's 331 patched words are not dumped yet.

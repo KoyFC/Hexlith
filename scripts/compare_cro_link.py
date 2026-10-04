@@ -12,7 +12,12 @@ which modules are resident and where. It writes a gdb command file that dumps
 those modules out of Azahar through its GDB stub, then compares the dumps with
 what hexlith-cro-link computes for the same modules at the same addresses.
 
-What is compared:
+Azahar's stub is slow, about 5 KB a second, and on 2026-10-04 it froze the
+emulator twice during reads of a megabyte or more. So the dumps are written in
+chunks of 64 KiB, each one a gdb command of its own, and the comparison uses
+whatever chunks exist and says how much they covered.
+
+What is compared, where a chunk covers it:
 
   - Every byte of each module's code and read-only data. A relocated word has to
     hold the value Hexlith computes, and every other byte has to be the file's.
@@ -24,7 +29,9 @@ What is compared:
 
 Usage:
     scripts/compare_cro_link.py gdb LOG DUMP_DIR > dump.gdb
-    gdb -batch -ex 'target remote 127.0.0.1:24689' -x dump.gdb
+    gdb -batch -ex 'set remote memory-read-packet-size 512' \
+        -ex 'set remote memory-read-packet-size fixed' \
+        -ex 'target remote 127.0.0.1:24689' -x <some lines of dump.gdb>
     scripts/compare_cro_link.py compare DUMP_DIR --romfs ROMFS --tool hexlith-cro-link
     scripts/compare_cro_link.py --self-test
 """
@@ -111,18 +118,55 @@ def resident_at_end(text):
     return resident
 
 
+# The size of one dump. Azahar's stub managed 64 KiB in fifteen seconds and
+# froze on longer reads.
+CHUNK = 0x10000
+
+
+def chunk_commands(directory, start, end):
+    lines = []
+    for at in range(start, end, CHUNK):
+        stop = min(at + CHUNK, end)
+        lines.append(f"dump binary memory {directory}/{at:08x}.bin 0x{at:08x} 0x{stop:08x}")
+    return lines
+
+
 def gdb_commands(resident, directory):
+    """The dumps in the order they are worth having: every module's code and data
+    first, the main executable's text last because it is the largest."""
     lines = []
     for module in resident:
-        lines.append(f"dump binary memory {directory}/{module.name}.module.bin "
-                     f"0x{module.address:08x} 0x{module.end:08x}")
-        if module.data_size:
-            lines.append(f"dump binary memory {directory}/{module.name}.data.bin "
-                         f"0x{module.data:08x} 0x{module.data + module.data_size:08x}")
-    lines.append(f"dump binary memory {directory}/static.text.bin "
-                 f"0x{STATIC_TEXT_ADDRESS:08x} 0x{STATIC_TEXT_ADDRESS + STATIC_TEXT_SIZE:08x}")
-    lines.append("detach")
+        lines += chunk_commands(directory, module.address, module.end)
+        lines += chunk_commands(directory, module.data, module.data + module.data_size)
+    lines += chunk_commands(directory, STATIC_TEXT_ADDRESS, STATIC_TEXT_ADDRESS + STATIC_TEXT_SIZE)
     return "\n".join(lines) + "\n"
+
+
+class Memory:
+    """Guest memory as far as the chunks in a directory cover it."""
+
+    def __init__(self):
+        self.chunks = []    # (address, bytes)
+
+    def add(self, address, data):
+        self.chunks.append((address, data))
+
+    @staticmethod
+    def from_directory(directory):
+        memory = Memory()
+        for path in sorted(directory.glob("*.bin")):
+            try:
+                address = int(path.stem, 16)
+            except ValueError:
+                continue
+            memory.add(address, path.read_bytes())
+        return memory
+
+    def read(self, address, size):
+        for start, data in self.chunks:
+            if start <= address and address + size <= start + len(data):
+                return data[address - start:address - start + size]
+        return None
 
 
 def read_link(text):
@@ -147,81 +191,67 @@ def read_link(text):
     return segments, words
 
 
-def u32(data, offset):
-    return int.from_bytes(data[offset:offset + 4], "little")
-
-
 class Comparison:
     def __init__(self):
         self.words_agreeing = 0
         self.words_disagreeing = []
+        self.words_not_dumped = 0
+        self.bytes_compared = 0
         self.unexplained_bytes = []
         self.data_bytes_changed = 0
 
-    def word(self, what, expected, found):
-        if expected == found:
+    def word(self, memory, word, what):
+        found = memory.read(word["address"], 4)
+        if found is None:
+            self.words_not_dumped += 1
+            return
+        found = int.from_bytes(found, "little")
+        if found == word["value"]:
             self.words_agreeing += 1
         else:
-            self.words_disagreeing.append(f"{what}: Hexlith 0x{expected:08x}, memory "
-                                          f"0x{found:08x}")
+            self.words_disagreeing.append(f"{what} at 0x{word['address']:08x}: Hexlith "
+                                          f"0x{word['value']:08x}, memory 0x{found:08x}")
 
-    def module(self, module, file, segments, words, image, data):
-        """One module: its code and read-only data byte by byte, its data by word."""
-        expected = bytearray(file)
-        for word in words:
-            segment = segments[word["segment"]]
-            at = segment["offset"] + word["offset"]
-            expected[at:at + 4] = word["value"].to_bytes(4, "little")
-
+    def module(self, name, file, segments, words, memory):
+        """One module: every relocated word, then every other byte of the file's
+        segments, which in code and read-only data has to be the file's."""
         relocated = set()
         for word in words:
-            segment = segments[word["segment"]]
-            what = f"{module.name} {word['kind']} word at 0x{word['address']:08x}"
-            if segment["type"] == "data":
-                if data is None:
-                    continue
-                at = word["offset"]
-                self.word(what, word["value"], u32(data, at))
-                relocated.update(range(segment["offset"] + at, segment["offset"] + at + 4))
-                continue
-            at = segment["address"] - module.address + word["offset"]
-            self.word(what, word["value"], u32(image, at))
-            relocated.update(range(segment["offset"] + word["offset"],
-                                   segment["offset"] + word["offset"] + 4))
+            self.word(memory, word, f"{name} {word['kind']} word")
+            relocated.update(range(word["address"], word["address"] + 4))
 
         for segment in segments:
             if segment["size"] == 0 or segment["type"] in ("bss", "unknown"):
                 continue
-            if segment["type"] == "data":
-                if data is not None:
-                    file_data = expected[segment["offset"]:segment["offset"] + segment["size"]]
-                    self.data_bytes_changed += sum(
-                        1 for at in range(min(len(data), len(file_data)))
-                        if data[at] != file_data[at] and segment["offset"] + at not in relocated)
-                continue
-            base = segment["address"] - module.address
             for at in range(segment["size"]):
-                if image[base + at] != expected[segment["offset"] + at]:
-                    self.unexplained_bytes.append(
-                        f"{module.name} byte at 0x{segment['address'] + at:08x}: file "
-                        f"0x{expected[segment['offset'] + at]:02x}, memory 0x{image[base + at]:02x}")
-
-    def static_words(self, words, text):
-        for word in words:
-            at = word["address"] - STATIC_TEXT_ADDRESS
-            self.word(f"{STATIC} word at 0x{word['address']:08x}", word["value"], u32(text, at))
+                address = segment["address"] + at
+                if address in relocated:
+                    continue
+                found = memory.read(address, 1)
+                if found is None:
+                    continue
+                expected = file[segment["offset"] + at]
+                if segment["type"] == "data":
+                    self.data_bytes_changed += found[0] != expected
+                    continue
+                self.bytes_compared += 1
+                if found[0] != expected:
+                    self.unexplained_bytes.append(f"{name} byte at 0x{address:08x}: file "
+                                                  f"0x{expected:02x}, memory 0x{found[0]:02x}")
 
     def report(self):
         print(f"relocated words agreeing     {self.words_agreeing}")
         print(f"relocated words disagreeing  {len(self.words_disagreeing)}")
-        print(f"unexplained code or rodata   {len(self.unexplained_bytes)} byte(s)")
+        print(f"relocated words not dumped   {self.words_not_dumped}")
+        print(f"other code and rodata bytes  {self.bytes_compared} compared, "
+              f"{len(self.unexplained_bytes)} differing from the file")
         print(f"data bytes the game changed  {self.data_bytes_changed}")
         for line in (self.words_disagreeing + self.unexplained_bytes)[:40]:
             print(f"  {line}")
         if self.words_disagreeing or self.unexplained_bytes:
             return 1
-        print("Every relocated word holds the value Hexlith computes, and every other byte of")
-        print("code and read-only data is the file's.")
+        print("Every relocated word that was dumped holds the value Hexlith computes, and every")
+        print("other byte of code and read-only data that was dumped is the file's.")
         return 0
 
 
@@ -232,20 +262,19 @@ def compare(directory, romfs, tool):
     arguments += [f"{m.name}@{m.address:x},{m.data:x},{m.bss:x}" for m in resident]
     linked = subprocess.run(arguments, check=True, capture_output=True, text=True).stdout
     segments, words = read_link(linked)
+    memory = Memory.from_directory(directory)
 
     comparison = Comparison()
     for module in resident:
         file = (romfs / f"{module.name}.cro").read_bytes()
-        image = (directory / f"{module.name}.module.bin").read_bytes()
-        data_path = directory / f"{module.name}.data.bin"
-        data = data_path.read_bytes() if data_path.exists() else None
-        comparison.module(module, file, segments[module.name], words.get(module.name, []),
-                          image, data)
-    comparison.static_words(words.get(STATIC, []),
-                            (directory / "static.text.bin").read_bytes())
+        comparison.module(module.name, file, segments[module.name],
+                          words.get(module.name, []), memory)
+    for word in words.get(STATIC, []):
+        comparison.word(memory, word, f"{STATIC} word")
 
     print(f"modules compared             {len(resident)}: "
           f"{', '.join(module.name for module in resident)}")
+    print(f"bytes dumped                 {sum(len(data) for _, data in memory.chunks)}")
     return comparison.report()
 
 
@@ -267,8 +296,9 @@ def self_test():
     assert resident[0].data == 0x08054000 and resident[0].bss == 0x08055000
     assert Resident.parse(resident[0].line()).line() == resident[0].line()
     commands = gdb_commands(resident, "out")
-    assert "out/DllB.module.bin 0x006a9000 0x006ab000" in commands, commands
-    assert "DllB.data.bin" not in commands, "an empty data segment is not dumped"
+    assert "dump binary memory out/006a9000.bin 0x006a9000 0x006ab000" in commands, commands
+    assert commands.count("\n") == 1 + (STATIC_TEXT_SIZE + CHUNK - 1) // CHUNK, \
+        "an empty data segment is not dumped, and the text comes in chunks"
 
     try:
         resident_at_end('CRO "DllA" loaded at 0x006A5000, fixed_end=0x006A9000\n')
@@ -277,7 +307,7 @@ def self_test():
         pass
 
     # A module of 0x20 bytes: code at file offset 0x10 for 8 bytes, data at 0x18
-    # for 8. One word in each is relocated.
+    # for 8, which the game was given a buffer for. One word in each is relocated.
     linked = (
         "segment DllB index=0 type=code file-offset=0x00000010 size=0x00000008 "
         "address=0x006a9010\n"
@@ -288,7 +318,6 @@ def self_test():
         "word DllB kind=external segment=1 offset=0x00000000 address=0x08054000 "
         "value=0x00100101 from=|static|\n")
     segments, words = read_link(linked)
-    module = Resident("DllB", 0x006A9000, 0x006A9020, 0x08054000, 8, 0x08055000)
     file = bytes(range(0x20))
     image = bytearray(file)
     image[0x14:0x18] = (0x006A9010).to_bytes(4, "little")
@@ -296,18 +325,30 @@ def self_test():
     data[0:4] = (0x00100101).to_bytes(4, "little")
     data[6] = 0xEE
 
+    def memory_of(image, data):
+        memory = Memory()
+        memory.add(0x006A9000, bytes(image))
+        memory.add(0x08054000, bytes(data))
+        return memory
+
     agreeing = Comparison()
-    agreeing.module(module, file, segments["DllB"], words["DllB"], bytes(image), bytes(data))
+    agreeing.module("DllB", file, segments["DllB"], words["DllB"], memory_of(image, data))
     assert agreeing.words_agreeing == 2, agreeing.words_agreeing
     assert not agreeing.words_disagreeing and not agreeing.unexplained_bytes
+    assert agreeing.bytes_compared == 4
     assert agreeing.data_bytes_changed == 1
 
     image[0x11] ^= 0xFF
     image[0x14] ^= 0xFF
     disagreeing = Comparison()
-    disagreeing.module(module, file, segments["DllB"], words["DllB"], bytes(image), bytes(data))
+    disagreeing.module("DllB", file, segments["DllB"], words["DllB"], memory_of(image, data))
     assert len(disagreeing.words_disagreeing) == 1
-    assert len(disagreeing.unexplained_bytes) == 2
+    assert len(disagreeing.unexplained_bytes) == 1
+
+    # Nothing dumped: nothing compared, nothing failed.
+    absent = Comparison()
+    absent.module("DllB", file, segments["DllB"], words["DllB"], Memory())
+    assert absent.words_not_dumped == 2 and absent.bytes_compared == 0
 
     print("self-test passed")
     return 0
