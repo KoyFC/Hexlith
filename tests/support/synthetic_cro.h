@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -82,6 +83,11 @@ struct SyntheticCroSpec {
     bool fixed_up = false;
 
     std::vector<SyntheticCroSegment> segments;
+
+    // The bytes of a segment, by its index, for a test that needs real
+    // instructions in it. A segment not named here gets a filler pattern, and
+    // contents shorter than the segment leave the rest zero.
+    std::map<std::size_t, std::vector<std::uint8_t>> segment_contents;
 
     // Laid out as real entries, with the string table they point into. An
     // empty list means the count below is declared and the table is left

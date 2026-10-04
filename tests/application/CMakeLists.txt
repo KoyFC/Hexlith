@@ -1,5 +1,6 @@
 hexlith_add_test(
     hexlith_application_test
+    analyze_modules_test.cpp
     analyze_test.cpp
     command_line_test.cpp
     extract_test.cpp

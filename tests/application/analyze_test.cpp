@@ -170,8 +170,8 @@ TEST(Analyze, ReachesWhatOnlyTheSweepCanFind) {
     ASSERT_TRUE(unswept.Ok()) << unswept.Failure().Message();
 
     EXPECT_GT(swept.Value().code_bytes, unswept.Value().code_bytes);
-    EXPECT_GT(swept.Value().functions, unswept.Value().functions);
-    EXPECT_EQ(unswept.Value().pointers, 0U);
+    EXPECT_GT(swept.Value().tables.functions, unswept.Value().tables.functions);
+    EXPECT_EQ(unswept.Value().tables.pointers, 0U);
 }
 
 // A run fed its own output, which is what a second run looks like.
@@ -223,8 +223,8 @@ TEST(Analyze, KeepsANameAPersonGave) {
         Analyze(Request(code, module, chosen), existing, sink);
     ASSERT_TRUE(report.Ok()) << report.Failure().Message();
 
-    EXPECT_EQ(report.Value().merged_symbols.preserved, 1U);
-    EXPECT_EQ(report.Value().merged_symbols.suppressed, 1U)
+    EXPECT_EQ(report.Value().tables.merged_symbols.preserved, 1U);
+    EXPECT_EQ(report.Value().tables.merged_symbols.suppressed, 1U)
         << "the exported name for that address gives way to the one a person chose";
 
     const std::string written = sink.Text(analysis::SymbolsFileName).value_or("");

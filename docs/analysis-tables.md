@@ -30,7 +30,7 @@ Addresses in a table belong to one module, and a table never mixes two.
 
 For the main executable they are virtual addresses, which that image fixes: `0x00100000` is the first byte of its text segment.
 
-For a CRO module they are the offsets the module itself uses, because the loader decides where a module lands and the analysis cannot know it. [ADR 0004](adr/0004-cro-modules-and-the-ldr-ro-hle.md) explains why the project refuses to assume otherwise.
+For a CRO module they are offsets into the module's file, because the loader decides where a module lands and the analysis cannot know it. [ADR 0004](adr/0004-cro-modules-and-the-ldr-ro-hle.md) explains why the project refuses to assume otherwise. The one part of a module that is not in its file is its BSS, which is given the first page boundary past the end of the file, so that no address in it is also an offset into the file. Each module's tables are written to `modules/<name>/` beside the main executable's.
 
 ## The four tables
 
@@ -74,7 +74,7 @@ Two records may share an address. An alias is one reason, and a name an export t
 | --- | --- |
 | `target` | The code address held at this location |
 
-The main executable has no relocation table, so an absolute address sitting in its data is indistinguishable from an integer until something proves otherwise. Each one found is recorded with how it was found. CRO modules carry their own relocation tables and theirs are read from the module instead.
+The main executable has no relocation table, so an absolute address sitting in its data is indistinguishable from an integer until something proves otherwise. Each one found is recorded with how it was found. A CRO module carries its own relocation tables, and in a module's `pointers.txt` every record comes from them, marked `source=relocation`: a relocated word that the loader points into the module's own code. Nothing in a module's table is a guess from a word's value.
 
 ## `source=`
 
@@ -84,7 +84,7 @@ Every record carries one.
 | --- | --- |
 | `crs-export` | A named export table of a CRO-family module |
 | `exheader` | The extended header: the entry point, the segment bounds |
-| `relocation` | A relocation table, which names an address without saying what is at it |
+| `relocation` | A relocation or import table of a CRO module, which names an address without saying what is at it |
 | `ghidra` | Imported from a decompiler project |
 | `heuristic` | This project's own analysis |
 | `manual` | A decision a person made |

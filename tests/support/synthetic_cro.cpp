@@ -4,6 +4,7 @@
 
 #include "support/synthetic_ctr_image.h"
 
+#include <algorithm>
 #include <string_view>
 #include <utility>
 
@@ -480,9 +481,13 @@ void WriteContents(const SyntheticCroSpec& spec, const Plan& plan, Writer& write
         if (spec.static_module || spec.segments[index].type == CroSegmentType::Bss) {
             continue;
         }
+        const SyntheticCroSegment& segment = spec.segments[index];
+        const auto given = spec.segment_contents.find(index);
         const std::vector<std::uint8_t> contents =
-            PatternBytes(spec.segments[index].size, static_cast<std::uint8_t>(0x30 + index));
-        for (std::size_t byte = 0; byte < contents.size(); ++byte) {
+            given == spec.segment_contents.end()
+                ? PatternBytes(segment.size, static_cast<std::uint8_t>(0x30 + index))
+                : given->second;
+        for (std::size_t byte = 0; byte < std::min(contents.size(), segment.size); ++byte) {
             write.Byte(plan.segment_offsets[index] + byte, contents[byte]);
         }
     }

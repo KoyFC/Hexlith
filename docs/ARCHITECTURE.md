@@ -26,7 +26,7 @@ cartridge image
 native executable
 ```
 
-The first two stages exist. [`extraction.md`](extraction.md) describes extraction, and [`classification.md`](classification.md) and [`analysis-tables.md`](analysis-tables.md) describe analysis. Analysis covers the main executable only: the CRO modules need their relocation tables read first, and those are not read yet.
+The first two stages exist. [`extraction.md`](extraction.md) describes extraction, and [`classification.md`](classification.md) and [`analysis-tables.md`](analysis-tables.md) describe analysis. Analysis covers the main executable and each of the 133 CRO modules, which are analysed in address spaces of their own and seeded from their relocation tables.
 
 The repository holds the tools and the runtime. The workspace, which holds the cartridge image and everything derived from it, lives outside the repository and is never redistributed. See [ADR 0007](adr/0007-no-game-data-in-the-repository.md) and [ADR 0008](adr/0008-workspace-configuration.md).
 

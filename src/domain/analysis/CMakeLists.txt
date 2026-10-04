@@ -7,6 +7,8 @@ target_sources(
             function_bounds.cpp
             function_bounds.h
             merge.h
+            module_analysis.cpp
+            module_analysis.h
             provenance.cpp
             provenance.h
             record_text.cpp

@@ -13,26 +13,6 @@ namespace {
 namespace analysis = domain::analysis;
 namespace ctr = domain::ctr;
 
-// Parses a table that is already there, so that regenerating preserves whatever
-// a person put in it. A file that does not parse stops the run rather than being
-// overwritten: the work in it is the only copy.
-template<typename T, typename Parse>
-core::Result<std::vector<T>>
-ReadExisting(std::string_view text, Parse parse, std::string_view what) {
-    if (text.empty()) {
-        return std::vector<T>{};
-    }
-    const core::Result<std::vector<T>> parsed = parse(text);
-    if (!parsed) {
-        return parsed.Failure().WithContext(what);
-    }
-    return parsed.Value();
-}
-
-core::Status WriteTable(ports::BlobSink& sink, std::string_view name, std::string_view text) {
-    return sink.WriteText(name, text);
-}
-
 }  // namespace
 
 core::Result<AnalyzeReport>
@@ -133,63 +113,15 @@ Analyze(const AnalyzeRequest& request, const ExistingTables& existing, ports::Bl
 
     // Everything derived is merged into what is already written, which keeps a
     // name a person gave an address from being replaced by one derived for it.
-    const core::Result<std::vector<analysis::Symbol>> old_symbols =
-        ReadExisting<analysis::Symbol>(existing.symbols, analysis::ParseSymbols, "symbols.txt");
-    if (!old_symbols) {
-        return old_symbols.Failure();
+    const DerivedTables derived{.symbols = seeded.Value().symbols,
+                                .functions = bounds.functions,
+                                .regions = walked.regions,
+                                .pointers = walked.pointers};
+    const core::Result<WrittenTables> written = MergeAndWriteTables(derived, existing, sink, "");
+    if (!written) {
+        return written.Failure();
     }
-    const core::Result<std::vector<analysis::FunctionRange>> old_functions =
-        ReadExisting<analysis::FunctionRange>(
-            existing.functions, analysis::ParseFunctions, "functions.txt");
-    if (!old_functions) {
-        return old_functions.Failure();
-    }
-    const core::Result<std::vector<analysis::Region>> old_regions =
-        ReadExisting<analysis::Region>(existing.regions, analysis::ParseRegions, "regions.txt");
-    if (!old_regions) {
-        return old_regions.Failure();
-    }
-    const core::Result<std::vector<analysis::CodePointer>> old_pointers =
-        ReadExisting<analysis::CodePointer>(
-            existing.pointers, analysis::ParsePointers, "pointers.txt");
-    if (!old_pointers) {
-        return old_pointers.Failure();
-    }
-
-    const std::vector<analysis::Symbol> symbols =
-        analysis::MergeRecords(old_symbols.Value(), seeded.Value().symbols, report.merged_symbols);
-    const std::vector<analysis::FunctionRange> functions =
-        analysis::MergeRecords(old_functions.Value(), bounds.functions, report.merged_functions);
-    const std::vector<analysis::Region> regions =
-        analysis::MergeRecords(old_regions.Value(), walked.regions, report.merged_regions);
-    const std::vector<analysis::CodePointer> pointers =
-        analysis::MergeRecords(old_pointers.Value(), walked.pointers, report.merged_pointers);
-
-    report.symbols = symbols.size();
-    report.functions = functions.size();
-    report.regions = regions.size();
-    report.pointers = pointers.size();
-
-    const core::Status wrote_symbols =
-        WriteTable(sink, analysis::SymbolsFileName, analysis::RenderSymbols(symbols));
-    if (!wrote_symbols) {
-        return wrote_symbols.Failure();
-    }
-    const core::Status wrote_functions =
-        WriteTable(sink, analysis::FunctionsFileName, analysis::RenderFunctions(functions));
-    if (!wrote_functions) {
-        return wrote_functions.Failure();
-    }
-    const core::Status wrote_regions =
-        WriteTable(sink, analysis::RegionsFileName, analysis::RenderRegions(regions));
-    if (!wrote_regions) {
-        return wrote_regions.Failure();
-    }
-    const core::Status wrote_pointers =
-        WriteTable(sink, analysis::PointersFileName, analysis::RenderPointers(pointers));
-    if (!wrote_pointers) {
-        return wrote_pointers.Failure();
-    }
+    report.tables = written.Value();
 
     return report;
 }
@@ -217,17 +149,15 @@ std::string RenderAnalyzeSummary(const AnalyzeReport& report) {
                             report.walk.instruction_set_conflicts,
                             report.walk.undefined_stops));
     text.append(std::format("{} pointer(s) in data, {} word(s) swept without a prologue\n",
-                            report.pointers,
+                            report.tables.pointers,
                             report.walk.words_without_a_prologue));
     text.append(std::format("wrote {} symbol(s), {} function(s), {} region(s), {} pointer(s)\n",
-                            report.symbols,
-                            report.functions,
-                            report.regions,
-                            report.pointers));
+                            report.tables.symbols,
+                            report.tables.functions,
+                            report.tables.regions,
+                            report.tables.pointers));
     text.append(std::format("preserved {} record(s) nothing can derive again\n",
-                            report.merged_symbols.preserved + report.merged_functions.preserved +
-                                report.merged_regions.preserved +
-                                report.merged_pointers.preserved));
+                            report.tables.Preserved()));
     return text;
 }
 

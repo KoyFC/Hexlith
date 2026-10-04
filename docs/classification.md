@@ -124,13 +124,56 @@ An average of 205 bytes, nothing over 6.5 KB, and eight overlaps out of 11,824. 
 
 The 188 KB between the code the walk reached and the code attributed to a function is reached by falling into a region from outside any function this pass knows about, which is a gap worth closing rather than a discrepancy.
 
+## The CRO modules
+
+The 133 loadable modules are analysed by the same walk and the same measurement of where functions end, each in an address space of its own. Two things differ, and both come from the relocation tables.
+
+**Where a module is.** The loader decides, so the analysis puts the module at address zero, its data where the file has it, and its BSS on the first page boundary past the end of the file. An address in a module's tables is then an offset into its file. [`cro-linking.md`](cro-linking.md) describes the linker that places the module there; the analysis links each module on its own, with nothing else loaded.
+
+**Which words are addresses.** In the main executable a word in data that looks like an address might be one, which is why the sweep and its prologue filter exist. In a module the question does not arise. Every word that holds an address is the target of a relocation, because otherwise it would point wherever the module happened to be built for. So the walk follows no word on the strength of its value. It starts from three kinds of seed, all of them facts:
+
+| Seed | Across the 133 modules |
+| --- | --- |
+| A named export in code | 179 |
+| A position in code that another module, or the static module, imports | 1,006 |
+| A relocated word that points into the module's own code | 27,066 |
+
+A relocated word pointing into code is also written to the module's `pointers.txt`. 153 more relocations point at the very end of a code segment, at no instruction, and are left out. The 21,537 words that point into another module are the module's imports and say nothing about its own code.
+
+The walk sees the code segment and nothing else, so a path that runs off its end stops there instead of decoding the read-only data after it. An earlier draft let it run on and reported 100.6 percent of the code reached.
+
+### What came out
+
+| | |
+| --- | --- |
+| Module code reached | 4,109,788 of 4,342,512 bytes, 94.6 percent |
+| Functions | 43,805 |
+| Instruction set conflicts | 0 |
+| Stops at a word that is not an instruction | 0 |
+
+| Module | Code | Reached | Functions |
+| --- | --- | --- | --- |
+| `DllField` | 970,532 | 95.9 percent | 9,216 |
+| `DllBattle` | 840,188 | 96.7 percent | 6,497 |
+| `DllKawaigari` | 277,436 | 97.4 percent | 913 |
+| `DllBox` | 128,340 | 95.8 percent | 984 |
+| `DllZukan` | 121,716 | 95.7 percent | 1,161 |
+
+Against the main executable's 61.1 percent, with ten conflicts, the difference is what the relocation tables are worth: every function a module reaches only through a table of pointers is a seed here, where in the main executable it has to be guessed at. The 5.4 percent not reached includes the literal pools inside functions, which are data and not counted as code, and whatever padding sits between functions. How it splits between those and code that nothing reaches has not been measured.
+
+20 modules carry at most 172 bytes of code each and reach about two thirds of it. Most are the developer stubs [`formats/cro0.md`](formats/cro0.md) describes, one exported function each.
+
+Regenerating the module tables writes identical bytes, as it does for the main executable. The first attempt did not: one function in `DllBattleMatch` jumps back past its own entry into another function's code, and the bounds pass recorded that function's entry as a second way into the first, which the table reader then refused. The bounds pass now takes a second entry point only from inside the function.
+
+`hexlith-analyze` writes a line per module to `modules/summary.txt`, with the seeds each one started from.
+
 ## Running it
 
 ```sh
 hexlith-analyze --work-dir ~/recomp-data/work
 ```
 
-It reads `exefs/.code` and `romfs/static.crs` out of the extraction and writes the four tables into a directory beside it. It never touches the cartridge, so it asks for the work directory alone and not for the ROM directory.
+It reads `exefs/.code`, `romfs/static.crs` and every `romfs/*.cro` out of the extraction and writes the four tables of the main executable into a directory beside it, with the four tables of each module under `modules/<name>/` in the same directory. It never touches the cartridge, so it asks for the work directory alone and not for the ROM directory.
 
 The whole pass takes under half a second on the reference image, which matters more than it sounds: an analysis that takes an hour gets run once and trusted, and one that takes half a second gets run after every change and compared with the run before it.
 
@@ -146,4 +189,4 @@ The tables are written beside the extraction and not into this repository. [ADR 
 
 **The ten conflicts, the nine overlaps and the nine stops.** Each is a place where two paths disagree, about an encoding or about which function owns a byte, and each is worth reading rather than counting.
 
-**The CRO modules.** The walk runs on the main executable only. A module's own code is reached through its relocation tables, which are not read yet.
+**The ten conflicts and the stops of the main executable.** The modules have neither, as the next section says.

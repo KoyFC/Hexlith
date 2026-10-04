@@ -2,16 +2,19 @@
 #include "adapters/filesystem/file_rom_source.h"
 #include "adapters/filesystem/workspace_locator.h"
 #include "application/analyze.h"
+#include "application/analyze_modules.h"
 #include "application/command_line.h"
 #include "application/workspace.h"
 #include "domain/profile/game_profile.h"
 #include "domain/profile/registry.h"
 
+#include <algorithm>
 #include <exception>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -36,6 +39,9 @@ constexpr int Usage = 2;
 constexpr std::string_view CodePath = "exefs/.code";
 constexpr std::string_view StaticModulePath = "romfs/static.crs";
 constexpr std::string_view AnalysisDirectory = "analysis";
+constexpr std::string_view RomFsDirectory = "romfs";
+constexpr std::string_view ModuleExtension = ".cro";
+constexpr std::string_view ModulesReportName = "modules/summary.txt";
 
 void Report(std::string_view message) {
     std::cerr << "hexlith-analyze: " << message << '\n';
@@ -60,6 +66,73 @@ std::string ReadExistingTable(const std::filesystem::path& directory, std::strin
     text << file.rdbuf();
     file.close();
     return text.str();
+}
+
+application::ExistingTables ReadExistingTables(const std::filesystem::path& directory) {
+    return application::ExistingTables{
+        .symbols = ReadExistingTable(directory, "symbols.txt"),
+        .functions = ReadExistingTable(directory, "functions.txt"),
+        .regions = ReadExistingTable(directory, "regions.txt"),
+        .pointers = ReadExistingTable(directory, "pointers.txt"),
+    };
+}
+
+// Every loadable module in the RomFS, in name order so that the report reads
+// the same from one run to the next.
+std::vector<std::filesystem::path> ModuleFiles(const std::filesystem::path& romfs) {
+    std::vector<std::filesystem::path> files;
+    for (const std::filesystem::directory_entry& entry :
+         std::filesystem::directory_iterator{romfs}) {
+        if (entry.is_regular_file() && entry.path().extension() == ModuleExtension) {
+            files.push_back(entry.path());
+        }
+    }
+    std::ranges::sort(files);
+    return files;
+}
+
+core::Result<core::ByteSpan> ReadFile(adapters::FileRomSource& source);
+
+int AnalyzeTheModules(const std::filesystem::path& extraction,
+                      const std::filesystem::path& output,
+                      core::ByteSpan static_module,
+                      adapters::DirectoryBlobSink& writing) {
+    std::vector<std::unique_ptr<adapters::FileRomSource>> sources;
+    std::vector<core::ByteSpan> modules;
+    application::ExistingModuleTables existing;
+    for (const std::filesystem::path& file : ModuleFiles(extraction / RomFsDirectory)) {
+        sources.push_back(std::make_unique<adapters::FileRomSource>(file));
+        const core::Result<core::ByteSpan> bytes = ReadFile(*sources.back());
+        if (!bytes) {
+            Report(bytes.Failure().Message());
+            return Failure;
+        }
+        modules.push_back(bytes.Value());
+
+        // The tables of a module are kept under its file name, which in the
+        // reference title is always its module name.
+        const std::string name = file.stem().string();
+        existing.emplace(name, ReadExistingTables(output / application::ModulesDirectory / name));
+    }
+
+    const core::Result<application::AnalyzeModulesReport> report = application::AnalyzeModules(
+        application::AnalyzeModulesRequest{.static_module = static_module, .modules = modules},
+        existing,
+        writing);
+    if (!report) {
+        Report(report.Failure().Message());
+        return Failure;
+    }
+
+    const core::Status wrote =
+        writing.WriteText(ModulesReportName, application::RenderModulesReport(report.Value()));
+    if (!wrote) {
+        Report(wrote.Failure().Message());
+        return Failure;
+    }
+
+    std::cout << '\n' << application::RenderModulesSummary(report.Value());
+    return Success;
 }
 
 core::Result<core::ByteSpan> ReadFile(adapters::FileRomSource& source) {
@@ -129,12 +202,7 @@ int Run(const application::AnalyzeOptions& options) {
     std::cout << std::format("profile     {}\n", chosen->name);
     std::cout << std::format("writing to  {}\n\n", output.string());
 
-    const application::ExistingTables existing{
-        .symbols = ReadExistingTable(output, "symbols.txt"),
-        .functions = ReadExistingTable(output, "functions.txt"),
-        .regions = ReadExistingTable(output, "regions.txt"),
-        .pointers = ReadExistingTable(output, "pointers.txt"),
-    };
+    const application::ExistingTables existing = ReadExistingTables(output);
 
     const application::AnalyzeRequest request{.code = code_bytes.Value(),
                                               .static_module = module_bytes.Value(),
@@ -149,7 +217,7 @@ int Run(const application::AnalyzeOptions& options) {
     }
 
     std::cout << application::RenderAnalyzeSummary(report.Value());
-    return Success;
+    return AnalyzeTheModules(extraction, output, module_bytes.Value(), writing);
 }
 
 int Main(std::span<char* const> arguments) {

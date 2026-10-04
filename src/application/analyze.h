@@ -1,6 +1,7 @@
 #ifndef HEXLITH_APPLICATION_ANALYZE_H
 #define HEXLITH_APPLICATION_ANALYZE_H
 
+#include "application/analysis_tables.h"
 #include "core/byte_reader.h"
 #include "core/result.h"
 #include "domain/analysis/code_walk.h"
@@ -36,15 +37,6 @@ struct AnalyzeRequest {
     bool sweep_data_for_entry_points = true;
 };
 
-// The tables as they stand, so that a second run replaces what it can derive
-// again and leaves alone what it cannot. Empty on a first run.
-struct ExistingTables {
-    std::string symbols;
-    std::string functions;
-    std::string regions;
-    std::string pointers;
-};
-
 struct AnalyzeReport {
     std::size_t exported_symbols = 0;
     std::size_t exported_functions = 0;
@@ -52,15 +44,8 @@ struct AnalyzeReport {
     domain::analysis::WalkReport walk;
     domain::analysis::BoundsReport bounds;
 
-    domain::analysis::MergeReport merged_symbols;
-    domain::analysis::MergeReport merged_functions;
-    domain::analysis::MergeReport merged_regions;
-    domain::analysis::MergeReport merged_pointers;
-
-    std::size_t symbols = 0;
-    std::size_t functions = 0;
-    std::size_t regions = 0;
-    std::size_t pointers = 0;
+    // What was written, after merging with the tables already there.
+    WrittenTables tables;
 
     // How much of the text segment the walk reached, which is the number worth
     // watching between runs.
