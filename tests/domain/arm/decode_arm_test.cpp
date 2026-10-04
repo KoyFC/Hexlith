@@ -322,9 +322,47 @@ TEST(DecodeArm, ReadsTheExtensionsAndReversals) {
     EXPECT_EQ(pack.shift_amount, 30);
     EXPECT_EQ(DecodeArm(0xE68110D2).operation, Operation::Pkhtb);
 
-    // qadd16 r1, r1, r2, one of the forty-eight encodings reported as one
+    // qadd16 r1, r1, r2, one of the thirty-six instructions reported as one
     // operation.
-    EXPECT_EQ(DecodeArm(0xE6211F12).operation, Operation::ParallelArithmetic);
+    const Instruction parallel = DecodeArm(0xE6211F12);
+    EXPECT_EQ(parallel.operation, Operation::ParallelArithmetic);
+    EXPECT_EQ(parallel.parallel_prefix, ParallelPrefix::SignedSaturating);
+    EXPECT_EQ(parallel.parallel_shape, ParallelShape::Add16);
+}
+
+TEST(DecodeArm, ReadsTheLanesOfAParallelInstruction) {
+    // uqadd8 r0, r1, r2
+    const Instruction saturating = DecodeArm(0xE6610F92);
+    EXPECT_EQ(saturating.operation, Operation::ParallelArithmetic);
+    EXPECT_EQ(saturating.parallel_prefix, ParallelPrefix::UnsignedSaturating);
+    EXPECT_EQ(saturating.parallel_shape, ParallelShape::Add8);
+    EXPECT_EQ(saturating.destination, 0);
+    EXPECT_EQ(saturating.first, 1);
+    EXPECT_EQ(saturating.second, 2);
+
+    // shasx r3, r4, r5, the exchanging shape ARMv6 calls shaddsubx
+    const Instruction halving = DecodeArm(0xE6343F35);
+    EXPECT_EQ(halving.parallel_prefix, ParallelPrefix::SignedHalving);
+    EXPECT_EQ(halving.parallel_shape, ParallelShape::AddSubtractExchange);
+
+    // usub8 r0, r1, r2, the shape in the last row of the table
+    const Instruction subtract = DecodeArm(0xE6510FF2);
+    EXPECT_EQ(subtract.parallel_prefix, ParallelPrefix::Unsigned);
+    EXPECT_EQ(subtract.parallel_shape, ParallelShape::Subtract8);
+}
+
+TEST(DecodeArm, RefusesTheBlankRowsOfTheParallelTable) {
+    // Shape 101 under the signed prefix, a row the table leaves empty.
+    EXPECT_EQ(DecodeArm(0xE6110FB2).operation, Operation::Undefined);
+
+    // Prefix 100, which is not a prefix.
+    EXPECT_EQ(DecodeArm(0xE6410F12).operation, Operation::Undefined);
+}
+
+TEST(ParallelMnemonic, SpellsThePrefixAndTheShape) {
+    EXPECT_EQ(ParallelMnemonic(ParallelPrefix::UnsignedHalving, ParallelShape::Subtract16),
+              "uhsub16");
+    EXPECT_EQ(ParallelMnemonic(ParallelPrefix::Signed, ParallelShape::SubtractAddExchange), "ssax");
 }
 
 TEST(DecodeArm, ReadsTheSynchronisationInstructions) {

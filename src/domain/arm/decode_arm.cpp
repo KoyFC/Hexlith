@@ -2,6 +2,7 @@
 
 #include <array>
 #include <bit>
+#include <optional>
 
 namespace hexlith::domain::arm {
 namespace {
@@ -716,27 +717,57 @@ Instruction DecodeBranch(std::uint32_t word) {
 // table of those two fields, so this does too, because the only way to check a
 // decoder of this group against the reference is to be able to read the two
 // fields off it.
+std::optional<ParallelPrefix> ParallelPrefixOf(std::uint32_t bits) {
+    switch (bits) {
+    case 0b001:
+        return ParallelPrefix::Signed;
+    case 0b010:
+        return ParallelPrefix::SignedSaturating;
+    case 0b011:
+        return ParallelPrefix::SignedHalving;
+    case 0b101:
+        return ParallelPrefix::Unsigned;
+    case 0b110:
+        return ParallelPrefix::UnsignedSaturating;
+    case 0b111:
+        return ParallelPrefix::UnsignedHalving;
+    default:
+        // The two values that are not a prefix belong to nothing in this
+        // quarter of the media space.
+        return std::nullopt;
+    }
+}
+
+std::optional<ParallelShape> ParallelShapeOf(std::uint32_t bits) {
+    switch (bits) {
+    case 0b000:
+        return ParallelShape::Add16;
+    case 0b001:
+        return ParallelShape::AddSubtractExchange;
+    case 0b010:
+        return ParallelShape::SubtractAddExchange;
+    case 0b011:
+        return ParallelShape::Subtract16;
+    case 0b100:
+        return ParallelShape::Add8;
+    case 0b111:
+        return ParallelShape::Subtract8;
+    default:
+        // The two rows the table leaves blank are not instructions.
+        return std::nullopt;
+    }
+}
+
 Instruction DecodeParallelArithmetic(std::uint32_t word) {
-    const std::uint32_t prefix = Bits(word, 22, 20);
-    const std::uint32_t shape = Bits(word, 7, 5);
-
-    // Six prefixes, signed and unsigned by bit 22. The two values that are not a
-    // prefix belong to the packing group, which this function is not reached for.
-    if (prefix == 0b000 || prefix == 0b100) {
-        return Undefined(word);
-    }
-
-    // Six lane shapes out of eight values: the two the table leaves blank are
-    // not instructions.
-    if (shape == 0b101 || shape == 0b110) {
-        return Undefined(word);
-    }
-
-    if (!AllOnes(word, 11, 8)) {
+    const std::optional<ParallelPrefix> prefix = ParallelPrefixOf(Bits(word, 22, 20));
+    const std::optional<ParallelShape> shape = ParallelShapeOf(Bits(word, 7, 5));
+    if (!prefix.has_value() || !shape.has_value() || !AllOnes(word, 11, 8)) {
         return Undefined(word);
     }
 
     Instruction instruction = Start(word, Operation::ParallelArithmetic);
+    instruction.parallel_prefix = prefix.value();
+    instruction.parallel_shape = shape.value();
     instruction.destination = RegisterAt(word, 12);
     instruction.first = RegisterAt(word, 16);
     instruction.second = RegisterAt(word, 0);

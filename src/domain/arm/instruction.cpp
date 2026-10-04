@@ -49,6 +49,46 @@ std::string_view ShiftName(ShiftKind kind) {
     return "?";
 }
 
+std::string ParallelMnemonic(ParallelPrefix prefix, ParallelShape shape) {
+    std::string name;
+    switch (prefix) {
+    case ParallelPrefix::Signed:
+        name = "s";
+        break;
+    case ParallelPrefix::SignedSaturating:
+        name = "q";
+        break;
+    case ParallelPrefix::SignedHalving:
+        name = "sh";
+        break;
+    case ParallelPrefix::Unsigned:
+        name = "u";
+        break;
+    case ParallelPrefix::UnsignedSaturating:
+        name = "uq";
+        break;
+    case ParallelPrefix::UnsignedHalving:
+        name = "uh";
+        break;
+    }
+
+    switch (shape) {
+    case ParallelShape::Add16:
+        return name + "add16";
+    case ParallelShape::AddSubtractExchange:
+        return name + "asx";
+    case ParallelShape::SubtractAddExchange:
+        return name + "sax";
+    case ParallelShape::Subtract16:
+        return name + "sub16";
+    case ParallelShape::Add8:
+        return name + "add8";
+    case ParallelShape::Subtract8:
+        return name + "sub8";
+    }
+    return name;
+}
+
 bool WritesDestination(Operation operation) {
     switch (operation) {
     // The four comparisons exist to set flags and have no destination.

@@ -75,14 +75,13 @@ enum class Operation : std::uint8_t {
     Usat,
     Usat16,
 
-    // The SADD16 to UHSUB8 family: six prefixes over eight shapes, 48
-    // encodings that do the same thing to different lane widths.
+    // The SADD16 to UHSUB8 family: six prefixes over six lane shapes, 36
+    // instructions that do the same thing to different lane widths.
     //
-    // Recognised as one operation rather than enumerated. The analysis needs to
-    // know that the word is an instruction and that it does not write the
-    // program counter, and nothing in this project decodes lanes yet. The
-    // encoding is kept on the instruction, so filling this in later is reading
-    // a field rather than finding the instructions again.
+    // One operation rather than thirty-six. The prefix and the shape are fields
+    // of the instruction, because an implementation of them is one loop over the
+    // lanes with the arithmetic chosen by the prefix, and enumerating the
+    // product would write that loop thirty-six times.
     ParallelArithmetic,
 
     // Packing, extension, reversal, selection.

@@ -75,11 +75,12 @@ This is deliberate and it is not pedantry. A compiler emits those fields correct
 
 ## Identified rather than decoded
 
-Three places, each because nothing needs the detail yet and the encoding is kept on the instruction, so filling one in later means reading a field rather than finding the instructions again.
+Two places, each because nothing needs the detail yet and the encoding is kept on the instruction, so filling one in later means reading a field rather than finding the instructions again.
 
 - Floating point, as above.
-- The forty-eight parallel arithmetic encodings, reported as `ParallelArithmetic`. Six prefixes over eight lane shapes, all doing one thing to different widths.
 - The lane selectors of the halfword multiplies are recorded on the instruction, but the mnemonic does not spell them.
+
+The thirty-six parallel arithmetic instructions are one operation, `ParallelArithmetic`, with the prefix and the lane shape as two fields beside it. They used to be identified and nothing more; the interpreter needs to know which one it is running, so the fields are filled in and the comparison checks the full mnemonic against Capstone's.
 
 ## What the text segment looks like read as ARM
 

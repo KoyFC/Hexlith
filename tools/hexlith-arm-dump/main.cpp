@@ -181,6 +181,11 @@ std::string Record(std::uint32_t address, const arm::Instruction& decoded) {
         break;
     }
 
+    if (decoded.operation == arm::Operation::ParallelArithmetic) {
+        Field(
+            line, "lanes", arm::ParallelMnemonic(decoded.parallel_prefix, decoded.parallel_shape));
+    }
+
     if (decoded.registers != 0) {
         Field(line, "regs", std::format("0x{:04X}", decoded.registers));
     }

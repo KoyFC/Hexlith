@@ -87,7 +87,8 @@ ALIAS = {
     "smmlar": "smmla", "smmlsr": "smmls", "smmulr": "smmul",
 }
 
-# The forty-eight encodings Hexlith reports as one operation.
+# The thirty-six instructions Hexlith reports as one operation, with the lanes
+# in a field of their own.
 PARALLEL = {
     prefix + shape
     for prefix in ("s", "q", "sh", "u", "uq", "uh")
@@ -218,7 +219,7 @@ class Comparison:
         theirs = base_name(insn) if insn else None
 
         if mine == "parallel":
-            agreed = theirs in PARALLEL
+            agreed = theirs == fields["lanes"]
         elif mine == "undefined":
             if theirs is None or theirs in NOT_IN_V6K or theirs in PARALLEL or is_if_then(theirs):
                 agreed = True

@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace hexlith::domain::arm {
@@ -28,6 +29,39 @@ std::string_view ShiftName(ShiftKind kind);
 // How the operand that is not a plain register is formed: the second operand of
 // a data-processing instruction, or the offset of a transfer.
 enum class OperandForm : std::uint8_t { None, Immediate, Register, ShiftedRegister };
+
+// What a parallel instruction does to each lane, and how it treats the lanes'
+// signs. The forty-eight encodings are six of these prefixes over the six lane
+// shapes below, and an instruction is one of each.
+//
+// The prefix decides the arithmetic: modular, saturating or halving, signed or
+// unsigned. Modular arithmetic is the only kind that sets the GE flags, which is
+// what SEL reads afterwards.
+enum class ParallelPrefix : std::uint8_t {
+    Signed,
+    SignedSaturating,
+    SignedHalving,
+    Unsigned,
+    UnsignedSaturating,
+    UnsignedHalving,
+};
+
+// The lanes and what happens in each. The two exchanging shapes pair the high
+// half of one source with the low half of the other. ARMv6 spells them ADDSUBX
+// and SUBADDX; ARMv7 renamed them ASX and SAX, which is what an assembler and a
+// disassembler print today and what this project prints too.
+enum class ParallelShape : std::uint8_t {
+    Add16,
+    AddSubtractExchange,
+    SubtractAddExchange,
+    Subtract16,
+    Add8,
+    Subtract8,
+};
+
+// The assembler's name for a parallel instruction, prefix and shape together,
+// such as uqadd8 or shasx.
+std::string ParallelMnemonic(ParallelPrefix prefix, ParallelShape shape);
 
 // One decoded instruction.
 //
@@ -112,6 +146,10 @@ struct Instruction {
     std::uint8_t coprocessor = 0;
     std::uint8_t coprocessor_opcode1 = 0;
     std::uint8_t coprocessor_opcode2 = 0;
+
+    // The arithmetic and the lanes of a parallel instruction.
+    ParallelPrefix parallel_prefix = ParallelPrefix::Signed;
+    ParallelShape parallel_shape = ParallelShape::Add16;
 };
 
 // Whether the instruction can be reached as a value: whether it decoded at all.
