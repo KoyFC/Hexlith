@@ -9,7 +9,7 @@ The format is deliberately short: context, the options that were actually consid
 | [0001](0001-language-and-build-system.md) | C++20 and CMake, for tools as well as the runtime | Accepted |
 | [0002](0002-lifter-emits-cpp-not-llvm-ir.md) | The lifter emits C++ rather than LLVM IR | Accepted |
 | [0003](0003-interpreter-as-the-semantic-reference.md) | An ARM interpreter is the semantic reference | Accepted |
-| [0004](0004-cro-modules-and-the-ldr-ro-hle.md) | CRO modules are lifted position-independently | Provisional |
+| [0004](0004-cro-modules-and-the-ldr-ro-hle.md) | CRO modules are lifted position-independently | Accepted |
 | [0005](0005-game-profile-design.md) | GameProfile splits compiled identity from text tables | Accepted, amended by 0011 |
 | [0006](0006-analysis-layer-format.md) | Analysis artefacts are line-oriented text with provenance | Accepted, amended by 0011 |
 | [0007](0007-no-game-data-in-the-repository.md) | No game-derived data in the repository, enforced mechanically | Accepted |

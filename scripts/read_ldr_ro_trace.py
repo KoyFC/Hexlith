@@ -100,14 +100,17 @@ def report(traces):
         for name, bases in trace.reloaded_at_a_second_address().items():
             moved_within.setdefault(name, []).append((trace.name, bases))
 
-    # Across runs: the same module at a different address in two runs.
+    # Across runs: a module whose addresses in one run are not its addresses in
+    # another. With a single run there is nothing to compare, and a module that
+    # moved within that run is reported above, not here.
     moved_across = {}
     for name in everything:
-        seen = {}
-        for trace in traces:
-            for base in trace.bases.get(name, ()):
-                seen.setdefault(base, []).append(trace.name)
-        if len(seen) > 1:
+        per_run = [frozenset(trace.bases[name]) for trace in traces if name in trace.bases]
+        if len(per_run) > 1 and len(set(per_run)) > 1:
+            seen = {}
+            for trace in traces:
+                for base in trace.bases.get(name, ()):
+                    seen.setdefault(base, []).append(trace.name)
             moved_across[name] = seen
 
     if moved_within:

@@ -1,8 +1,8 @@
 # Measuring where modules land
 
-[ADR 0004](adr/0004-cro-modules-and-the-ldr-ro-hle.md) is provisional. It chose to lift CRO modules position-independently, and it named what would settle whether the faster alternative is also safe: a run of the title recording every `ldr:ro` load and unload with the module name and the resulting base address.
+[ADR 0004](adr/0004-cro-modules-and-the-ldr-ro-hle.md) chose to lift CRO modules position-independently, and named what would settle whether the faster alternative is also safe: a run of the title recording every `ldr:ro` load and unload with the module name and the resulting base address.
 
-This note is how to produce that recording. The measurement itself is not finished. One boot has been captured, which proved the procedure and the reader against a real log, and it holds a single load. The field transition and the battle need somebody to play them.
+This note is how to produce that recording and what the recording showed. The answer is that it is not safe: the same module lands at different addresses within one run, and the ADR is no longer provisional. The last section has the run.
 
 ## No instrumentation is needed
 
@@ -15,10 +15,10 @@ The ADR assumed an instrumented build. It is not necessary. Azahar logs the fact
 and the matching line when a module goes away:
 
 ```
-[  45.678901] Service.LDR <Info> ldr_ro.cpp:UnloadCRO:600: Unloading CRO "DllField"
+[ 188.610105] Service.LDR <Info> ldr_ro.cpp:UnloadCRO:369: Unloading CRO "DllField"
 ```
 
-Both are `LOG_INFO`, which a release build compiles in and the default log filter passes, so the stock build produces the trace. Source: `src/core/hle/service/ldr_ro/ldr_ro.cpp` in Azahar. The load line above is from the captured boot; the unload line has not been seen yet, and its wording comes from the source.
+Both are `LOG_INFO`, which a release build compiles in and the default log filter passes, so the stock build produces the trace. Source: `src/core/hle/service/ldr_ro/ldr_ro.cpp` in Azahar. Both lines above are from captured runs, shortened to the file name.
 
 The log class prints with a dot, `Service.LDR`, and that is also how `log_filter` spells it. An earlier draft of this note and of the reader wrote it with an underscore, which is the name of the C++ enumerator rather than the name in the log.
 
@@ -92,3 +92,23 @@ CRO "DllLangSelect" exports 1 anonymous symbols to "|static|"
 ```
 
 Those counts come from the same tables `src/domain/ctr/cro.cpp` reads, so a disagreement between the two is a bug in one of them.
+
+## What the run through the first battle showed
+
+Captured on 2026-10-04 from a fresh profile: language selection, the title screen, the introduction and name entry, the first field scenes, the choice of starter, and the first battle, about seven minutes. The log is kept in the workspace, under `traces/` beside the extraction, because Azahar overwrites its log on the next run.
+
+```sh
+scripts/read_ldr_ro_trace.py ~/recomp-data/work/<id>/traces/<run>.txt
+```
+
+31 loads and 30 unloads of 15 modules, and never more than three resident at once.
+
+**Four modules moved within the run.** `DllBackGround` was at `0x006C8000`, then `0x006C4000`, then `0x007BB000`. `DllSequence` at `0x006D1000`, then `0x006A5000`. `DllStrInput` at `0x006B5000`, then `0x006A5000`. `DllReport` at `0x007E9000`, then `0x007E5000`. This alone settles the ADR: no second run was needed to compare against.
+
+**Modules are loaded per screen and unloaded when it ends.** The title screen loads `DllTitle`, `DllBackGround` and `DllSequence` and unloads all three before the introduction loads `DllIntro`. The field is `DllField`, mapped at `0x006A5000` with 0x11F000 bytes up to its fixed end, unloaded and reloaded around every scene change: the starter selection is `DllPoke3Select`, loaded at `0x006A5000` after `DllField` goes away, and the battle is `DllBattle` with `DllBackGround`, after which `DllField` comes back at `0x006A5000`. Small helpers such as `DllReport`, `DllFieldEventPlayer` and `DllFieldEventEntranceIn` come and go in seconds while the field stays.
+
+**In this run, the first module after a screen change always got `0x006A5000`,** the bottom of the area above the static image. The others follow it in load order, which is why a module's address depends on what was loaded before it.
+
+**The game chooses the address.** The request of `LoadCRO` carries the address the module is to be mapped at, and the buffers for its data and BSS, chosen by the calling process. Source: 3dbrew, `RO:LoadExeCRO`, request words 2, 4 and 7. Azahar maps the module where it is told and logs the result. The reimplementation will do the same.
+
+The run also logged which services the game reached and which Azahar stubs, among them DSP, FS, FRD, NDM, PTM, APT and `nwm::UDS`. That is input for the service work of a later phase and is not analysed here.

@@ -1,6 +1,6 @@
 # 0004. CRO modules are lifted position-independently
 
-Status: Provisional. Settled by the condition named below.
+Status: Accepted. Provisional from 2026-10-03, settled on 2026-10-04 by the trace described under "What settled it".
 Date: 2026-10-03
 
 ## Context
@@ -50,15 +50,26 @@ An instrumented run of the title under Azahar, recording every `ldr:ro` load and
 
 If the bases are deterministic, the optimisation is enabled with the loader asserting the expected address rather than trusting it. If they are not, the position-independent path is the only correct option and the question was worth asking.
 
-This is Phase 2 work. Until then the lifter is written against the position-independent model, which is the one that is correct either way.
 
 The instrumented build this asked for turned out to be unnecessary: Azahar already logs each load with the module name and the resulting address, at a level a release build compiles in. [`docs/ldr-ro-trace.md`](../ldr-ro-trace.md) has the procedure and what each answer means.
 
-One boot has been captured. It stopped at language selection and holds a single load, `DllLangSelect` at `0x006A5000`, which is enough to confirm the log format and the reader and nothing like enough to answer the question. The field transition and the battle need somebody to play them, so this stays provisional.
+## What settled it
+
+One run under Azahar, from a fresh boot through the introduction, the choice of starter and the first battle, with field transitions on the way. [`docs/ldr-ro-trace.md`](../ldr-ro-trace.md) has the full account.
+
+The bases are not deterministic, and the run did not need a second run to show it. Four modules were loaded at more than one address within that one run: `DllBackGround` at `0x006C8000`, `0x006C4000` and `0x007BB000`, `DllSequence` at `0x006D1000` and `0x006A5000`, `DllStrInput` at `0x006B5000` and `0x006A5000`, and `DllReport` at `0x007E9000` and `0x007E5000`. Modules are unloaded and reloaded constantly, 31 loads and 30 unloads in seven minutes, and whatever is loaded first after a screen change takes the lowest address, `0x006A5000`.
+
+The reason is in the service's interface rather than in the trace. The caller of `LoadCRO` passes the address the module is to be mapped at, and the buffers for its data and BSS, in the request. Source: 3dbrew, `RO:LoadExeCRO`, request words 2, 4 and 7. So a module lands wherever the game's own allocator put it, which depends on what was loaded before it and in what order.
+
+Fixed-base lifting is therefore ruled out, and position-independent lifting is the only correct option, as the decision above already assumed.
+
+The optimisation this record described, turning cross-module calls into direct host calls, does not depend on the addresses after all. When the loader links an import it knows which export of which module the import resolves to, and so which lifted function it is. It can fill the module's thunk table with that host function at link time, whatever address the module was given. That is what the loader will do; there is no fixed address left to assert.
 
 ## Consequences
 
 The `ldr:ro` reimplementation and the CRO parser have to exist early, before lifting is useful, which moves them forward in the schedule.
+
+The reimplementation maps a module at the address the game asks for, rather than choosing one, and has to support unloading and loading again at a different address any number of times.
 
 The CRO parser lives in `src/domain/ctr` and is used by both the offline extractor and the runtime loader, for the reason given in [ADR 0001](0001-language-and-build-system.md).
 
