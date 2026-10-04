@@ -399,11 +399,26 @@ constexpr std::size_t SegmentOffsetOffset = 0x0;
 constexpr std::size_t SegmentSizeOffset = 0x4;
 constexpr std::size_t SegmentTypeOffset = 0x8;
 
+// A position inside a module, packed into one 32-bit field: the segment index
+// in the low four bits and the byte offset within that segment in the other
+// 28. Source: SegmentTag in azahar/src/core/hle/service/ldr_ro/cro_helper.h.
+//
+// Four bits is why a module may declare at most sixteen segments, and 28 bits
+// is why one segment cannot exceed 256 MiB. The largest segment in the
+// reference image is under one megabyte, so neither limit is near.
+constexpr std::uint32_t SegmentTagIndexMask = 0xF;
+constexpr std::uint32_t SegmentTagOffsetShift = 4;
+
 // A named export entry: an offset into the export string table, and the
 // symbol's position within its own segment.
 constexpr std::size_t NamedExportEntrySize = 8;
 constexpr std::size_t NamedExportNameOffsetOffset = 0x0;
 constexpr std::size_t NamedExportPositionOffset = 0x4;
+
+// An indexed export entry is a position and nothing else. What identifies it
+// is where it sits in the table, which is the index an importing module asks
+// for.
+constexpr std::size_t IndexedExportEntrySize = 4;
 
 // The module name of the CRS, with the pipe characters included, which is how
 // the loader tells it apart from a loadable module. Its segment offsets are

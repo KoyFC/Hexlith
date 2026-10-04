@@ -25,6 +25,15 @@ struct SyntheticCroSegment {
     std::uint32_t virtual_address = 0;
 };
 
+// One entry of an export table. A named export carries a name and a position;
+// an indexed export carries only a position, and what identifies it is where it
+// sits in the table.
+struct SyntheticCroExport {
+    std::string name;
+    std::uint32_t segment_index = 0;
+    std::uint32_t offset_in_segment = 0;
+};
+
 struct SyntheticCroSpec {
     std::string name = "DllTest";
 
@@ -37,9 +46,15 @@ struct SyntheticCroSpec {
 
     std::vector<SyntheticCroSegment> segments;
 
-    // Written into the header as declared. Phase 1 reads the counts without
-    // walking the tables, so only the named export table is laid out for
-    // real.
+    // Laid out as real entries, with the string table they point into. An
+    // empty list means the count below is declared and the table is left
+    // unwritten, which is what a test of the count fields wants and what a
+    // test of the entries does not.
+    std::vector<SyntheticCroExport> named_exports;
+    std::vector<SyntheticCroExport> indexed_exports;
+
+    // Written into the header as declared. The tables other than the export
+    // tables are not laid out, because nothing reads them yet.
     domain::ctr::CroTableCounts counts;
 };
 

@@ -56,6 +56,44 @@ struct CroTableCounts {
     std::size_t static_relocations = 0;
 };
 
+// A position inside a module, as the format packs it: the segment index in the
+// low four bits and the byte offset within that segment in the other 28.
+//
+// This is how a CRO refers to its own contents, and it is the reason a module
+// can be loaded anywhere. Nothing in it names an address; everything names a
+// segment and a distance into it, and the loader turns that into an address
+// once it has decided where the segment goes.
+struct CroSegmentTag {
+    std::uint32_t raw = 0;
+
+    [[nodiscard]] std::uint32_t SegmentIndex() const {
+        return raw & cro::SegmentTagIndexMask;
+    }
+
+    [[nodiscard]] std::uint32_t OffsetInSegment() const {
+        return raw >> cro::SegmentTagOffsetShift;
+    }
+};
+
+// A symbol a module publishes under a name.
+struct CroNamedExport {
+    std::string name;
+    CroSegmentTag tag;
+
+    // Where the tag lands: the segment's own offset plus the distance into it.
+    // In a loadable module that is an offset into the file, and in the static
+    // module it is a virtual address, for the same reason the segment offsets
+    // are. CroSegment says why.
+    std::size_t position = 0;
+};
+
+// A symbol a module publishes without a name, found by its place in the table.
+struct CroIndexedExport {
+    std::size_t index = 0;
+    CroSegmentTag tag;
+    std::size_t position = 0;
+};
+
 struct CroHeader {
     // A module the loader has already relocated reports FIXD rather than
     // CRO0. Hexlith reads modules straight out of the RomFS, so finding one
@@ -87,6 +125,26 @@ struct CroHeader {
 // the reference image they match the extended header's code set addresses,
 // which is a cross-check that both were read correctly.
 core::Result<CroHeader> ParseCroHeader(core::ByteSpan module);
+
+// The named export table, which is the only source of symbol names this
+// project has. The static module publishes 461 of them.
+//
+// A tag whose segment index is out of range, or whose offset reaches past the
+// end of its segment, is a failure. That is the same test the console's loader
+// applies: SegmentTagToAddress in cro_helper.cpp returns address zero for
+// either, and a symbol at address zero is not a symbol.
+//
+// The names come out in table order rather than sorted. The export tree beside
+// the table exists to make lookup fast on the console and is not read: a tool
+// that reads every entry once gains nothing from an index.
+core::Result<std::vector<CroNamedExport>> ReadCroNamedExports(core::ByteSpan module,
+                                                              const CroHeader& header);
+
+// The indexed export table. These have no names, so they are no use as symbols,
+// but each one is an address the module publishes for something to call, which
+// makes it an entry point worth knowing about.
+core::Result<std::vector<CroIndexedExport>> ReadCroIndexedExports(core::ByteSpan module,
+                                                                  const CroHeader& header);
 
 // Whether a file out of the RomFS is a module of the CRO family at all,
 // decided by the magic the format puts at 0x80 rather than by the extension.

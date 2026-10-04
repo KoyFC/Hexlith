@@ -99,6 +99,35 @@ core::Result<std::vector<CroSegment>> ReadSegments(core::ByteSpan module, bool s
     return segments;
 }
 
+// Where a segment tag lands, or why it lands nowhere.
+//
+// The two refusals are the two the console's loader makes: SegmentTagToAddress
+// in cro_helper.cpp answers address zero for a segment index past the end of
+// the table and for an offset that reaches past the end of its segment, and a
+// symbol at address zero is not a symbol.
+core::Result<std::size_t>
+ResolveSegmentTag(const CroHeader& header, CroSegmentTag tag, std::string_view what) {
+    const std::uint32_t index = tag.SegmentIndex();
+    if (index >= header.segments.size()) {
+        return core::Error{std::format("{} sits in segment {}, and the module declares {}",
+                                       what,
+                                       index,
+                                       header.segments.size())};
+    }
+
+    const CroSegment& segment = header.segments.at(index);
+    if (tag.OffsetInSegment() >= segment.size) {
+        return core::Error{
+            std::format("{} sits {:#x} bytes into segment {}, which is {:#x} bytes long",
+                        what,
+                        tag.OffsetInSegment(),
+                        index,
+                        segment.size)};
+    }
+
+    return segment.offset + tag.OffsetInSegment();
+}
+
 CroTableCounts ReadCounts(core::ByteSpan module) {
     CroTableCounts counts;
     counts.segments = Field(module, cro::SegmentCountField);
@@ -209,6 +238,103 @@ core::Result<CroHeader> ParseCroHeader(core::ByteSpan module) {
     }
 
     return header;
+}
+
+core::Result<std::vector<CroNamedExport>> ReadCroNamedExports(core::ByteSpan module,
+                                                              const CroHeader& header) {
+    const std::size_t table = Field(module, cro::NamedExportTableOffsetField);
+    const std::size_t count = header.counts.named_exports;
+    const std::size_t strings = Field(module, cro::ExportStringsOffsetField);
+    const std::size_t strings_size = header.export_strings_size;
+
+    const core::Status table_within =
+        RequireWithin(module, table, count * cro::NamedExportEntrySize, "the named export table");
+    if (!table_within) {
+        return table_within.Failure();
+    }
+
+    const core::Status strings_within =
+        RequireWithin(module, strings, strings_size, "the export string table");
+    if (!strings_within) {
+        return strings_within.Failure();
+    }
+
+    std::vector<CroNamedExport> exports;
+    exports.reserve(count);
+
+    for (std::size_t index = 0; index < count; ++index) {
+        const std::size_t entry = table + (index * cro::NamedExportEntrySize);
+        const std::size_t name_offset =
+            core::ReadU32At(module, entry + cro::NamedExportNameOffsetOffset).Value();
+
+        // A name offset is a file offset and not a distance into the string
+        // table. The loader rebases it by the module address like every other
+        // offset in the header, which is what says so.
+        if (name_offset < strings || name_offset - strings >= strings_size) {
+            return core::Error{std::format(
+                "export {} names a string at {:#x}, outside the export string table of {:#x} "
+                "bytes at {:#x}",
+                index,
+                name_offset,
+                strings_size,
+                strings)};
+        }
+
+        const std::size_t available = strings + strings_size - name_offset;
+        const core::Result<std::string> name =
+            core::ReadFixedAsciiAt(module, name_offset, available);
+        if (!name) {
+            return name.Failure().WithContext(std::format("the name of export {}", index));
+        }
+        if (name.Value().empty()) {
+            return core::Error{
+                std::format("export {} has an empty name at {:#x}", index, name_offset)};
+        }
+
+        const CroSegmentTag tag{
+            .raw = core::ReadU32At(module, entry + cro::NamedExportPositionOffset).Value()};
+        const core::Result<std::size_t> position =
+            ResolveSegmentTag(header, tag, std::format("the export '{}'", name.Value()));
+        if (!position) {
+            return position.Failure();
+        }
+
+        exports.push_back(
+            CroNamedExport{.name = name.Value(), .tag = tag, .position = position.Value()});
+    }
+
+    return exports;
+}
+
+core::Result<std::vector<CroIndexedExport>> ReadCroIndexedExports(core::ByteSpan module,
+                                                                  const CroHeader& header) {
+    const std::size_t table = Field(module, cro::IndexedExportTableOffsetField);
+    const std::size_t count = header.counts.indexed_exports;
+
+    const core::Status table_within = RequireWithin(
+        module, table, count * cro::IndexedExportEntrySize, "the indexed export table");
+    if (!table_within) {
+        return table_within.Failure();
+    }
+
+    std::vector<CroIndexedExport> exports;
+    exports.reserve(count);
+
+    for (std::size_t index = 0; index < count; ++index) {
+        const std::size_t entry = table + (index * cro::IndexedExportEntrySize);
+        const CroSegmentTag tag{.raw = core::ReadU32At(module, entry).Value()};
+
+        const core::Result<std::size_t> position =
+            ResolveSegmentTag(header, tag, std::format("indexed export {}", index));
+        if (!position) {
+            return position.Failure();
+        }
+
+        exports.push_back(
+            CroIndexedExport{.index = index, .tag = tag, .position = position.Value()});
+    }
+
+    return exports;
 }
 
 }  // namespace hexlith::domain::ctr

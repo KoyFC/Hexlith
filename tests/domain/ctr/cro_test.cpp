@@ -15,6 +15,7 @@ namespace {
 using test::BuildSyntheticCro;
 using test::DefaultCroSpec;
 using test::StaticModuleSpec;
+using test::SyntheticCroExport;
 using test::SyntheticCroSpec;
 
 // The addresses the extended header gives the main executable, which the CRS
@@ -22,6 +23,16 @@ using test::SyntheticCroSpec;
 constexpr std::uint32_t StaticTextAddress = 0x00100000;
 
 constexpr std::uint8_t UnknownSegmentType = 9;
+
+// A segment index no module declares, for a position that resolves nowhere.
+constexpr std::uint32_t AbsentSegmentIndex = 9;
+
+// An odd position in a code segment, which is how a Thumb entry point is spelt.
+constexpr std::uint32_t ThumbCodeOffset = 0x101;
+
+// The number of named exports the static module publishes, measured on the
+// reference image and the only free source of symbol names the project has.
+constexpr std::size_t StaticNamedExportCount = 461;
 
 // Every count in the header, so that a test can set each one to a different
 // value and check that the parser reads it back from the field it belongs to.
@@ -116,9 +127,12 @@ TEST(ParseCroHeader, ReadsEveryCountFromTheFieldItBelongsTo) {
         spec.counts.*EveryCount[index] = FirstSentinel + index;
     }
 
-    // The segment count is the one the builder derives from the table it
-    // lays out rather than from the spec, so it is checked separately.
-    spec.counts.*EveryCount[0] = spec.segments.size();
+    // Three counts describe tables the builder lays out for real, so they come
+    // from those tables rather than from the spec and are checked where the
+    // tables are read.
+    spec.counts.segments = spec.segments.size();
+    spec.counts.named_exports = spec.named_exports.size();
+    spec.counts.indexed_exports = spec.indexed_exports.size();
 
     const CroHeader header = ParseOrFail(BuildSyntheticCro(spec));
     for (std::size_t index = 0; index < EveryCount.size(); ++index) {
@@ -248,6 +262,204 @@ TEST(ParseCroHeader, RefusesAModuleDeclaringMoreBytesThanTheFileHolds) {
 // A file is a module because of the magic the format puts at 0x80, not
 // because of its extension. static.crs is a module and does not end in .cro,
 // and .crr/static.crr is not one although its name suggests it.
+// The export readers. The tag encoding is the part worth testing hardest: the
+// segment index sits in the low four bits and the offset in the other 28, so a
+// reader that shifted the wrong way would produce addresses that still look
+// plausible.
+
+TEST(ReadCroNamedExports, ReadsEveryNameAndPosition) {
+    const SyntheticCroSpec spec = DefaultCroSpec();
+    const std::vector<std::uint8_t> module = BuildSyntheticCro(spec);
+    const CroHeader header = ParseOrFail(module);
+
+    const core::Result<std::vector<CroNamedExport>> exports = ReadCroNamedExports(module, header);
+    ASSERT_TRUE(exports.Ok()) << exports.Failure().Message();
+    ASSERT_EQ(exports.Value().size(), spec.named_exports.size());
+
+    EXPECT_EQ(exports.Value()[0].name, "DllFieldMain");
+    EXPECT_EQ(exports.Value()[1].name, "DllFieldOnLoad");
+    EXPECT_EQ(exports.Value()[0].tag.SegmentIndex(), 0U);
+    EXPECT_EQ(exports.Value()[1].tag.OffsetInSegment(), spec.named_exports[1].offset_in_segment);
+}
+
+TEST(ReadCroNamedExports, ResolvesAPositionAgainstItsOwnSegment) {
+    SyntheticCroSpec spec = DefaultCroSpec();
+    spec.named_exports = {
+        SyntheticCroExport{.name = "in_code", .segment_index = 0, .offset_in_segment = 0x20},
+        SyntheticCroExport{.name = "in_rodata", .segment_index = 1, .offset_in_segment = 0x8},
+    };
+
+    const std::vector<std::uint8_t> module = BuildSyntheticCro(spec);
+    const CroHeader header = ParseOrFail(module);
+
+    const core::Result<std::vector<CroNamedExport>> exports = ReadCroNamedExports(module, header);
+    ASSERT_TRUE(exports.Ok()) << exports.Failure().Message();
+    EXPECT_EQ(exports.Value()[0].position, header.segments[0].offset + 0x20);
+    EXPECT_EQ(exports.Value()[1].position, header.segments[1].offset + 0x8);
+    EXPECT_NE(header.segments[0].offset, header.segments[1].offset);
+}
+
+TEST(ReadCroNamedExports, ResolvesTheStaticModuleAgainstVirtualAddresses) {
+    const SyntheticCroSpec spec = StaticModuleSpec();
+    const std::vector<std::uint8_t> module = BuildSyntheticCro(spec);
+    const CroHeader header = ParseOrFail(module);
+
+    const core::Result<std::vector<CroNamedExport>> exports = ReadCroNamedExports(module, header);
+    ASSERT_TRUE(exports.Ok()) << exports.Failure().Message();
+    ASSERT_EQ(exports.Value().size(), StaticNamedExportCount);
+
+    // The first export sits at the start of the text segment, which the static
+    // module reports as a virtual address because the segment is already
+    // mapped.
+    EXPECT_EQ(exports.Value().front().position, StaticTextAddress);
+}
+
+TEST(ReadCroNamedExports, KeepsTheLowBitOfAThumbPosition) {
+    SyntheticCroSpec spec = DefaultCroSpec();
+    spec.named_exports = {
+        SyntheticCroExport{
+            .name = "thumb_entry", .segment_index = 0, .offset_in_segment = ThumbCodeOffset},
+    };
+
+    const std::vector<std::uint8_t> module = BuildSyntheticCro(spec);
+    const CroHeader header = ParseOrFail(module);
+
+    const core::Result<std::vector<CroNamedExport>> exports = ReadCroNamedExports(module, header);
+    ASSERT_TRUE(exports.Ok()) << exports.Failure().Message();
+
+    // The low bit is the interworking flag and the reader does not strip it.
+    // Deciding what it means is the job of whatever turns an export into a
+    // symbol, and a reader that normalised it would throw the fact away.
+    EXPECT_EQ(exports.Value().front().tag.OffsetInSegment() % 2, 1U);
+}
+
+TEST(ReadCroNamedExports, RefusesAPositionInASegmentTheModuleDoesNotHave) {
+    SyntheticCroSpec spec = DefaultCroSpec();
+    spec.named_exports = {
+        SyntheticCroExport{
+            .name = "nowhere", .segment_index = AbsentSegmentIndex, .offset_in_segment = 0},
+    };
+
+    const std::vector<std::uint8_t> module = BuildSyntheticCro(spec);
+    const CroHeader header = ParseOrFail(module);
+
+    const core::Result<std::vector<CroNamedExport>> exports = ReadCroNamedExports(module, header);
+    ASSERT_FALSE(exports.Ok());
+    EXPECT_NE(exports.Failure().Message().find("segment 9"), std::string::npos)
+        << exports.Failure().Message();
+}
+
+TEST(ReadCroNamedExports, RefusesAPositionPastTheEndOfItsSegment) {
+    SyntheticCroSpec spec = DefaultCroSpec();
+    const auto code_size = static_cast<std::uint32_t>(spec.segments[0].size);
+    spec.named_exports = {
+        SyntheticCroExport{.name = "past_it", .segment_index = 0, .offset_in_segment = code_size},
+    };
+
+    const std::vector<std::uint8_t> module = BuildSyntheticCro(spec);
+    const CroHeader header = ParseOrFail(module);
+
+    const core::Result<std::vector<CroNamedExport>> exports = ReadCroNamedExports(module, header);
+    ASSERT_FALSE(exports.Ok());
+    EXPECT_NE(exports.Failure().Message().find("bytes long"), std::string::npos)
+        << exports.Failure().Message();
+}
+
+TEST(ReadCroNamedExports, RefusesANameOutsideTheStringTable) {
+    const SyntheticCroSpec spec = DefaultCroSpec();
+    std::vector<std::uint8_t> module = BuildSyntheticCro(spec);
+    const CroHeader header = ParseOrFail(module);
+
+    const std::size_t table =
+        core::ReadU32At(core::ByteSpan{module}, cro::FieldOffset(cro::NamedExportTableOffsetField))
+            .Value();
+    module[table + cro::NamedExportNameOffsetOffset] = 0;
+    module[table + cro::NamedExportNameOffsetOffset + 1] = 0;
+    module[table + cro::NamedExportNameOffsetOffset + 2] = 0;
+    module[table + cro::NamedExportNameOffsetOffset + 3] = 0;
+
+    const core::Result<std::vector<CroNamedExport>> exports = ReadCroNamedExports(module, header);
+    ASSERT_FALSE(exports.Ok());
+    EXPECT_NE(exports.Failure().Message().find("outside the export string table"),
+              std::string::npos)
+        << exports.Failure().Message();
+}
+
+TEST(ReadCroNamedExports, RefusesAnEmptyName) {
+    const SyntheticCroSpec spec = DefaultCroSpec();
+    std::vector<std::uint8_t> module = BuildSyntheticCro(spec);
+    const CroHeader header = ParseOrFail(module);
+
+    const std::size_t strings =
+        core::ReadU32At(core::ByteSpan{module}, cro::FieldOffset(cro::ExportStringsOffsetField))
+            .Value();
+    module[strings] = 0;
+
+    const core::Result<std::vector<CroNamedExport>> exports = ReadCroNamedExports(module, header);
+    ASSERT_FALSE(exports.Ok());
+    EXPECT_NE(exports.Failure().Message().find("empty name"), std::string::npos)
+        << exports.Failure().Message();
+}
+
+TEST(ReadCroNamedExports, ReadsNothingFromAModuleThatExportsNothing) {
+    SyntheticCroSpec spec = DefaultCroSpec();
+    spec.named_exports.clear();
+    spec.counts.named_exports = 0;
+
+    const std::vector<std::uint8_t> module = BuildSyntheticCro(spec);
+    const CroHeader header = ParseOrFail(module);
+
+    const core::Result<std::vector<CroNamedExport>> exports = ReadCroNamedExports(module, header);
+    ASSERT_TRUE(exports.Ok()) << exports.Failure().Message();
+    EXPECT_TRUE(exports.Value().empty());
+}
+
+TEST(ReadCroIndexedExports, NumbersThePositionsInTableOrder) {
+    SyntheticCroSpec spec = DefaultCroSpec();
+    spec.indexed_exports = {
+        SyntheticCroExport{.name = {}, .segment_index = 0, .offset_in_segment = 0x40},
+        SyntheticCroExport{.name = {}, .segment_index = 1, .offset_in_segment = 0x10},
+    };
+
+    const std::vector<std::uint8_t> module = BuildSyntheticCro(spec);
+    const CroHeader header = ParseOrFail(module);
+
+    const core::Result<std::vector<CroIndexedExport>> exports =
+        ReadCroIndexedExports(module, header);
+    ASSERT_TRUE(exports.Ok()) << exports.Failure().Message();
+    ASSERT_EQ(exports.Value().size(), 2U);
+    EXPECT_EQ(exports.Value()[0].index, 0U);
+    EXPECT_EQ(exports.Value()[0].position, header.segments[0].offset + 0x40);
+    EXPECT_EQ(exports.Value()[1].index, 1U);
+    EXPECT_EQ(exports.Value()[1].position, header.segments[1].offset + 0x10);
+}
+
+TEST(ReadCroIndexedExports, RefusesAPositionInASegmentTheModuleDoesNotHave) {
+    SyntheticCroSpec spec = DefaultCroSpec();
+    spec.indexed_exports = {SyntheticCroExport{
+        .name = {}, .segment_index = AbsentSegmentIndex, .offset_in_segment = 0}};
+
+    const std::vector<std::uint8_t> module = BuildSyntheticCro(spec);
+    const CroHeader header = ParseOrFail(module);
+
+    const core::Result<std::vector<CroIndexedExport>> exports =
+        ReadCroIndexedExports(module, header);
+    ASSERT_FALSE(exports.Ok());
+    EXPECT_NE(exports.Failure().Message().find("indexed export 0"), std::string::npos)
+        << exports.Failure().Message();
+}
+
+TEST(CroSegmentTag, SplitsTheIndexFromTheOffset) {
+    // The encoding the format uses, from SegmentTag in cro_helper.h: four bits
+    // of segment index, then 28 of byte offset.
+    EXPECT_EQ(CroSegmentTag{.raw = 0x00007850}.SegmentIndex(), 0U);
+    EXPECT_EQ(CroSegmentTag{.raw = 0x00007850}.OffsetInSegment(), 0x785U);
+    EXPECT_EQ(CroSegmentTag{.raw = 0x00000003}.SegmentIndex(), 3U);
+    EXPECT_EQ(CroSegmentTag{.raw = 0x00000003}.OffsetInSegment(), 0U);
+    EXPECT_EQ(CroSegmentTag{.raw = 0xFFFFFFFF}.SegmentIndex(), 0xFU);
+    EXPECT_EQ(CroSegmentTag{.raw = 0xFFFFFFFF}.OffsetInSegment(), 0x0FFFFFFFU);
+}
+
 TEST(LooksLikeCroModule, DecidesByTheMagicRatherThanTheName) {
     EXPECT_TRUE(LooksLikeCroModule(core::ByteSpan{BuildSyntheticCro(DefaultCroSpec())}));
     EXPECT_TRUE(LooksLikeCroModule(core::ByteSpan{BuildSyntheticCro(StaticModuleSpec())}));

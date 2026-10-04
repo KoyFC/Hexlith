@@ -23,6 +23,15 @@ constexpr std::uint32_t StaticTextAddress = 0x00100000;
 constexpr std::uint32_t StaticReadOnlyAddress = 0x0053C000;
 constexpr std::uint32_t StaticDataAddress = 0x005A6000;
 
+// A table the builder declares without writing still needs the string table to
+// be reachable, and this is the room each unwritten entry is given in it.
+constexpr std::size_t UnwrittenNameSize = 8;
+
+std::uint32_t SegmentTag(const SyntheticCroExport& entry) {
+    return (entry.offset_in_segment << cro::SegmentTagOffsetShift) |
+           (entry.segment_index & cro::SegmentTagIndexMask);
+}
+
 std::size_t AlignUp(std::size_t value, std::size_t alignment) {
     return ((value + alignment - 1) / alignment) * alignment;
 }
@@ -72,9 +81,31 @@ std::vector<std::uint8_t> BuildSyntheticCro(const SyntheticCroSpec& spec) {
     const std::size_t segment_table_at = AlignUp(name_at + name_size, FieldAlignment);
     const std::size_t export_table_at =
         segment_table_at + (spec.segments.size() * cro::SegmentEntrySize);
+
+    // An unwritten table still has to be declared somewhere inside the file,
+    // since the parser checks that it fits before anything reads it.
+    const std::size_t named_export_count =
+        spec.named_exports.empty() ? spec.counts.named_exports : spec.named_exports.size();
+    const std::size_t indexed_export_count =
+        spec.indexed_exports.empty() ? spec.counts.indexed_exports : spec.indexed_exports.size();
+
+    const std::size_t indexed_export_table_at =
+        export_table_at + (named_export_count * cro::NamedExportEntrySize);
     const std::size_t export_strings_at =
-        export_table_at + (spec.counts.named_exports * cro::NamedExportEntrySize);
-    const std::size_t export_strings_size = spec.counts.named_exports * 8;
+        indexed_export_table_at + (indexed_export_count * cro::IndexedExportEntrySize);
+
+    std::size_t export_strings_size = 0;
+    std::vector<std::size_t> name_offsets;
+    for (const SyntheticCroExport& entry : spec.named_exports) {
+        name_offsets.push_back(export_strings_at + export_strings_size);
+        export_strings_size += entry.name.size() + 1;
+    }
+    if (spec.named_exports.empty()) {
+        // Room for a string table nothing points into, so that the declared
+        // size is reachable.
+        export_strings_size = named_export_count * UnwrittenNameSize;
+    }
+
     const std::size_t contents_at =
         AlignUp(export_strings_at + export_strings_size, FieldAlignment);
 
@@ -121,14 +152,26 @@ std::vector<std::uint8_t> BuildSyntheticCro(const SyntheticCroSpec& spec) {
     }
 
     write.Field(cro::NamedExportTableOffsetField, static_cast<std::uint32_t>(export_table_at));
-    write.Field(cro::NamedExportCountField, static_cast<std::uint32_t>(spec.counts.named_exports));
+    write.Field(cro::NamedExportCountField, static_cast<std::uint32_t>(named_export_count));
     write.Field(cro::ExportStringsOffsetField, static_cast<std::uint32_t>(export_strings_at));
     write.Field(cro::ExportStringsSizeField, static_cast<std::uint32_t>(export_strings_size));
 
-    // The remaining tables are declared but not laid out, because Phase 1
-    // records their counts and does not walk them.
-    write.Field(cro::IndexedExportCountField,
-                static_cast<std::uint32_t>(spec.counts.indexed_exports));
+    for (std::size_t index = 0; index < spec.named_exports.size(); ++index) {
+        const SyntheticCroExport& entry = spec.named_exports[index];
+        const std::size_t at = export_table_at + (index * cro::NamedExportEntrySize);
+        write.U32(at + cro::NamedExportNameOffsetOffset,
+                  static_cast<std::uint32_t>(name_offsets[index]));
+        write.U32(at + cro::NamedExportPositionOffset, SegmentTag(entry));
+        write.Text(name_offsets[index], entry.name);
+    }
+
+    write.Field(cro::IndexedExportTableOffsetField,
+                static_cast<std::uint32_t>(indexed_export_table_at));
+    write.Field(cro::IndexedExportCountField, static_cast<std::uint32_t>(indexed_export_count));
+    for (std::size_t index = 0; index < spec.indexed_exports.size(); ++index) {
+        write.U32(indexed_export_table_at + (index * cro::IndexedExportEntrySize),
+                  SegmentTag(spec.indexed_exports[index]));
+    }
     write.Field(cro::ExportTreeNodeCountField,
                 static_cast<std::uint32_t>(spec.counts.export_tree_nodes));
     write.Field(cro::ImportModuleCountField,
@@ -178,6 +221,35 @@ constexpr std::size_t StaticImportModules = 78;
 constexpr std::size_t StaticAnonymousImports = 328;
 constexpr std::size_t StaticExternalRelocations = 331;
 
+namespace {
+
+// An odd position in a code segment, which is how a Thumb entry point is
+// spelt: the low bit is the interworking flag and not part of the address.
+// Measured on the reference image, where 338 of the 520 code exports are odd
+// and none is merely even, which is what the convention predicts.
+constexpr std::uint32_t ThumbExportOffset = 0x101;
+
+// The 461 names of the static module, generated rather than taken from the
+// cartridge. Mangled C++ names are what the real table holds, and the mix of
+// ARM and Thumb positions is the mix the reference image has.
+std::vector<SyntheticCroExport> BuildStaticModuleExports() {
+    constexpr std::uint32_t Spacing = 0x40;
+    constexpr std::size_t ThumbEvery = 3;
+
+    std::vector<SyntheticCroExport> exports;
+    exports.reserve(StaticNamedExports);
+    for (std::size_t index = 0; index < StaticNamedExports; ++index) {
+        const bool thumb = index % ThumbEvery != 0;
+        exports.push_back(SyntheticCroExport{
+            .name = "_ZN7hexlith6symbol" + std::to_string(index) + "Ev",
+            .segment_index = 0,
+            .offset_in_segment = static_cast<std::uint32_t>(index * Spacing) + (thumb ? 1U : 0U)});
+    }
+    return exports;
+}
+
+}  // namespace
+
 SyntheticCroSpec DefaultCroSpec() {
     // A module exports almost nothing and imports almost everything, which
     // docs/formats/cro0.md records as the shape of the problem.
@@ -193,6 +265,13 @@ SyntheticCroSpec DefaultCroSpec() {
         SyntheticCroSegment{.type = CroSegmentType::ReadOnlyData, .size = ReadOnlySize},
         SyntheticCroSegment{.type = CroSegmentType::Data, .size = DataSize},
         SyntheticCroSegment{.type = CroSegmentType::Bss, .size = BssSize},
+    };
+    // Two exports, which is what the real module publishes, one in ARM and one
+    // in Thumb so that both spellings of a code position appear.
+    spec.named_exports = {
+        SyntheticCroExport{.name = "DllFieldMain", .segment_index = 0, .offset_in_segment = 0},
+        SyntheticCroExport{
+            .name = "DllFieldOnLoad", .segment_index = 0, .offset_in_segment = ThumbExportOffset},
     };
     spec.counts.named_exports = DllFieldNamedExports;
     spec.counts.import_modules = DllFieldImportModules;
@@ -218,6 +297,7 @@ SyntheticCroSpec StaticModuleSpec() {
         SyntheticCroSegment{
             .type = CroSegmentType::Data, .size = DataSize, .virtual_address = StaticDataAddress},
     };
+    spec.named_exports = BuildStaticModuleExports();
     spec.counts.named_exports = StaticNamedExports;
     spec.counts.import_modules = StaticImportModules;
     spec.counts.anonymous_imports = StaticAnonymousImports;
