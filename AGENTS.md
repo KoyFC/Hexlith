@@ -140,6 +140,6 @@ With `ccache` warm this is fast enough to run before every push.
 
 ## AI assistance
 
-Hexlith is developed with substantial help from Claude (Anthropic) through Claude Code. The maintainer directs the architecture and reviews what enters the repository. Generated code may contain errors.
+Hexlith is written almost entirely by Claude (Anthropic) through Claude Code. The maintainer sets the goals and the scope of each phase and decides or delegates the design questions. Generated code may contain errors.
 
 Disclosure is at project level, in `README.md`.

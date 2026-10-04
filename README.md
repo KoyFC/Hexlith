@@ -61,6 +61,6 @@ Third-party components keep their own licenses and notices. See [`LICENSE_SCOPE.
 
 ## AI assistance
 
-Hexlith is developed with substantial help from Claude (Anthropic), used through Claude Code. The project maintainer directs the architecture, sets the engineering standards and reviews everything that enters the repository; the assistant writes code, documentation and analysis against that direction.
+Hexlith is written almost entirely by Claude (Anthropic), working through Claude Code. That covers nearly all of the code, the tests, the documentation and the analysis of the cartridge formats. The project maintainer sets the goals and the scope of each phase, decides or delegates the design questions that come up, keeps the engineering standards, and runs the game under an emulator to capture the traces the work is checked against.
 
-This is disclosed once, at project level, rather than per commit: the whole codebase should be read as AI-assisted work under human review. Generated code and generated documentation may contain errors, including confident ones. Treat statements here as claims to verify rather than as authority, particularly hardware behaviour, container layouts and addresses, which are cited to their sources so you can check them yourself.
+This is disclosed once, at project level, rather than per commit: the whole codebase should be read as AI-written work under human direction. Generated code and generated documentation may contain errors, including confident ones. Treat statements here as claims to verify rather than as authority, particularly hardware behaviour, container layouts and addresses, which are cited to their sources so you can check them yourself.
