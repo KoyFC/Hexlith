@@ -78,6 +78,17 @@ Decoding VFPv2 fixed that, and the same run picks up floating point literal pool
 
 The other tables in this note still describe the earlier run.
 
+### Seeds that nothing calls
+
+Until Phase 4 the seeds were walked but not measured. The pass that measures where functions end took only the functions the walk found by following a call, so an exported function that nothing in the image calls had no record in `functions.txt`, although its code was reached and classified. 67 of the 285 exported functions were missing that way. Every seed now becomes a function record too, with the provenance of the seed:
+
+| | Before | After |
+| --- | --- | --- |
+| Functions | 11,941 | 12,008 |
+| Exported functions without a record | 67 | 0 |
+
+Reach does not change, because the code was walked either way.
+
 ## Where each function ends
 
 The classification pass answers where functions start. The gap to the next one is not where they end: a function is followed by whatever the linker put next, which may be padding, a literal pool, or a function nothing has found yet.

@@ -104,8 +104,24 @@ Analyze(const AnalyzeRequest& request, const ExistingTables& existing, ports::Bl
     const analysis::WalkResult walked = analysis::WalkCode(image, seeds, options);
     report.walk = walked.report;
 
+    // Every seed is the start of a function as well as a place to walk from. The
+    // walk records only the functions it finds by following a call, so an
+    // exported function nothing in the image calls would otherwise have no
+    // record. The seeds come first, so that where both name an address, the
+    // record keeps the provenance of the seed.
+    std::vector<analysis::FunctionRange> entries;
+    entries.reserve(seeds.size() + walked.functions.size());
+    for (const analysis::WalkSeed& seed : seeds) {
+        entries.push_back(analysis::FunctionRange{.address = seed.address,
+                                                  .size = analysis::UnknownSize,
+                                                  .instruction_set = seed.instruction_set,
+                                                  .alternate_entries = {},
+                                                  .source = seed.source});
+    }
+    entries.insert(entries.end(), walked.functions.begin(), walked.functions.end());
+
     const analysis::BoundsResult bounds =
-        analysis::FindFunctionBounds(image, walked.functions, walked.regions);
+        analysis::FindFunctionBounds(image, entries, walked.regions);
     report.bounds = bounds.report;
 
     report.text_bytes = profile.text.size;

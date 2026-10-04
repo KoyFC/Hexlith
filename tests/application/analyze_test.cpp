@@ -131,6 +131,28 @@ TEST(Analyze, CountsWhatTheExportTableGaveIt) {
     EXPECT_EQ(report.Value().text_bytes, TextSize);
 }
 
+// The entry point is exported and nothing in the image calls it, so only being a
+// seed makes it a function. Before the seeds were measured too, an exported
+// function nobody called had no record at all.
+TEST(Analyze, RecordsAFunctionAtEverySeedEvenIfNothingCallsIt) {
+    const std::vector<std::uint8_t> code = CodeImage();
+    const std::vector<std::uint8_t> module = StaticModule();
+    const profile::GameProfile chosen = TestProfile();
+
+    MemoryBlobSink sink;
+    ASSERT_TRUE(Analyze(Request(code, module, chosen), ExistingTables{}, sink).Ok());
+
+    const core::Result<std::vector<analysis::FunctionRange>> functions =
+        analysis::ParseFunctions(sink.Text(analysis::FunctionsFileName).value_or(""));
+    ASSERT_TRUE(functions.Ok()) << functions.Failure().Message();
+    ASSERT_FALSE(functions.Value().empty());
+
+    const analysis::FunctionRange& first = functions.Value().front();
+    EXPECT_EQ(first.address, TextAddress);
+    EXPECT_GT(first.size, 0U);
+    EXPECT_EQ(first.source, analysis::Provenance::ExHeader);
+}
+
 TEST(Analyze, ReachesWhatOnlyTheSweepCanFind) {
     const std::vector<std::uint8_t> code = CodeImage();
     const std::vector<std::uint8_t> module = StaticModule();
