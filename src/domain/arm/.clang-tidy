@@ -1,0 +1,7 @@
+# A decoder is written in bit positions, and a bit position is the field
+# specification rather than a number that needs a name. Replacing them with
+# constants would hide what each line says and make it impossible to check a
+# line against the architecture reference by eye, which is the only way this
+# code can be reviewed. Every other check stays on.
+InheritParentConfig: true
+Checks: "-readability-magic-numbers"

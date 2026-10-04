@@ -1,0 +1,5 @@
+# The test vectors here are instruction encodings, and an encoding is the thing
+# under test rather than a number that needs a name. Each one carries the
+# disassembly it stands for in a comment above it.
+InheritParentConfig: true
+Checks: "-readability-magic-numbers"
