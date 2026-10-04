@@ -91,7 +91,7 @@ CRO "DllLangSelect" exports 0 indexed symbols to "|static|"
 CRO "DllLangSelect" exports 1 anonymous symbols to "|static|"
 ```
 
-Those counts come from the same tables `src/domain/ctr/cro.cpp` reads, so a disagreement between the two is a bug in one of them.
+Those counts come from the same tables `src/domain/ctr/cro_link_tables.cpp` reads, so a disagreement between the two is a bug in one of them. The section below checks them.
 
 ## What the run through the first battle showed
 
@@ -118,3 +118,17 @@ The run also logged which services the game reached and which Azahar stubs, amon
 With `log_filter` set to `*:Info Service.LDR:Debug`, `LoadCRO` also logs its request: the address of the file buffer, the address the module is mapped at, the data and BSS buffers with their sizes, the fix level, and which of the two commands was called. A boot to the start menu captured that way on 2026-10-04 shows four loads, every one through the original command, `LoadCRO`, and none through `LoadCRO_New`. Source for the line: `LoadCRO` in Azahar's `ldr_ro.cpp`, which prints `old` or `new`.
 
 The difference between the two commands is a bug the newer one fixes, described in [`formats/cro0.md`](formats/cro0.md) under the relocations read from the reference image, and it cannot affect this title.
+
+## Checking the CRO reader against the trace
+
+`hexlith-cro-dump` prints what Hexlith reads from each module's import tables, and the trace reader compares that with every `cro_helper` line in the logs:
+
+```sh
+R=~/recomp-data/work/<id>/romfs
+hexlith-cro-dump $R/*.cro $R/static.crs > dump.txt
+scripts/read_ldr_ro_trace.py --tables dump.txt ~/recomp-data/work/<id>/traces/*.txt
+```
+
+Two things are checked. Every count Azahar logs has to be the count Hexlith reads for the same pair of modules. And every load has to link with exactly the modules Hexlith expects: the ones the new module imports from that are resident at the time, plus the static module, which is always linked, and the resident ones that import from the new module. Which modules are resident comes from the load and unload lines of the same log. Azahar logs a pair only when both modules are present, so the second check is what catches an import module entry read under the wrong name.
+
+Over the three captured runs of 2026-10-04, 184 lines and 36 loads of 16 modules, the static module included, there is no disagreement. That covers the import tables of those 16 modules and nothing else: the other 118 have not been loaded under Azahar yet.

@@ -17,9 +17,22 @@ does, cross-module calls can be lifted as direct calls with the loader asserting
 the address it expected. If it does not, the position-independent path is the only
 correct one, and ADR 0004 already chose it for that reason.
 
+The same log carries a second thing worth having. Beside each load, cro_helper.cpp
+logs how many symbols the new module imports from each module it links with, by
+index and by position, and how many each module already loaded imports from it:
+
+    CRO "DllField" imports 2817 anonymous symbols from "|static|"
+    CRO "DllFieldEventPlayer" exports 30 anonymous symbols to "DllField"
+
+Those counts come from the tables Hexlith's own CRO reader reads, so with
+--tables, naming the output of hexlith-cro-dump, every such line is checked against
+Hexlith's reading of the same module. So is the set of lines: for each load, the
+modules it should have linked with, given what was resident, are the ones logged.
+
 Usage:
     scripts/read_ldr_ro_trace.py azahar_log.txt
     scripts/read_ldr_ro_trace.py boot.txt field.txt battle.txt
+    scripts/read_ldr_ro_trace.py --tables dump.txt azahar_log.txt
     scripts/read_ldr_ro_trace.py --self-test
 """
 
@@ -32,6 +45,139 @@ import sys
 LOADED = re.compile(r'CRO "(?P<name>[^"]*)" loaded at 0x(?P<base>[0-9A-Fa-f]+)'
                     r'(?:, fixed_end=0x(?P<end>[0-9A-Fa-f]+))?')
 UNLOADED = re.compile(r'Unloading CRO "(?P<name>[^"]*)"')
+IMPORTS = re.compile(r'CRO "(?P<importer>[^"]*)" imports (?P<count>\d+) '
+                     r'(?P<kind>indexed|anonymous) symbols from "(?P<exporter>[^"]*)"')
+EXPORTS = re.compile(r'CRO "(?P<exporter>[^"]*)" exports (?P<count>\d+) '
+                     r'(?P<kind>indexed|anonymous) symbols to "(?P<importer>[^"]*)"')
+STATIC_EXPORTS = re.compile(r'CRO "(?P<module>[^"]*)" exports (?P<count>\d+) '
+                            r'static anonymous symbols')
+
+# The static module's name, which the loader treats as always linked.
+STATIC = "|static|"
+
+DUMP_MODULE = re.compile(r'^module (?P<name>\S+) .*\bstatic-anonymous=(?P<static>\d+)')
+DUMP_IMPORT = re.compile(r'^import (?P<importer>\S+) from=(?P<exporter>\S+) '
+                         r'indexed=(?P<indexed>\d+) anonymous=(?P<anonymous>\d+)')
+
+
+class Tables:
+    """What hexlith-cro-dump read from each module's import tables."""
+
+    def __init__(self):
+        self.imports = {}         # (importer, exporter) -> {"indexed": n, "anonymous": n}
+        self.static_anonymous = {}
+
+    def read(self, text):
+        for line in text.splitlines():
+            module = DUMP_MODULE.match(line)
+            if module:
+                self.static_anonymous[module.group("name")] = int(module.group("static"))
+                continue
+            imported = DUMP_IMPORT.match(line)
+            if imported:
+                key = (imported.group("importer"), imported.group("exporter"))
+                self.imports[key] = {"indexed": int(imported.group("indexed")),
+                                     "anonymous": int(imported.group("anonymous"))}
+
+    def exporters_of(self, importer):
+        return {exporter for (name, exporter) in self.imports if name == importer}
+
+    def importers_of(self, exporter):
+        return {importer for (importer, name) in self.imports if name == exporter}
+
+
+class LinkCheck:
+    """Azahar's link lines against Hexlith's reading of the same modules."""
+
+    def __init__(self, tables):
+        self.tables = tables
+        self.lines_checked = 0
+        self.links_checked = 0
+        self.disagreements = []
+        self.modules = set()
+
+    def count(self, what, logged, read):
+        self.lines_checked += 1
+        if read is None:
+            self.disagreements.append(f"{what}: Azahar logs {logged}, Hexlith has no such entry")
+        elif read != logged:
+            self.disagreements.append(f"{what}: Azahar logs {logged}, Hexlith reads {read}")
+
+    def line(self, text):
+        """Checks one link line and returns the pair it is about, or None."""
+        imported = IMPORTS.search(text)
+        if imported:
+            importer, exporter = imported.group("importer"), imported.group("exporter")
+            entry = self.tables.imports.get((importer, exporter))
+            kind = imported.group("kind")
+            self.count(f"{importer} imports {kind} from {exporter}",
+                       int(imported.group("count")), entry[kind] if entry else None)
+            return ("imports", importer, exporter)
+
+        exported = EXPORTS.search(text)
+        if exported:
+            importer, exporter = exported.group("importer"), exported.group("exporter")
+            entry = self.tables.imports.get((importer, exporter))
+            kind = exported.group("kind")
+            self.count(f"{exporter} exports {kind} to {importer}",
+                       int(exported.group("count")), entry[kind] if entry else None)
+            return ("exports", importer, exporter)
+
+        static = STATIC_EXPORTS.search(text)
+        if static:
+            module = static.group("module")
+            self.count(f"{module} exports static anonymous symbols",
+                       int(static.group("count")), self.tables.static_anonymous.get(module))
+        return None
+
+    def load(self, module, resident, logged):
+        """Checks that a load linked with exactly the modules it should have."""
+        self.links_checked += 1
+        self.modules.add(module)
+        linked = resident | {STATIC}
+        expected = set()
+        for exporter in self.tables.exporters_of(module) & linked:
+            expected.add(("imports", module, exporter))
+        for importer in self.tables.importers_of(module) & linked:
+            expected.add(("exports", importer, module))
+        for missing in sorted(expected - logged):
+            self.disagreements.append(f"loading {module}: Hexlith expects a link {missing} "
+                                      f"that Azahar did not log")
+        for extra in sorted(logged - expected):
+            self.disagreements.append(f"loading {module}: Azahar logged a link {extra} "
+                                      f"that Hexlith does not expect")
+
+    def read(self, text):
+        resident = set()
+        pending = set()
+        for line in text.splitlines():
+            pair = self.line(line)
+            if pair:
+                pending.add(pair)
+                continue
+            loaded = LOADED.search(line)
+            if loaded:
+                module = loaded.group("name")
+                self.load(module, resident, pending)
+                resident.add(module)
+                pending = set()
+                continue
+            unloaded = UNLOADED.search(line)
+            if unloaded:
+                resident.discard(unloaded.group("name"))
+                pending = set()
+
+    def report(self):
+        print(f"\nlink lines checked     {self.lines_checked}")
+        print(f"loads checked          {self.links_checked}, of {len(self.modules)} module(s)")
+        if not self.disagreements:
+            print("Every count Azahar logged is the count Hexlith reads, and every load linked")
+            print("with the modules Hexlith expects.")
+            return 0
+        print(f"{len(self.disagreements)} disagreement(s):")
+        for disagreement in self.disagreements:
+            print(f"  {disagreement}")
+        return 1
 
 
 class Trace:
@@ -186,6 +332,57 @@ def self_test():
     both.read('CRO "A" loaded at 0x1000\nCRO "B" loaded at 0x2000\n')
     assert both.peak_resident == 2
 
+    tables = Tables()
+    tables.read(
+        "module |static| segments=6 static-anonymous=0\n"
+        "import |static| from=DllA indexed=0 anonymous=2\n"
+        "module DllA segments=6 static-anonymous=0\n"
+        "import DllA from=|static| indexed=0 anonymous=93\n"
+        "module DllB segments=6 static-anonymous=0\n"
+        "import DllB from=|static| indexed=0 anonymous=7\n"
+        "import DllB from=DllA indexed=0 anonymous=4\n"
+        "import DllB from=DllC indexed=0 anonymous=1\n")
+    assert tables.imports[("DllB", "DllA")] == {"indexed": 0, "anonymous": 4}
+    assert tables.exporters_of("DllB") == {STATIC, "DllA", "DllC"}
+    assert tables.importers_of("DllA") == {STATIC, "DllB"}
+
+    # A load of A, then of B while A is resident. B imports from C too, which is
+    # never loaded, so no line is expected for it.
+    agreeing = LinkCheck(tables)
+    agreeing.read(
+        'CRO "DllA" exports 0 static anonymous symbols\n'
+        'CRO "DllA" imports 0 indexed symbols from "|static|"\n'
+        'CRO "DllA" imports 93 anonymous symbols from "|static|"\n'
+        'CRO "DllA" exports 0 indexed symbols to "|static|"\n'
+        'CRO "DllA" exports 2 anonymous symbols to "|static|"\n'
+        'CRO "DllA" loaded at 0x006A5000\n'
+        'CRO "DllB" imports 7 anonymous symbols from "|static|"\n'
+        'CRO "DllB" imports 4 anonymous symbols from "DllA"\n'
+        'CRO "DllB" loaded at 0x006A9000\n')
+    assert not agreeing.disagreements, agreeing.disagreements
+    assert agreeing.lines_checked == 7, agreeing.lines_checked
+    assert agreeing.links_checked == 2
+
+    # A count that differs, and a link Azahar made that the tables do not have.
+    disagreeing = LinkCheck(tables)
+    disagreeing.read(
+        'CRO "DllA" imports 92 anonymous symbols from "|static|"\n'
+        'CRO "DllA" exports 2 anonymous symbols to "|static|"\n'
+        'CRO "DllA" imports 1 anonymous symbols from "DllZ"\n'
+        'CRO "DllA" loaded at 0x006A5000\n')
+    assert len(disagreeing.disagreements) == 3, disagreeing.disagreements
+
+    # B loaded after A went away must not link with A.
+    unloaded = LinkCheck(tables)
+    unloaded.read(
+        'CRO "DllA" imports 93 anonymous symbols from "|static|"\n'
+        'CRO "DllA" exports 2 anonymous symbols to "|static|"\n'
+        'CRO "DllA" loaded at 0x006A5000\n'
+        'Unloading CRO "DllA"\n'
+        'CRO "DllB" imports 7 anonymous symbols from "|static|"\n'
+        'CRO "DllB" loaded at 0x006A5000\n')
+    assert not unloaded.disagreements, unloaded.disagreements
+
     print("self-test passed")
     return 0
 
@@ -194,6 +391,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("logs", nargs="*", type=pathlib.Path,
                         help="Azahar log files, one per run")
+    parser.add_argument("--tables", type=pathlib.Path,
+                        help="the output of hexlith-cro-dump over the title's modules, to check "
+                             "the link lines against")
     parser.add_argument("--self-test", action="store_true",
                         help="check the parser against logs written for the purpose")
     options = parser.parse_args()
@@ -211,7 +411,16 @@ def main():
             print(f"{path}: no module loads in it. Is Service.LDR at Info in log_filter?")
         traces.append(trace)
 
-    return report(traces)
+    status = report(traces)
+    if options.tables is None:
+        return status
+
+    tables = Tables()
+    tables.read(options.tables.read_text())
+    check = LinkCheck(tables)
+    for path in options.logs:
+        check.read(path.read_text(errors="replace"))
+    return check.report() or status
 
 
 if __name__ == "__main__":
