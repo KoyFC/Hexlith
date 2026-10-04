@@ -37,6 +37,14 @@ repos:
         files: '^scripts/read_ldr_ro_trace\.py$'
         stages: [pre-commit]
 
+      - id: compare-cro-link-self-test
+        name: CRO link comparison self-test
+        entry: scripts/compare_cro_link.py --self-test
+        language: system
+        pass_filenames: false
+        files: '^scripts/compare_cro_link\.py$'
+        stages: [pre-commit]
+
       - id: commit-message
         name: Check commit message
         entry: scripts/check_commit_message.py

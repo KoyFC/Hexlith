@@ -68,7 +68,7 @@ tools  ->  adapters  ->  ports  ->  application  ->  domain  ->  core
 - `src/application` holds use cases such as extract, validate and analyze.
 - `src/ports` holds the interfaces the outside world is reached through: `RomSource`, `BlobSink`, `GpuBackend`, `AudioSink`, `InputSource`.
 - `src/adapters` holds the implementations of those ports: the filesystem, Vulkan, SDL.
-- `tools` holds the command-line programs: `hexlith-extract`, `hexlith-analyze`, `hexlith-arm-dump`, which prints what the decoder makes of a run of words and exists to be compared with another disassembler, `hexlith-arm-run`, which does the same for the interpreter, and `hexlith-cro-dump`, which prints what the CRO reader makes of each module so that it can be checked against Azahar's log.
+- `tools` holds the command-line programs: `hexlith-extract`, `hexlith-analyze`, `hexlith-arm-dump`, which prints what the decoder makes of a run of words and exists to be compared with another disassembler, `hexlith-arm-run`, which does the same for the interpreter, `hexlith-cro-dump`, which prints what the CRO reader makes of each module so that it can be checked against Azahar's log, and `hexlith-cro-link`, which prints what the linker writes so that it can be checked against Azahar's memory.
 
 The abstraction belongs at system boundaries. Hot paths, meaning lifted code, memory access and GPU command processing, avoid per-instruction virtual dispatch and use static polymorphism with flat data structures instead. Every such exception is documented where it is made.
 

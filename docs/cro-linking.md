@@ -38,4 +38,29 @@ A word of the data segment ends up at its address in the data buffer, and that i
 
 All 133 loadable modules link together onto the static module without an error, at arbitrary non-overlapping addresses. All 21,868 external relocations resolve, including the static module's 331: every symbol any module imports by position is supplied by a module the title ships. Nothing a module imports is left pointing at the unresolved hook once everything is loaded.
 
-That says the import graph is closed. It does not yet say that the words hold the right values. The check for that is a comparison with the memory of a module that Azahar has loaded, which is the next step.
+That says the import graph is closed. It does not say that the words hold the right values. The check for that is the next section.
+
+## Checking against memory
+
+`scripts/compare_cro_link.py` compares the linker with the memory of a game Azahar is running. It needs the Debug level of `Service.LDR`, because only there does `LoadCRO` log the data and BSS buffers it was given, and Azahar's GDB stub, which serves the memory.
+
+1. In `qt-config.ini`, `log_filter=*:Info Service.LDR:Debug` and `use_gdbstub=true`, port 24689.
+2. Play to the moment to be compared and leave the game running.
+3. Write the dump commands from the log as it stands, then connect, dump and detach. Connecting pauses the game.
+
+```sh
+D=~/recomp-data/work/<id>/traces/dump-<moment>
+scripts/compare_cro_link.py gdb ~/.var/app/org.azahar_emu.Azahar/data/azahar-emu/log/azahar_log.txt $D > $D.gdb
+gdb -batch -ex 'set architecture arm' -ex 'target remote 127.0.0.1:24689' -x $D.gdb
+scripts/compare_cro_link.py compare $D --romfs ~/recomp-data/work/<id>/romfs --tool build/ci/tools/hexlith-cro-link/hexlith-cro-link
+```
+
+The first command also writes the resident modules and their addresses beside the dumps, so the comparison does not depend on the log surviving the next run.
+
+What is compared, and what counts as a failure:
+
+- Each resident module's code and read-only data, byte by byte. A relocated word has to hold the value the linker computes, and every other byte has to be the file's. A byte that differs elsewhere means the loader did something the linker does not model.
+- Each relocated word in the module's data buffer. The other bytes of data are counted and not judged, because the game writes to its own data.
+- Each word of the main executable that the static module's own relocations patch, which tests the unresolved hook as well as the resolved imports.
+
+Connecting and then resuming the game with `continue` closed the emulation in one attempt on 2026-10-04, so the procedure connects only once the game is where it should be, and detaches when the dump is written.
