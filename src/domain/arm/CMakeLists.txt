@@ -20,6 +20,16 @@ target_sources(
             primitives/packing.h
             primitives/parallel.h
             primitives/saturate.h
+            primitives/vfp.h
             registers.cpp
             registers.h
 )
+
+# VFPv2's multiply-accumulate rounds the product before the sum. A host
+# compiler allowed to contract a multiplication and an addition into one fused
+# operation would round once, and the floating point primitives would stop
+# matching the hardware the moment the build targeted a host with FMA. PUBLIC,
+# because generated code includes the primitives and needs the same guarantee.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(hexlith_domain PUBLIC -ffp-contract=off)
+endif()
