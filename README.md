@@ -10,7 +10,11 @@ Early. Nothing is playable and nothing runs.
 
 What works is extraction. `hexlith-extract` validates a cartridge image against a game profile and writes its contents into a working directory: the extended header, the ExeFS with its executable decompressed, the RomFS as a directory tree, and a manifest of every file with its hash. Two runs produce identical manifests. [`docs/extraction.md`](docs/extraction.md) describes it.
 
-The repository also holds the project's guardrails, its build skeleton, its architecture and decision records, and verified notes on the cartridge formats. Analysing the extracted code is the next piece of work.
+Analysis works too. `hexlith-analyze` reads an extraction and works out which bytes are instructions, which encoding each one is in, and where each function begins and ends, writing four line-oriented tables that a person can edit and that a later run will not overwrite. On the reference cartridge it reaches 58.9 percent of the main executable's text segment and finds 11,824 functions in 0.4 seconds. [`docs/classification.md`](docs/classification.md) describes it and says what it does not reach.
+
+Under it is a complete ARMv6K and Thumb decoder, checked against an independent disassembler over five million random words and over the whole executable, which agrees on every instruction and on every branch target. [`docs/arm-decoder.md`](docs/arm-decoder.md) records what that comparison caught.
+
+The repository also holds the project's guardrails, its build skeleton, its architecture and decision records, and verified notes on the cartridge formats. Lifting the analysed code is the next piece of work.
 
 The design is documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), the decisions behind it in [`docs/adr/`](docs/adr/), and the formats in [`docs/formats/`](docs/formats/). Those documents mark what exists against what is planned.
 

@@ -49,6 +49,8 @@ Presets are the local path. CI configures explicitly with `-DCMAKE_CXX_COMPILER`
 
 `clang-tidy` is not run by CI, but the configuration is kept correct and the tree is kept clean against it: `clang-tidy -p build/ci $(git ls-files '*.cpp' '*.h')`.
 
+Two directories turn off `readability-magic-numbers` in a `.clang-tidy` of their own, with the reason in the file. A decoder is written in bit positions and its tests in instruction encodings, and naming those would hide what the line says.
+
 GoogleTest comes from the system (`gtest-devel` on Fedora). Configure with `-DHEXLITH_FETCH_GOOGLETEST=ON` to download it instead. A plain build never touches the network.
 
 OpenSSL's development package (`openssl-devel` on Fedora) is required, not optional. CMake fails at configure time without it.
@@ -66,7 +68,7 @@ tools  ->  adapters  ->  ports  ->  application  ->  domain  ->  core
 - `src/application` holds use cases such as extract, validate and analyze.
 - `src/ports` holds the interfaces the outside world is reached through: `RomSource`, `BlobSink`, `GpuBackend`, `AudioSink`, `InputSource`.
 - `src/adapters` holds the implementations of those ports: the filesystem, Vulkan, SDL.
-- `tools` holds the command-line programs.
+- `tools` holds the command-line programs: `hexlith-extract`, `hexlith-analyze`, and `hexlith-arm-dump`, which prints what the decoder makes of a run of words and exists to be compared with another disassembler.
 
 The abstraction belongs at system boundaries. Hot paths, meaning lifted code, memory access and GPU command processing, avoid per-instruction virtual dispatch and use static polymorphism with flat data structures instead. Every such exception is documented where it is made.
 
@@ -93,6 +95,8 @@ Unit tests per layer, built on synthetic data only. A test never reads game cont
 Synthetic fixtures are generated in code at build time. They are never checked in as files.
 
 Tests go in the same commit as the behaviour they cover.
+
+Unit tests are not enough for a decoder, because the mistakes that matter there are the ones nobody thought to write a case for. The ARM and Thumb decoders are checked against Capstone over millions of random words and over the reference image, by `scripts/compare_arm_decoder.py`. Capstone is a development dependency and nothing else: the build does not use it and the tests do not need it. `docs/arm-decoder.md` records what that comparison found.
 
 Golden-trace differential testing against Azahar is planned for the phases that have an ARM interpreter to compare against. It is not a substitute for unit tests.
 
