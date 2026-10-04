@@ -36,9 +36,9 @@ Current result:
 
 | | ARM, random | ARM, text segment | Thumb, random | Thumb, text segment |
 | --- | --- | --- | --- | --- |
-| Instructions compared | 4,757,115 | 1,108,725 | 1,000,000 | 2,218,060 |
+| Instructions compared | 4,724,955 | 1,107,886 | 999,260 | 2,218,060 |
 | Disagreements | 0 | 0 | 0 | 0 |
-| Hexlith stricter | 4.0 percent | 0.11 percent | 0.08 percent | 71 words |
+| Hexlith stricter | 4.6 percent | 0.18 percent | 0.07 percent | 71 words |
 | Later than ARMv6K and VFPv2 | 0.9 percent | 45 words | none | none |
 
 The comparison checks more than the operation. Over the text segment read as ARM it agreed on 166,430 branch targets, 308,516 transfer base registers, 298,228 transfer offsets with their direction and write-back, 52,542 register lists, and the registers of 55,004 floating point instructions; read as Thumb, on 774,368 branch targets and 180,720 transfer bases. The Thumb sweep is run from offset 0 and from offset 2, so that every halfword position is covered.
@@ -65,6 +65,8 @@ Worth recording, because it is the argument for the method. Each of these was in
 - `umaal` accepted a flag-setting bit it does not have, and a breakpoint accepted a condition it cannot carry.
 - A coprocessor transfer accepted an addressing mode that does not exist.
 - In Thumb, `setend` was matched on one bit too few, a linking exchange through the program counter was accepted, and the rounding of a `blx` target was missing.
+
+Capstone cannot catch a word that a later architecture defines and ARMv6K does not, because it accepts the word too. Running the interpreter against Unicorn's ARM11 model found three of those: halfword transfers with bits in a field the register form leaves empty, SMMLS without an accumulator, and the 16-bit Thumb hints, which belong to ARMv6T2. [`arm-interpreter.md`](arm-interpreter.md) has the details.
 
 ## Two differences that are expected
 

@@ -68,11 +68,13 @@ The intent is that a `GpuBackend` is a virtual interface chosen once at startup,
 
 ## The runtime
 
-Planned, not built. Recorded here so the pieces have names.
+Planned, apart from the interpreter. Recorded here so the pieces have names.
 
 **Guest memory** is a flat host allocation with the 3DS memory map laid out inside it. Contiguous RAM ranges get validated host views so that a guest word read compiles to a host load rather than a function call. Memory-mapped I/O, misaligned access and exclusive access stay explicit transactions.
 
 **The CPU** has two implementations of the same semantics. Lifted C++ is the fast path. An ARM interpreter is the reference, the fallback for addresses that were never lifted, and the oracle for differential testing. Both call the same primitive library so they cannot diverge. See [ADR 0003](adr/0003-interpreter-as-the-semantic-reference.md).
+
+The interpreter and the primitive library exist, in `src/domain/arm/interpreter` and `src/domain/arm/primitives`, and run ARM, Thumb and VFPv2 floating point in user mode. They are checked against Unicorn as [`arm-interpreter.md`](arm-interpreter.md) describes. Floating point runs on the host's own arithmetic with the edges handled explicitly, which [ADR 0010](adr/0010-floating-point-on-the-host.md) records. The interpreter runs against anything that satisfies the `GuestMemory` concept; the one that exists is a sparse paged memory for tests and tools, not the flat runtime memory described above.
 
 **The kernel** is reimplemented at a high level. The game's system calls land in host functions rather than in emulated kernel code. Threads, events, mutexes and address arbiters are modelled, because a scheduler that is merely plausible produces deadlocks rather than crashes.
 

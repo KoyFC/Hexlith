@@ -14,7 +14,9 @@ Analysis works too. `hexlith-analyze` reads an extraction and works out which by
 
 Under it is a complete ARMv6K, Thumb and VFPv2 decoder, checked against an independent disassembler over five million random words and over the whole executable, which agrees on every instruction and on every branch target. [`docs/arm-decoder.md`](docs/arm-decoder.md) records what that comparison caught.
 
-The repository also holds the project's guardrails, its build skeleton, its architecture and decision records, and verified notes on the cartridge formats. Lifting the analysed code is the next piece of work.
+On top of the decoder is an interpreter for ARM, Thumb and VFPv2 floating point, the executable reference the generated code will be held to. It shares one library of primitive operations with the code the lifter will emit, and it agrees with Unicorn's ARM11 model on every one of 811,391 random and real instructions it was compared on. [`docs/arm-interpreter.md`](docs/arm-interpreter.md) describes it and what the comparison caught.
+
+The repository also holds the project's guardrails, its build skeleton, its architecture and decision records, and verified notes on the cartridge formats. Reading the relocation tables of the CRO modules, so that their code can be analysed too, and lifting are the next pieces of work.
 
 The design is documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), the decisions behind it in [`docs/adr/`](docs/adr/), and the formats in [`docs/formats/`](docs/formats/). Those documents mark what exists against what is planned.
 

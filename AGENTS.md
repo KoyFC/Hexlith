@@ -68,7 +68,7 @@ tools  ->  adapters  ->  ports  ->  application  ->  domain  ->  core
 - `src/application` holds use cases such as extract, validate and analyze.
 - `src/ports` holds the interfaces the outside world is reached through: `RomSource`, `BlobSink`, `GpuBackend`, `AudioSink`, `InputSource`.
 - `src/adapters` holds the implementations of those ports: the filesystem, Vulkan, SDL.
-- `tools` holds the command-line programs: `hexlith-extract`, `hexlith-analyze`, and `hexlith-arm-dump`, which prints what the decoder makes of a run of words and exists to be compared with another disassembler.
+- `tools` holds the command-line programs: `hexlith-extract`, `hexlith-analyze`, `hexlith-arm-dump`, which prints what the decoder makes of a run of words and exists to be compared with another disassembler, and `hexlith-arm-run`, which does the same for the interpreter.
 
 The abstraction belongs at system boundaries. Hot paths, meaning lifted code, memory access and GPU command processing, avoid per-instruction virtual dispatch and use static polymorphism with flat data structures instead. Every such exception is documented where it is made.
 
@@ -98,7 +98,9 @@ Tests go in the same commit as the behaviour they cover.
 
 Unit tests are not enough for a decoder, because the mistakes that matter there are the ones nobody thought to write a case for. The ARM and Thumb decoders are checked against Capstone over millions of random words and over the reference image, by `scripts/compare_arm_decoder.py`. Capstone is a development dependency and nothing else: the build does not use it and the tests do not need it. `docs/arm-decoder.md` records what that comparison found.
 
-Golden-trace differential testing against Azahar is planned for the phases that have an ARM interpreter to compare against. It is not a substitute for unit tests.
+The interpreter is held to the same standard against Unicorn, by `scripts/compare_arm_interpreter.py`, one random state and one instruction at a time. Unicorn is installed with pip into a virtual environment and is a development dependency in the same way. Run both comparisons after any change to `src/domain/arm`; `docs/arm-interpreter.md` records the results and what they found.
+
+Golden-trace differential testing against Azahar, over whole scenes rather than single instructions, is planned for when the interpreter can run the game far enough to have scenes. It is not a substitute for unit tests.
 
 ## Commits
 
