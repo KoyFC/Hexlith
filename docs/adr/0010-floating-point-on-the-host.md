@@ -41,9 +41,19 @@ Speed matters because the same code runs in the generated output. Floating point
 
 ## What is not exact
 
-**The cumulative exception flags are not modelled.** No operation sets IOC, DZC, OFC, UFC, IXC or IDC. Code that reads FPSCR back sees what was last written to it. Whether the game reads them and acts on them is not known yet, and a comparison against an independent implementation has to mask them.
+**The cumulative exception flags are not modelled.** No operation sets IOC, DZC, OFC, UFC, IXC or IDC. Code that reads FPSCR back sees what was last written to it. The main executable never does, as the next section says, and a comparison against an independent implementation has to mask them.
 
 **FZ flushes the rounded result, not the exact one.** The reference manual flushes a result whose exact value is below the smallest normal number, so a value that would round up to the smallest normal number is flushed by the hardware and kept here. It needs a result within half a unit in the last place of 2⁻¹²⁶, and it is recorded rather than handled.
+
+## What the game does with FPSCR
+
+Measured on the main executable after the decoder learned VFPv2, by finding every VFP system register access in the text segment.
+
+FPSCR is written in one place, at `0x00122A60`, and the value written is the constant `0x03000000`: flush to zero and default NaN set, round to nearest, no vector length, no traps. That is the mode ARM calls RunFast, and every part of it is handled. Nothing else in the main executable writes FPSCR.
+
+FPSCR is never read into a general register. Every read, 930 of them in code the analysis reaches, is the form that copies the comparison flags into the CPSR for a conditional branch. Nothing reads the cumulative exception flags, so leaving them out costs the main executable nothing.
+
+The CRO modules are not analysed yet and have not been measured. Until they are, the stops described above are what would show a module doing something else.
 
 ## What would change this
 
