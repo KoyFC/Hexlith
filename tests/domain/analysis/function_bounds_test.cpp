@@ -23,6 +23,9 @@ constexpr std::uint32_t ArmReturn = 0xE12FFF1E;  // bx lr
 // b with a displacement of zero, which reaches the instruction two on.
 constexpr std::uint32_t ArmBranchTwoAhead = 0xEA000000;
 
+// b with a displacement of minus four words, back two instructions.
+constexpr std::uint32_t ArmBranchBackTwo = 0xEAFFFFFC;
+
 // beq with a displacement of minus four words, the bottom of a loop.
 constexpr std::uint32_t ArmBranchBackThree = 0x0AFFFFFB;
 
@@ -68,6 +71,31 @@ const FunctionRange* FunctionAt(const BoundsResult& result, std::uint32_t addres
             return function.address == address;
         });
     return found == result.functions.end() ? nullptr : &*found;
+}
+
+// A function that jumps back into code before its own entry and runs through
+// another function's entry point there. That entry is not a second way into
+// this function, which starts after it, and a table that said so could not be
+// read back. Found in a CRO module of the reference title.
+TEST(FindFunctionBounds, TakesNoSecondEntryPointFromBeforeTheFunction) {
+    ImageBuilder image;
+    image.Arm(ArmMove);
+    const std::uint32_t earlier = image.AddressOfNext();
+    image.Arm(ArmReturn);
+    const std::uint32_t later = image.AddressOfNext();
+    image.Arm(ArmBranchBackTwo);
+
+    const std::vector<FunctionRange> entries = {Entry(earlier), Entry(later)};
+    const WalkImage walk{.bytes = image.Bytes(), .base = Base};
+    const std::vector<Region> regions = {
+        CodeRegion(Base, static_cast<std::uint32_t>(image.Bytes().size()))};
+
+    const BoundsResult result = FindFunctionBounds(walk, entries, regions);
+
+    const FunctionRange* function = FunctionAt(result, later);
+    ASSERT_NE(function, nullptr);
+    EXPECT_TRUE(function->alternate_entries.empty());
+    EXPECT_NE(FunctionAt(result, earlier), nullptr);
 }
 
 TEST(FindFunctionBounds, MeasuresAFunctionToItsReturn) {

@@ -185,7 +185,11 @@ BoundsResult FindFunctionBounds(const WalkImage& image,
         // rather than a function of its own. Two of them sharing a tail is
         // ordinary in hand-written code and in what a compiler folds.
         for (const std::uint32_t reached : extent.Reached()) {
-            if (reached != address && addresses.contains(reached)) {
+            // A body that jumps back past its own entry can run through
+            // another entry point there. That one starts before this function
+            // does, so it cannot be a way into it.
+            const bool inside = reached > address && reached < extent.End();
+            if (inside && addresses.contains(reached)) {
                 measured.alternate_entries.push_back(reached);
                 absorbed.insert(reached);
                 result.report.alternate_entries += 1;
