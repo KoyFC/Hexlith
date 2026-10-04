@@ -1,6 +1,6 @@
 # 0006. Analysis artefacts are line-oriented text with provenance
 
-Status: Accepted
+Status: Accepted. Amended by [ADR 0011](0011-only-underivable-records-in-the-repository.md), which keeps derived records out of `data/profiles/`.
 Date: 2026-10-03
 
 ## Context

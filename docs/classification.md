@@ -125,7 +125,7 @@ The whole pass takes under half a second on the reference image, which matters m
 
 Two properties hold and the tests hold them. Running it twice writes identical bytes. Editing a record by hand and running it again keeps the edit, and the derived records for that address give way to it, which is the rule [`analysis-tables.md`](analysis-tables.md) describes.
 
-The tables are written beside the extraction and not into this repository. [ADR 0005](adr/0005-game-profile-design.md) puts a profile's text tables under `data/profiles/`, and `symbols.txt` is the one that belongs there, because a name a person worked out is the only thing here that cannot be derived again. The other three are regenerated from the image in half a second and are several hundred kilobytes each, which is what the game data guard's size limit is for. Putting one of them in the repository is a decision for a person, and the tool does not make it.
+The tables are written beside the extraction and not into this repository. [ADR 0011](adr/0011-only-underivable-records-in-the-repository.md) settles what does go into `data/profiles/`: only records nothing can derive, such as a name a person worked out, and not the derived tables, which are regenerated from the image in half a second.
 
 ## What is not done yet
 
