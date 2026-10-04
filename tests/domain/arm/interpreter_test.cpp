@@ -331,5 +331,86 @@ TEST(Interpreter, PopsIntoThumbCode) {
     EXPECT_TRUE(machine.state.thumb);
 }
 
+TEST(InterpreterVfp, AddsSingles) {
+    Machine machine;
+    // vadd.f32 s0, s1, s2
+    machine.Arm({0xEE300A81});
+    machine.state.float_registers.at(1) = 0x3F800000;
+    machine.state.float_registers.at(2) = 0x40000000;
+    EXPECT_FALSE(machine.Step().Stopped());
+    EXPECT_EQ(machine.state.float_registers.at(0), 0x40400000U) << "1 + 2 = 3";
+}
+
+TEST(InterpreterVfp, BranchesOnAFloatingPointComparison) {
+    Machine machine;
+    // vcmpe.f32 s0, s2; vmrs apsr_nzcv, fpscr; movgt r0, #1
+    machine.Arm({0xEEB40AC1, 0xEEF1FA10, 0xC3A00001});
+    machine.state.float_registers.at(0) = 0x40000000;
+    machine.state.float_registers.at(2) = 0x3F800000;
+    machine.Run(3);
+    EXPECT_EQ(machine.state.fpscr >> 28U, 0b0010U) << "greater: C set";
+    EXPECT_TRUE(machine.state.carry);
+    EXPECT_EQ(machine.R(0), 1U);
+}
+
+TEST(InterpreterVfp, LoadsADoubleFromAPool) {
+    Machine machine;
+    // vldr d0, [pc], with the literal two words on, low word first
+    machine.Arm({0xED9F0B00, 0, 0x55667788, 0x11223344});
+    machine.Step();
+    EXPECT_EQ(ReadDouble(machine.state, 0), 0x1122334455667788ULL);
+}
+
+TEST(InterpreterVfp, PushesAndPopsDoubles) {
+    Machine machine;
+    // vpush {d8}; vpop {d8}
+    machine.Arm({0xED2D8B02, 0xECBD8B02});
+    WriteDouble(machine.state, 8, 0xAAAABBBBCCCCDDDDULL);
+    machine.Step();
+    EXPECT_EQ(machine.R(StackPointer), Stack + PageSize - 8);
+    EXPECT_EQ(machine.memory.Read64(Stack + PageSize - 8), 0xAAAABBBBCCCCDDDDULL);
+
+    WriteDouble(machine.state, 8, 0);
+    machine.Step();
+    EXPECT_EQ(ReadDouble(machine.state, 8), 0xAAAABBBBCCCCDDDDULL);
+    EXPECT_EQ(machine.R(StackPointer), Stack + PageSize);
+}
+
+TEST(InterpreterVfp, MovesThroughGeneralRegisters) {
+    Machine machine;
+    // vmov s0, r0; vcvt.s32.f32 s0, s0; vmov r0, s0; vmov d0, r0, r1
+    machine.Arm({0xEE000A10, 0xEEBD0AC0, 0xEE100A10, 0xEC410B10});
+    machine.R(0) = 0xC0200000;  // -2.5
+    machine.Run(3);
+    EXPECT_EQ(machine.R(0), static_cast<std::uint32_t>(-2)) << "truncated towards zero";
+
+    machine.R(1) = 0x12345678;
+    machine.Step();
+    EXPECT_EQ(ReadDouble(machine.state, 0), 0x12345678FFFFFFFEULL);
+}
+
+TEST(InterpreterVfp, RefusesAModeItDoesNotImplement) {
+    Machine machine;
+    // vmsr fpscr, r0, with round towards plus infinity
+    machine.Arm({0xEEE10A10});
+    machine.R(0) = 1U << 22U;
+    EXPECT_EQ(machine.Step().reason, StopReason::Unsupported);
+    EXPECT_EQ(machine.state.fpscr, 0U) << "the write did not happen";
+
+    Machine flush;
+    // vmsr fpscr, r0, with flush to zero and default NaN, which it does
+    flush.Arm({0xEEE10A10});
+    flush.R(0) = 3U << 24U;
+    EXPECT_FALSE(flush.Step().Stopped());
+    EXPECT_EQ(flush.state.fpscr, 3U << 24U);
+}
+
+TEST(InterpreterVfp, LeavesTheIdentityRegisterToPrivilegedCode) {
+    Machine machine;
+    // vmrs r0, fpsid
+    machine.Arm({0xEEF00A10});
+    EXPECT_EQ(machine.Step().reason, StopReason::Privileged);
+}
+
 }  // namespace
 }  // namespace hexlith::domain::arm

@@ -6,6 +6,7 @@
 #include "domain/arm/interpreter/execute_data.h"
 #include "domain/arm/interpreter/execute_system.h"
 #include "domain/arm/interpreter/execute_transfer.h"
+#include "domain/arm/interpreter/execute_vfp.h"
 #include "domain/arm/interpreter/execution.h"
 #include "domain/arm/interpreter/interpreter.h"
 #include "domain/arm/primitives/integer.h"
@@ -178,7 +179,7 @@ Stop Dispatch(Execution<Memory>& execution) {
     }
 
     if (IsFloatingPoint(execution.instruction.operation)) {
-        return Halt(execution, StopReason::Unsupported);
+        return ExecuteFloatingPoint(execution);
     }
     return ExecuteSystem(execution);
 }

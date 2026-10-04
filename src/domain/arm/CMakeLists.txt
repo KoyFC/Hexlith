@@ -16,6 +16,7 @@ target_sources(
             interpreter/execute_data.h
             interpreter/execute_system.h
             interpreter/execute_transfer.h
+            interpreter/execute_vfp.h
             interpreter/execution.h
             interpreter/interpreter.cpp
             interpreter/interpreter.h
