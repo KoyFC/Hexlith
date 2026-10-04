@@ -2,6 +2,7 @@ target_sources(
     hexlith_domain
     PRIVATE condition.cpp
             condition.h
+            cpu_state.h
             decode_arm.cpp
             decode_arm.h
             decode_thumb.cpp
@@ -14,6 +15,11 @@ target_sources(
             instruction_set.h
             operation.cpp
             operation.h
+            primitives/integer.h
+            primitives/multiply.h
+            primitives/packing.h
+            primitives/parallel.h
+            primitives/saturate.h
             registers.cpp
             registers.h
 )
