@@ -206,9 +206,11 @@ Checked against the bytes rather than taken on the pattern alone. The `.code` im
 | `_ZNSsaSEPKc` | 0x00101ccc | `38 b5` | `push {r3, r4, r5, lr}`, Thumb |
 | `nnroAeabiAtexit_` | 0x004d5df0 | `38 40 2d e9` | `push {r3, r4, r5, lr}`, ARM |
 
-So the export tables settle the instruction set of 520 addresses without any analysis, 338 of them Thumb. Three of the static module's 341 code exports are ARM, which says the main executable is built for Thumb almost throughout, as a handheld title written for code density would be.
+So the export tables settle the instruction set of 520 addresses without any analysis, 338 of them Thumb, which is information nothing else in the image gives away.
 
-Every one of the 179 module exports is ARM, which is the opposite and is worth not over-reading. 179 entry points across 133 modules say what the loader calls into, not what the module is made of: an ARM entry point can be a veneer in front of Thumb code. What the modules are compiled for is a question for the decoder, not for this table.
+What they do not settle is what the image is mostly made of, and an earlier version of this note got that wrong. 338 of the static module's 341 code exports being Thumb says the exported functions are Thumb, and the exported functions are a biased sample: they are what the CRO modules link against, which is the C++ runtime. Walking the segment from those exports and from the entry point reaches 2.59 MB of ARM code against 28 KB of Thumb, so the main executable is predominantly ARM and the Thumb in it is the runtime. See [`../classification.md`](../classification.md).
+
+Every one of the 179 module exports is ARM. 179 entry points across 133 modules say what the loader calls into, not what the module is made of: an ARM entry point can be a veneer in front of Thumb code. What the modules are compiled for is a question for the decoder.
 
 Parity means nothing outside a code segment. The 16 odd ROData exports are all `_ZTS` type name strings, which are character arrays and sit wherever the linker put them.
 

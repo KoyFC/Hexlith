@@ -90,9 +90,9 @@ A measurement that decided how classification has to work. Reading the whole 4,4
 | Decode as some ARM instruction | 1,104,025 |
 | Do not decode | 5,918 |
 
-**99.5 percent of the segment decodes as valid ARM**, and most of the segment is Thumb. The export table of the static module says so: 338 of its 341 code exports are Thumb entry points.
+**99.5 percent of the segment decodes as valid ARM**, and the segment is not all ARM code. It holds Thumb functions, literal pools in the middle of functions, jump tables and padding, and nearly all of that decodes as some valid ARM instruction as well.
 
-So whether a word decodes is almost no evidence about what it is. Classification cannot be a linear sweep that accepts whatever decodes; it has to be a walk from entry points that are known, following control flow, with the instruction set carried along the path. That is what the next stage does.
+So whether a word decodes is almost no evidence about what it is. Classification cannot be a linear sweep that accepts whatever decodes; it has to be a walk from entry points that are known, following control flow, with the instruction set carried along the path. [`classification.md`](classification.md) is what came of that.
 
 The first four words of the segment are a worked example of why the walk needs the exports: they are four `bl` instructions in a row, the shape of a run of static constructors, and the fifth is a `blx` into Thumb code at 0x00102F00.
 
