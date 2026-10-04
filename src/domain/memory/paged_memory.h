@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <unordered_map>
 
 namespace hexlith::domain::memory {
@@ -39,6 +40,10 @@ public:
     // writing anything if any byte of the range is unmapped.
     core::Status Load(std::uint32_t address, core::ByteSpan bytes);
 
+    // Copies bytes out of mapped memory, the counterpart of Load. Fails without
+    // copying anything if any byte of the range is unmapped.
+    core::Status Copy(std::uint32_t address, std::span<std::uint8_t> bytes) const;
+
     [[nodiscard]] bool IsMapped(std::uint32_t address) const;
 
     [[nodiscard]] std::optional<std::uint8_t> Read8(std::uint32_t address) const;
@@ -56,6 +61,8 @@ private:
         std::array<std::uint8_t, PageSize> bytes{};
         bool writable = false;
     };
+
+    [[nodiscard]] bool IsRangeMapped(std::uint32_t address, std::size_t size) const;
 
     [[nodiscard]] const Page* Find(std::uint32_t address) const;
     [[nodiscard]] Page* Find(std::uint32_t address);

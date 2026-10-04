@@ -2,7 +2,10 @@
 
 #include "domain/memory/guest_memory.h"
 
+#include <algorithm>
+#include <cstdint>
 #include <format>
+#include <limits>
 
 namespace hexlith::domain::memory {
 namespace {
@@ -45,21 +48,56 @@ core::Status PagedMemory::Map(std::uint32_t address, std::uint32_t size, bool wr
 }
 
 core::Status PagedMemory::Load(std::uint32_t address, core::ByteSpan bytes) {
-    for (std::size_t index = 0; index < bytes.size(); ++index) {
-        if (!IsMapped(static_cast<std::uint32_t>(address + index))) {
-            return core::Error{
-                std::format("cannot load 0x{:X} bytes at 0x{:08X}: 0x{:08X} is not mapped",
-                            bytes.size(),
-                            address,
-                            address + index)};
-        }
+    if (!IsRangeMapped(address, bytes.size())) {
+        return core::Error{
+            std::format("cannot load 0x{:X} bytes at 0x{:08X}: not all of it is mapped",
+                        bytes.size(),
+                        address)};
     }
 
-    for (std::size_t index = 0; index < bytes.size(); ++index) {
-        const auto at = static_cast<std::uint32_t>(address + index);
-        Find(at)->bytes.at(PageOffset(at)) = bytes[index];
+    // A page at a time, since a range can start and end anywhere in one.
+    std::size_t done = 0;
+    while (done < bytes.size()) {
+        const auto at = static_cast<std::uint32_t>(address + done);
+        const std::size_t chunk =
+            std::min<std::size_t>(PageSize - PageOffset(at), bytes.size() - done);
+        const std::span<std::uint8_t> page{Find(at)->bytes};
+        std::ranges::copy(bytes.subspan(done, chunk), page.subspan(PageOffset(at)).begin());
+        done += chunk;
     }
     return {};
+}
+
+core::Status PagedMemory::Copy(std::uint32_t address, std::span<std::uint8_t> bytes) const {
+    if (!IsRangeMapped(address, bytes.size())) {
+        return core::Error{
+            std::format("cannot copy 0x{:X} bytes at 0x{:08X}: not all of it is mapped",
+                        bytes.size(),
+                        address)};
+    }
+
+    std::size_t done = 0;
+    while (done < bytes.size()) {
+        const auto at = static_cast<std::uint32_t>(address + done);
+        const std::size_t chunk =
+            std::min<std::size_t>(PageSize - PageOffset(at), bytes.size() - done);
+        const std::span<const std::uint8_t> page{Find(at)->bytes};
+        std::ranges::copy(page.subspan(PageOffset(at), chunk), bytes.subspan(done).begin());
+        done += chunk;
+    }
+    return {};
+}
+
+bool PagedMemory::IsRangeMapped(std::uint32_t address, std::size_t size) const {
+    // One check per page the range touches, rather than one per byte.
+    const std::uint64_t end = static_cast<std::uint64_t>(address) + size;
+    for (std::uint64_t at = address; at < end; at = ((at / PageSize) + 1) * PageSize) {
+        if (at > std::numeric_limits<std::uint32_t>::max() ||
+            !IsMapped(static_cast<std::uint32_t>(at))) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool PagedMemory::IsMapped(std::uint32_t address) const {

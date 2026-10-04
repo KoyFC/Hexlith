@@ -86,5 +86,16 @@ TEST(PagedMemory, MapsTheTopOfTheAddressSpace) {
         << "the second byte wraps to address zero, which is not mapped";
 }
 
+TEST(PagedMemory, CopiesOutAcrossPages) {
+    PagedMemory memory;
+    ASSERT_TRUE(memory.Map(Base, 2 * Page, true));
+    ASSERT_TRUE(memory.Write32(Base + Page - 2, 0xAABBCCDD));
+
+    std::array<std::uint8_t, 4> bytes{};
+    ASSERT_TRUE(memory.Copy(Base + Page - 2, bytes));
+    EXPECT_EQ(bytes, (std::array<std::uint8_t, 4>{0xDD, 0xCC, 0xBB, 0xAA}));
+    EXPECT_FALSE(memory.Copy(Base + (2 * Page) - 2, bytes)) << "the last two bytes are unmapped";
+}
+
 }  // namespace
 }  // namespace hexlith::domain::memory
