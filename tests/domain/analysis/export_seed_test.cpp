@@ -161,5 +161,28 @@ TEST(SeedFromExports, ProducesTablesTheWritersAccept) {
     EXPECT_EQ(functions.Value().size(), 2U);
 }
 
+ctr::CroSegmentTag Position(std::uint32_t segment, std::uint32_t offset) {
+    return ctr::CroSegmentTag{.raw = (offset << ctr::cro::SegmentTagOffsetShift) | segment};
+}
+
+TEST(SeedFromImports, SeedsAnImportedPositionInCodeWithItsInstructionSet) {
+    const std::vector<ctr::CroSegmentTag> imported = {Position(0, 0x40), Position(0, 0x81)};
+    const std::vector<WalkSeed> seeds = SeedFromImports(StaticHeader(), imported);
+
+    ASSERT_EQ(seeds.size(), 2U);
+    EXPECT_EQ(seeds[0].address, TextAddress + 0x40);
+    EXPECT_EQ(seeds[0].instruction_set, arm::InstructionSet::Arm);
+    EXPECT_EQ(seeds[1].address, TextAddress + 0x80);
+    EXPECT_EQ(seeds[1].instruction_set, arm::InstructionSet::Thumb);
+    EXPECT_EQ(seeds[1].source, Provenance::Relocation);
+}
+
+TEST(SeedFromImports, LeavesOutDataAndPositionsTheModuleDoesNotHave) {
+    const std::vector<ctr::CroSegmentTag> imported = {
+        Position(1, 0x40), Position(0, SegmentSize), Position(UnknownSegmentRawType, 0)};
+
+    EXPECT_TRUE(SeedFromImports(StaticHeader(), imported).empty());
+}
+
 }  // namespace
 }  // namespace hexlith::domain::analysis

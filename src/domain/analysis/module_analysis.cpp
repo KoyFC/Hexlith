@@ -112,14 +112,8 @@ core::Result<ModuleAnalysis> AnalyzeModule(const linker::CroModule& static_modul
 
     // A position another module imports from this one's code is an entry point
     // the module offers, whether or not it has a name.
-    for (const ctr::CroSegmentTag tag : request.imported_by_others) {
-        const core::Result<std::size_t> position =
-            ctr::ResolveCroSegmentTag(header, tag, "a position another module imports");
-        if (!position || !code->Contains(static_cast<std::uint32_t>(position.Value()))) {
-            continue;
-        }
-        seeds.push_back(
-            SeedAt(static_cast<std::uint32_t>(position.Value()), Provenance::Relocation));
+    for (const WalkSeed& seed : SeedFromImports(header, request.imported_by_others)) {
+        seeds.push_back(seed);
         ++analysis.report.imported_positions;
     }
 

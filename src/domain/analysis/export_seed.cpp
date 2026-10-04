@@ -81,4 +81,27 @@ core::Result<SeededTables> SeedFromExports(const ctr::CroHeader& header,
     return seeded;
 }
 
+std::vector<WalkSeed> SeedFromImports(const ctr::CroHeader& exporter,
+                                      std::span<const ctr::CroSegmentTag> imported) {
+    std::vector<WalkSeed> seeds;
+    for (const ctr::CroSegmentTag tag : imported) {
+        const core::Result<std::size_t> position =
+            ctr::ResolveCroSegmentTag(exporter, tag, "an imported position");
+        if (!position) {
+            continue;
+        }
+        const ctr::CroSegment& segment = exporter.segments.at(tag.SegmentIndex());
+        if (KindOf(segment) != SymbolKind::Function) {
+            continue;
+        }
+        const auto value = static_cast<std::uint32_t>(position.Value());
+        const bool thumb = (value & InterworkingBit) != 0;
+        seeds.push_back(WalkSeed{.address = value & ~InterworkingBit,
+                                 .instruction_set =
+                                     thumb ? arm::InstructionSet::Thumb : arm::InstructionSet::Arm,
+                                 .source = Provenance::Relocation});
+    }
+    return seeds;
+}
+
 }  // namespace hexlith::domain::analysis

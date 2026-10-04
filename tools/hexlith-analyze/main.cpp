@@ -93,30 +93,41 @@ std::vector<std::filesystem::path> ModuleFiles(const std::filesystem::path& romf
 
 core::Result<core::ByteSpan> ReadFile(adapters::FileRomSource& source);
 
-int AnalyzeTheModules(const std::filesystem::path& extraction,
-                      const std::filesystem::path& output,
-                      core::ByteSpan static_module,
-                      adapters::DirectoryBlobSink& writing) {
+// The loadable modules, read once and kept open for both passes.
+struct Modules {
     std::vector<std::unique_ptr<adapters::FileRomSource>> sources;
-    std::vector<core::ByteSpan> modules;
-    application::ExistingModuleTables existing;
-    for (const std::filesystem::path& file : ModuleFiles(extraction / RomFsDirectory)) {
-        sources.push_back(std::make_unique<adapters::FileRomSource>(file));
-        const core::Result<core::ByteSpan> bytes = ReadFile(*sources.back());
-        if (!bytes) {
-            Report(bytes.Failure().Message());
-            return Failure;
-        }
-        modules.push_back(bytes.Value());
+    std::vector<core::ByteSpan> bytes;
+    std::vector<std::string> names;
+};
 
-        // The tables of a module are kept under its file name, which in the
-        // reference title is always its module name.
-        const std::string name = file.stem().string();
+core::Result<Modules> ReadModules(const std::filesystem::path& romfs) {
+    Modules modules;
+    for (const std::filesystem::path& file : ModuleFiles(romfs)) {
+        modules.sources.push_back(std::make_unique<adapters::FileRomSource>(file));
+        const core::Result<core::ByteSpan> bytes = ReadFile(*modules.sources.back());
+        if (!bytes) {
+            return bytes.Failure();
+        }
+        modules.bytes.push_back(bytes.Value());
+        modules.names.push_back(file.stem().string());
+    }
+    return modules;
+}
+
+int AnalyzeTheModules(const std::filesystem::path& output,
+                      core::ByteSpan static_module,
+                      const Modules& modules,
+                      adapters::DirectoryBlobSink& writing) {
+    // The tables of a module are kept under its file name, which in the
+    // reference title is always its module name.
+    application::ExistingModuleTables existing;
+    for (const std::string& name : modules.names) {
         existing.emplace(name, ReadExistingTables(output / application::ModulesDirectory / name));
     }
 
     const core::Result<application::AnalyzeModulesReport> report = application::AnalyzeModules(
-        application::AnalyzeModulesRequest{.static_module = static_module, .modules = modules},
+        application::AnalyzeModulesRequest{.static_module = static_module,
+                                           .modules = modules.bytes},
         existing,
         writing);
     if (!report) {
@@ -204,8 +215,15 @@ int Run(const application::AnalyzeOptions& options) {
 
     const application::ExistingTables existing = ReadExistingTables(output);
 
+    const core::Result<Modules> modules = ReadModules(extraction / RomFsDirectory);
+    if (!modules) {
+        Report(modules.Failure().Message());
+        return Failure;
+    }
+
     const application::AnalyzeRequest request{.code = code_bytes.Value(),
                                               .static_module = module_bytes.Value(),
+                                              .modules = modules.Value().bytes,
                                               .profile = chosen,
                                               .sweep_data_for_entry_points = !options.no_sweep};
 
@@ -217,7 +235,7 @@ int Run(const application::AnalyzeOptions& options) {
     }
 
     std::cout << application::RenderAnalyzeSummary(report.Value());
-    return AnalyzeTheModules(extraction, output, module_bytes.Value(), writing);
+    return AnalyzeTheModules(output, module_bytes.Value(), modules.Value(), writing);
 }
 
 int Main(std::span<char* const> arguments) {

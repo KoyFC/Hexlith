@@ -2,6 +2,7 @@
 #define HEXLITH_DOMAIN_ANALYSIS_EXPORT_SEED_H
 
 #include "core/result.h"
+#include "domain/analysis/code_walk.h"
 #include "domain/analysis/tables.h"
 #include "domain/ctr/cro.h"
 
@@ -38,6 +39,18 @@ struct SeededTables {
 // records and the header did not come from the same module.
 core::Result<SeededTables> SeedFromExports(const ctr::CroHeader& header,
                                            std::span<const ctr::CroNamedExport> exports);
+
+// Turns positions that other modules import from a module into walk seeds in
+// that module's address space: the ones in code, with the instruction set the
+// interworking bit of each position gives.
+//
+// An import is a reference the console's loader resolves, so a position in code
+// that something imports is an entry point as surely as an export is, whether
+// or not it has a name. In this title it never has: every import is by position.
+// A position that resolves nowhere in the module is left out, and so is one in
+// data, which is an object rather than an entry point.
+std::vector<WalkSeed> SeedFromImports(const ctr::CroHeader& exporter,
+                                      std::span<const ctr::CroSegmentTag> imported);
 
 }  // namespace hexlith::domain::analysis
 

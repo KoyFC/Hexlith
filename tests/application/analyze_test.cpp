@@ -3,6 +3,7 @@
 #include "support/memory_workspace.h"
 #include "support/synthetic_cro.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <gtest/gtest.h>
 #include <string>
@@ -97,6 +98,7 @@ AnalyzeRequest Request(const std::vector<std::uint8_t>& code,
                        const profile::GameProfile& chosen) {
     return AnalyzeRequest{.code = code,
                           .static_module = module,
+                          .modules = {},
                           .profile = &chosen,
                           .sweep_data_for_entry_points = true};
 }
@@ -151,6 +153,45 @@ TEST(Analyze, RecordsAFunctionAtEverySeedEvenIfNothingCallsIt) {
     EXPECT_EQ(first.address, TextAddress);
     EXPECT_GT(first.size, 0U);
     EXPECT_EQ(first.source, analysis::Provenance::ExHeader);
+}
+
+// The word at 0x0010000C is a return nothing in the image reaches. A module
+// that imports that position makes it an entry point.
+TEST(Analyze, SeedsTheMainExecutableWithWhatTheModulesImportFromIt) {
+    constexpr std::uint32_t ImportedReturn = 0xC;
+    constexpr std::size_t ModuleCodeSize = 0x10;
+
+    const std::vector<std::uint8_t> code = CodeImage();
+    const std::vector<std::uint8_t> static_module = StaticModule();
+    const profile::GameProfile chosen = TestProfile();
+
+    SyntheticCroSpec spec;
+    spec.name = "DllImporter";
+    spec.segments = {
+        SyntheticCroSegment{.type = ctr::CroSegmentType::Code, .size = ModuleCodeSize}};
+    spec.import_modules = {test::ImportsFrom(
+        "|static|",
+        {test::AnonymousImport(
+            0, ImportedReturn, {test::SyntheticCroRelocation{.segment_index = 0}})})};
+    const std::vector<std::uint8_t> importer = BuildSyntheticCro(spec);
+    const std::vector<core::ByteSpan> modules = {core::ByteSpan{importer}};
+
+    AnalyzeRequest request = Request(code, static_module, chosen);
+    request.modules = modules;
+
+    MemoryBlobSink sink;
+    const core::Result<AnalyzeReport> report = Analyze(request, ExistingTables{}, sink);
+    ASSERT_TRUE(report.Ok()) << report.Failure().Message();
+    EXPECT_EQ(report.Value().imported_functions, 1U);
+
+    const core::Result<std::vector<analysis::FunctionRange>> functions =
+        analysis::ParseFunctions(sink.Text(analysis::FunctionsFileName).value_or(""));
+    ASSERT_TRUE(functions.Ok()) << functions.Failure().Message();
+    const bool found = std::ranges::any_of(functions.Value(), [](const auto& function) {
+        return function.address == TextAddress + ImportedReturn &&
+               function.source == analysis::Provenance::Relocation;
+    });
+    EXPECT_TRUE(found);
 }
 
 TEST(Analyze, ReachesWhatOnlyTheSweepCanFind) {

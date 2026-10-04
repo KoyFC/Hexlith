@@ -89,6 +89,21 @@ Until Phase 4 the seeds were walked but not measured. The pass that measures whe
 
 Reach does not change, because the code was walked either way.
 
+### Seeds from the modules' imports
+
+The CRO modules import 4,955 distinct positions in the main executable's code, 21 of them Thumb, and each one is an entry point the loader resolves when a module is loaded. Only 1,103 of them were inside code the walk had reached. They are facts in the way the exports are, so they are seeds with `source=relocation`:
+
+| | Before | After |
+| --- | --- | --- |
+| Text segment reached | 61.1 percent | 80.4 percent |
+| Functions | 12,008 | 17,308 |
+| Instruction set conflicts | 10 | 25 |
+| Stops at a word that is not an instruction | 9 | 14 |
+
+The conflicts rose, and they were read rather than counted. The 25 reports are 14 addresses, one of them reported eleven times. 24 of the 25 come from a path seeded by the heuristics: a call target or a literal pointer followed for its value. The one that comes from an import is at `0x00100184`, which a module imports as ARM and which a heuristic path had already walked as Thumb, so it is the heuristic path that is wrong. No position is imported both as ARM and as Thumb, and none imported as ARM is misaligned.
+
+Without the sweep of data, the imports and the exports together reach 43.4 percent, against 10.5 for the exports alone.
+
 ## Where each function ends
 
 The classification pass answers where functions start. The gap to the next one is not where they end: a function is followed by whatever the linker put next, which may be padding, a literal pool, or a function nothing has found yet.
@@ -183,7 +198,7 @@ The tables are written beside the extraction and not into this repository. [ADR 
 
 ## What is not done yet
 
-**The 39 percent the walk does not reach.** Some of it is code reached through a dispatch the analysis cannot follow, some is data, and nothing here can say which without more work. The honest form of that is a gap in the tables.
+**The 20 percent the walk does not reach.** Some of it is code reached through a dispatch the analysis cannot follow, some is data, and nothing here can say which without more work. The honest form of that is a gap in the tables.
 
 **Jump tables.** A computed branch through a table ends a path. The tables are not found, the entries are not followed, and no region is marked as one. This is the largest single gap and the hardest case, which is why [ADR 0006](adr/0006-analysis-layer-format.md) gave `jump-table` a region kind of its own before anything could produce one.
 

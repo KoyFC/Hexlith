@@ -3,8 +3,12 @@
 #include "domain/analysis/export_seed.h"
 #include "domain/analysis/tables.h"
 #include "domain/ctr/cro.h"
+#include "domain/ctr/cro_link_tables.h"
+#include "domain/ctr/layout.h"
 
 #include <format>
+#include <set>
+#include <span>
 #include <vector>
 
 namespace hexlith::application {
@@ -12,6 +16,35 @@ namespace {
 
 namespace analysis = domain::analysis;
 namespace ctr = domain::ctr;
+
+// Every position in the static module that a loadable module imports, once.
+core::Result<std::vector<ctr::CroSegmentTag>>
+PositionsImportedFromStatic(std::span<const core::ByteSpan> modules) {
+    std::set<std::uint32_t> seen;
+    std::vector<ctr::CroSegmentTag> positions;
+    for (const core::ByteSpan file : modules) {
+        const core::Result<ctr::CroHeader> header = ctr::ParseCroHeader(file);
+        if (!header) {
+            return header.Failure();
+        }
+        const core::Result<ctr::CroLinkTables> tables =
+            ctr::ReadCroLinkTables(file, header.Value());
+        if (!tables) {
+            return tables.Failure().WithContext(header.Value().name);
+        }
+        for (const ctr::CroImportModule& from : tables.Value().import_modules) {
+            if (from.name != ctr::cro::StaticModuleName) {
+                continue;
+            }
+            for (const ctr::CroAnonymousImport& entry : from.anonymous) {
+                if (seen.insert(entry.position.raw).second) {
+                    positions.push_back(entry.position);
+                }
+            }
+        }
+    }
+    return positions;
+}
 
 }  // namespace
 
@@ -70,6 +103,18 @@ Analyze(const AnalyzeRequest& request, const ExistingTables& existing, ports::Bl
                                            .instruction_set = function.instruction_set,
                                            .source = analysis::Provenance::CrsExport});
     }
+
+    // What the modules import from the main executable's code. These are facts
+    // the loader acts on, unlike the words the sweep below guesses at.
+    const core::Result<std::vector<ctr::CroSegmentTag>> imported =
+        PositionsImportedFromStatic(request.modules);
+    if (!imported) {
+        return imported.Failure();
+    }
+    const std::vector<analysis::WalkSeed> imported_seeds =
+        analysis::SeedFromImports(header.Value(), imported.Value());
+    report.imported_functions = imported_seeds.size();
+    seeds.insert(seeds.end(), imported_seeds.begin(), imported_seeds.end());
 
     const auto image_end = static_cast<std::uint32_t>(profile.text.address + request.code.size());
     analysis::WalkOptions options;
@@ -135,6 +180,8 @@ std::string RenderAnalyzeSummary(const AnalyzeReport& report) {
     text.append(std::format("{} exported symbol(s), {} of them functions\n",
                             report.exported_symbols,
                             report.exported_functions));
+    text.append(
+        std::format("{} position(s) in code imported by the modules\n", report.imported_functions));
     text.append(std::format("{} instruction(s) decoded from {} seed(s)\n",
                             report.walk.instructions,
                             report.walk.seeds_followed));

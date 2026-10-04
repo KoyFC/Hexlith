@@ -10,6 +10,7 @@
 #include "domain/profile/game_profile.h"
 #include "ports/blob_sink.h"
 
+#include <span>
 #include <string>
 
 namespace hexlith::application {
@@ -29,6 +30,11 @@ struct AnalyzeRequest {
     // static.crs out of the RomFS, for the only names the cartridge gives away.
     core::ByteSpan static_module;
 
+    // The loadable modules out of the RomFS. Each says which positions in the
+    // main executable it imports, and a position in code that a module calls
+    // through is an entry point. May be empty.
+    std::span<const core::ByteSpan> modules;
+
     const domain::profile::GameProfile* profile = nullptr;
 
     // Whether to sweep read-only data and data for words that look like the
@@ -40,6 +46,10 @@ struct AnalyzeRequest {
 struct AnalyzeReport {
     std::size_t exported_symbols = 0;
     std::size_t exported_functions = 0;
+
+    // Positions in the main executable's code that the modules import, each
+    // one counted once.
+    std::size_t imported_functions = 0;
 
     domain::analysis::WalkReport walk;
     domain::analysis::BoundsReport bounds;
