@@ -62,6 +62,10 @@ public:
 
     [[nodiscard]] bool Holds(std::string_view path) const;
 
+    // The contents of one file as text, for a use case whose output is a table
+    // rather than a blob. Nothing comes back when it was not written.
+    [[nodiscard]] std::optional<std::string> Text(std::string_view path) const;
+
     void FailOn(std::string path) {
         fail_on_ = std::move(path);
     }

@@ -64,4 +64,8 @@ core::Result<application::Workspace> LocateWorkspace(const WorkspaceArguments& a
     return application::ResolveWorkspace(GatherWorkspaceInputs(arguments));
 }
 
+core::Result<application::ResolvedPath> LocateWorkDirectory(const WorkspaceArguments& arguments) {
+    return application::ResolveWorkDirectory(GatherWorkspaceInputs(arguments));
+}
+
 }  // namespace hexlith::adapters::filesystem

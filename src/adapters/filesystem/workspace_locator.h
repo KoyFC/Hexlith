@@ -24,6 +24,8 @@ application::WorkspaceInputs GatherWorkspaceInputs(const WorkspaceArguments& arg
 
 core::Result<application::Workspace> LocateWorkspace(const WorkspaceArguments& arguments);
 
+core::Result<application::ResolvedPath> LocateWorkDirectory(const WorkspaceArguments& arguments);
+
 }  // namespace hexlith::adapters::filesystem
 
 #endif  // HEXLITH_ADAPTERS_FILESYSTEM_WORKSPACE_LOCATOR_H

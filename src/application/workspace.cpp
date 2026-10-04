@@ -94,6 +94,41 @@ std::string_view Describe(PathSource source) {
     return "an unknown source";
 }
 
+core::Result<ResolvedPath> ResolveWorkDirectory(const WorkspaceInputs& inputs) {
+    std::vector<KeyValue> configured;
+    if (inputs.configuration_text.has_value()) {
+        core::Result<std::vector<KeyValue>> parsed =
+            core::ParseKeyValueText(*inputs.configuration_text);
+        if (!parsed) {
+            return parsed.Failure().WithContext(inputs.configuration_path.string());
+        }
+        configured = std::move(parsed.Value());
+    }
+
+    const auto describe_configuration = [&inputs](std::string_view key) {
+        if (!inputs.configuration_text.has_value()) {
+            return std::format("{}, which does not exist", inputs.configuration_path.string());
+        }
+        return std::format("{} in {}", key, inputs.configuration_path.string());
+    };
+
+    return FirstProvided("work directory",
+                         {
+                             Candidate{.description = "the --work-dir argument",
+                                       .value = inputs.work_directory_argument,
+                                       .source = PathSource::CommandLine,
+                                       .must_be_absolute = false},
+                             Candidate{.description = std::string{WorkDirectoryVariable},
+                                       .value = inputs.work_directory_variable,
+                                       .source = PathSource::Environment,
+                                       .must_be_absolute = true},
+                             Candidate{.description = describe_configuration(WorkDirectoryKey),
+                                       .value = ConfiguredValue(configured, WorkDirectoryKey),
+                                       .source = PathSource::ConfigurationFile,
+                                       .must_be_absolute = true},
+                         });
+}
+
 core::Result<Workspace> ResolveWorkspace(const WorkspaceInputs& inputs) {
     std::vector<KeyValue> configured;
     if (inputs.configuration_text.has_value()) {
@@ -134,22 +169,7 @@ core::Result<Workspace> ResolveWorkspace(const WorkspaceInputs& inputs) {
         return rom_directory.Failure();
     }
 
-    core::Result<ResolvedPath> work_directory =
-        FirstProvided("work directory",
-                      {
-                          Candidate{.description = "the --work-dir argument",
-                                    .value = inputs.work_directory_argument,
-                                    .source = PathSource::CommandLine,
-                                    .must_be_absolute = false},
-                          Candidate{.description = std::string{WorkDirectoryVariable},
-                                    .value = inputs.work_directory_variable,
-                                    .source = PathSource::Environment,
-                                    .must_be_absolute = true},
-                          Candidate{.description = describe_configuration(WorkDirectoryKey),
-                                    .value = ConfiguredValue(configured, WorkDirectoryKey),
-                                    .source = PathSource::ConfigurationFile,
-                                    .must_be_absolute = true},
-                      });
+    const core::Result<ResolvedPath> work_directory = ResolveWorkDirectory(inputs);
     if (!work_directory) {
         return work_directory.Failure();
     }

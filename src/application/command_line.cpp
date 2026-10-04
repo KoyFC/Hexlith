@@ -12,6 +12,9 @@ constexpr std::string_view WorkDirectoryOption = "--work-dir";
 constexpr std::string_view ImageOption = "--image";
 constexpr std::string_view AllowMismatchOption = "--allow-mismatch";
 constexpr std::string_view HelpOption = "--help";
+constexpr std::string_view ExtractionOption = "--extraction";
+constexpr std::string_view OutputOption = "--out";
+constexpr std::string_view NoSweepOption = "--no-sweep";
 
 core::Status TakeValue(std::span<const std::string_view> arguments,
                        std::size_t& index,
@@ -72,6 +75,68 @@ core::Result<ExtractOptions> ParseExtractCommandLine(std::span<const std::string
     }
 
     return options;
+}
+
+core::Result<AnalyzeOptions> ParseAnalyzeCommandLine(std::span<const std::string_view> arguments) {
+    AnalyzeOptions options;
+
+    for (std::size_t index = 0; index < arguments.size(); ++index) {
+        const std::string_view argument = arguments[index];
+
+        if (argument == HelpOption || argument == "-h") {
+            options.help = true;
+            continue;
+        }
+        if (argument == NoSweepOption) {
+            options.no_sweep = true;
+            continue;
+        }
+
+        core::Status taken;
+        if (argument == WorkDirectoryOption) {
+            taken = TakeValue(arguments, index, options.work_directory);
+        } else if (argument == ExtractionOption) {
+            taken = TakeValue(arguments, index, options.extraction);
+        } else if (argument == OutputOption) {
+            taken = TakeValue(arguments, index, options.output);
+        } else if (argument.starts_with("-")) {
+            return core::Error{std::format("{} is not an option this tool knows", argument)};
+        } else {
+            return core::Error{std::format(
+                "'{}' is not an option. Every path is given with the option it belongs to",
+                argument)};
+        }
+
+        if (!taken) {
+            return taken.Failure();
+        }
+    }
+
+    return options;
+}
+
+std::string AnalyzeUsage() {
+    return std::format(
+        "hexlith-analyze: reads an extraction and writes the analysis tables of ADR 0006.\n"
+        "\n"
+        "  {} <path>     where the extraction lives\n"
+        "  {} <path>   a specific extraction directory, instead of the profile's\n"
+        "  {} <path>          where the tables are written\n"
+        "  {}            leave out the sweep of data for entry points\n"
+        "  {}                this text\n"
+        "\n"
+        "The work directory is taken from the command line first, then from {},\n"
+        "then from the configuration file, the same way hexlith-extract takes it.\n"
+        "\n"
+        "The tables are written beside the extraction and not into this repository. A\n"
+        "table belongs in the repository once it holds something nothing can derive\n"
+        "again, which is a decision for a person and not for a tool.\n",
+        WorkDirectoryOption,
+        ExtractionOption,
+        OutputOption,
+        NoSweepOption,
+        HelpOption,
+        WorkDirectoryVariable);
 }
 
 std::string ExtractUsage() {

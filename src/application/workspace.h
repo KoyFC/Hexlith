@@ -63,6 +63,11 @@ struct WorkspaceInputs {
 // location and writes extracted content next to whatever it was run from.
 core::Result<Workspace> ResolveWorkspace(const WorkspaceInputs& inputs);
 
+// The work directory alone, for a tool that reads what an extraction produced and
+// never touches the cartridge. Demanding a ROM directory it will not read would
+// make a tool fail over a path that has nothing to do with it.
+core::Result<ResolvedPath> ResolveWorkDirectory(const WorkspaceInputs& inputs);
+
 // Where workspace.conf lives, given the two environment variables that
 // decide it. XDG_CONFIG_HOME wins, and $HOME/.config is the fallback the
 // specification names. Nothing comes back when neither is set, which means

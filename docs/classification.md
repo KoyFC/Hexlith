@@ -98,6 +98,20 @@ An average of 205 bytes, nothing over 6.5 KB, and eight overlaps out of 11,824. 
 
 The 188 KB between the code the walk reached and the code attributed to a function is reached by falling into a region from outside any function this pass knows about, which is a gap worth closing rather than a discrepancy.
 
+## Running it
+
+```sh
+hexlith-analyze --work-dir ~/recomp-data/work
+```
+
+It reads `exefs/.code` and `romfs/static.crs` out of the extraction and writes the four tables into a directory beside it. It never touches the cartridge, so it asks for the work directory alone and not for the ROM directory.
+
+The whole pass takes under half a second on the reference image, which matters more than it sounds: an analysis that takes an hour gets run once and trusted, and one that takes half a second gets run after every change and compared with the run before it.
+
+Two properties hold and the tests hold them. Running it twice writes identical bytes. Editing a record by hand and running it again keeps the edit, and the derived records for that address give way to it, which is the rule [`analysis-tables.md`](analysis-tables.md) describes.
+
+The tables are written beside the extraction and not into this repository. [ADR 0005](adr/0005-game-profile-design.md) puts a profile's text tables under `data/profiles/`, and `symbols.txt` is the one that belongs there, because a name a person worked out is the only thing here that cannot be derived again. The other three are regenerated from the image in half a second and are several hundred kilobytes each, which is what the game data guard's size limit is for. Putting one of them in the repository is a decision for a person, and the tool does not make it.
+
 ## What is not done yet
 
 **The 41 percent the walk does not reach.** Some of it is code reached through a dispatch the analysis cannot follow, some is data, and nothing here can say which without more work. The honest form of that is a gap in the tables.

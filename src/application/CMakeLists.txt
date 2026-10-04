@@ -1,5 +1,7 @@
 add_library(
     hexlith_application STATIC
+    analyze.cpp
+    analyze.h
     command_line.cpp
     command_line.h
     extract.cpp

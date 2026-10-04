@@ -44,6 +44,14 @@ std::string MemoryBlobSink::Describe() const {
     return "a workspace held in memory";
 }
 
+std::optional<std::string> MemoryBlobSink::Text(std::string_view path) const {
+    const auto found = files_.find(std::string{path});
+    if (found == files_.end()) {
+        return std::nullopt;
+    }
+    return std::string{found->second.begin(), found->second.end()};
+}
+
 bool MemoryBlobSink::Holds(std::string_view path) const {
     return files_.contains(std::string{path});
 }
