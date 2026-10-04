@@ -241,7 +241,10 @@ TEST(ParseCroHeader, RefusesAModuleWithNoName) {
 
 TEST(ParseCroHeader, RefusesANameThatIsNotText) {
     std::vector<std::uint8_t> module = BuildSyntheticCro(DefaultCroSpec());
-    module[cro::HeaderSize + 1] = 0x01;
+    const std::size_t name_at =
+        core::ReadU32At(core::ByteSpan{module}, cro::FieldOffset(cro::ModuleNameOffsetField))
+            .Value();
+    module[name_at + 1] = 0x01;
 
     const core::Result<CroHeader> header = ParseCroHeader(core::ByteSpan{module});
     ASSERT_FALSE(header.Ok());

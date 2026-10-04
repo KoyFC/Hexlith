@@ -4,6 +4,8 @@ target_sources(
             backwards_lzss.h
             cro.cpp
             cro.h
+            cro_link_tables.cpp
+            cro_link_tables.h
             exefs.cpp
             exefs.h
             exheader.cpp

@@ -112,3 +112,9 @@ scripts/read_ldr_ro_trace.py ~/recomp-data/work/<id>/traces/<run>.txt
 **The game chooses the address.** The request of `LoadCRO` carries the address the module is to be mapped at, and the buffers for its data and BSS, chosen by the calling process. Source: 3dbrew, `RO:LoadExeCRO`, request words 2, 4 and 7. Azahar maps the module where it is told and logs the result. The reimplementation will do the same.
 
 The run also logged which services the game reached and which Azahar stubs, among them DSP, FS, FRD, NDM, PTM, APT and `nwm::UDS`. That is input for the service work of a later phase and is not analysed here.
+
+## What the debug level adds
+
+With `log_filter` set to `*:Info Service.LDR:Debug`, `LoadCRO` also logs its request: the address of the file buffer, the address the module is mapped at, the data and BSS buffers with their sizes, the fix level, and which of the two commands was called. A boot to the start menu captured that way on 2026-10-04 shows four loads, every one through the original command, `LoadCRO`, and none through `LoadCRO_New`. Source for the line: `LoadCRO` in Azahar's `ldr_ro.cpp`, which prints `old` or `new`.
+
+The difference between the two commands is a bug the newer one fixes, described in [`formats/cro0.md`](formats/cro0.md) under the relocations read from the reference image, and it cannot affect this title.

@@ -33,14 +33,9 @@ struct CroSegment {
     bool type_known = false;
 };
 
-// How many entries each table of the module declares.
-//
-// Phase 1 records the counts and does not walk the tables. The counts are
-// plain header fields and need no interpretation; the entry layouts of the
-// relocation and import tables are not recorded in docs/formats/ yet, and
-// nothing is read from a format this project has not written down. They are
-// needed by the lifter and by the ldr:ro reimplementation, which is where
-// they will be verified and documented.
+// How many entries each table of the module declares, as plain header fields.
+// The entries of the tables the loader links with are read by
+// ReadCroLinkTables in cro_link_tables.h.
 struct CroTableCounts {
     std::size_t segments = 0;
     std::size_t named_exports = 0;
@@ -145,6 +140,17 @@ core::Result<std::vector<CroNamedExport>> ReadCroNamedExports(core::ByteSpan mod
 // makes it an entry point worth knowing about.
 core::Result<std::vector<CroIndexedExport>> ReadCroIndexedExports(core::ByteSpan module,
                                                                   const CroHeader& header);
+
+// Where a segment tag lands: the segment's own offset plus the distance into
+// it, in whatever space the segment offsets are in.
+//
+// The two refusals are the two the console's loader makes: SegmentTagToAddress
+// in cro_helper.cpp answers address zero for a segment index past the end of
+// the table and for an offset that reaches the end of its segment, and the
+// loader treats address zero as nothing there. The description names the tag
+// in the failure.
+core::Result<std::size_t>
+ResolveCroSegmentTag(const CroHeader& header, CroSegmentTag tag, std::string_view what);
 
 // Whether a file out of the RomFS is a module of the CRO family at all,
 // decided by the magic the format puts at 0x80 rather than by the extension.

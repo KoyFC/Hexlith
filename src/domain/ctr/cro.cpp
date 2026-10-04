@@ -99,35 +99,6 @@ core::Result<std::vector<CroSegment>> ReadSegments(core::ByteSpan module, bool s
     return segments;
 }
 
-// Where a segment tag lands, or why it lands nowhere.
-//
-// The two refusals are the two the console's loader makes: SegmentTagToAddress
-// in cro_helper.cpp answers address zero for a segment index past the end of
-// the table and for an offset that reaches past the end of its segment, and a
-// symbol at address zero is not a symbol.
-core::Result<std::size_t>
-ResolveSegmentTag(const CroHeader& header, CroSegmentTag tag, std::string_view what) {
-    const std::uint32_t index = tag.SegmentIndex();
-    if (index >= header.segments.size()) {
-        return core::Error{std::format("{} sits in segment {}, and the module declares {}",
-                                       what,
-                                       index,
-                                       header.segments.size())};
-    }
-
-    const CroSegment& segment = header.segments.at(index);
-    if (tag.OffsetInSegment() >= segment.size) {
-        return core::Error{
-            std::format("{} sits {:#x} bytes into segment {}, which is {:#x} bytes long",
-                        what,
-                        tag.OffsetInSegment(),
-                        index,
-                        segment.size)};
-    }
-
-    return segment.offset + tag.OffsetInSegment();
-}
-
 CroTableCounts ReadCounts(core::ByteSpan module) {
     CroTableCounts counts;
     counts.segments = Field(module, cro::SegmentCountField);
@@ -169,6 +140,29 @@ std::size_t CroHeader::SegmentBytes(CroSegmentType wanted) const {
         }
     }
     return total;
+}
+
+core::Result<std::size_t>
+ResolveCroSegmentTag(const CroHeader& header, CroSegmentTag tag, std::string_view what) {
+    const std::uint32_t index = tag.SegmentIndex();
+    if (index >= header.segments.size()) {
+        return core::Error{std::format("{} sits in segment {}, and the module declares {}",
+                                       what,
+                                       index,
+                                       header.segments.size())};
+    }
+
+    const CroSegment& segment = header.segments.at(index);
+    if (tag.OffsetInSegment() >= segment.size) {
+        return core::Error{
+            std::format("{} sits {:#x} bytes into segment {}, which is {:#x} bytes long",
+                        what,
+                        tag.OffsetInSegment(),
+                        index,
+                        segment.size)};
+    }
+
+    return segment.offset + tag.OffsetInSegment();
 }
 
 bool LooksLikeCroModule(core::ByteSpan file) {
@@ -294,7 +288,7 @@ core::Result<std::vector<CroNamedExport>> ReadCroNamedExports(core::ByteSpan mod
         const CroSegmentTag tag{
             .raw = core::ReadU32At(module, entry + cro::NamedExportPositionOffset).Value()};
         const core::Result<std::size_t> position =
-            ResolveSegmentTag(header, tag, std::format("the export '{}'", name.Value()));
+            ResolveCroSegmentTag(header, tag, std::format("the export '{}'", name.Value()));
         if (!position) {
             return position.Failure();
         }
@@ -325,7 +319,7 @@ core::Result<std::vector<CroIndexedExport>> ReadCroIndexedExports(core::ByteSpan
         const CroSegmentTag tag{.raw = core::ReadU32At(module, entry).Value()};
 
         const core::Result<std::size_t> position =
-            ResolveSegmentTag(header, tag, std::format("indexed export {}", index));
+            ResolveCroSegmentTag(header, tag, std::format("indexed export {}", index));
         if (!position) {
             return position.Failure();
         }

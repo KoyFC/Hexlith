@@ -87,7 +87,16 @@ Its segment offsets are absolute virtual addresses, not file offsets, because th
 
 ## Relocations
 
-A relocation entry carries a target position, a type, two batch flags and an addend.
+Three tables hold relocations, and all three use 12-byte entries. Source: `RelocationEntry`, `ExternalRelocationEntry`, `StaticRelocationEntry` and `InternalRelocationEntry` in `cro_helper.h`.
+
+| Offset | Size | External and static | Internal |
+| --- | --- | --- | --- |
+| 0x0 | 4 | Position patched, a segment tag | Position patched, a segment tag |
+| 0x4 | 1 | Type | Type |
+| 0x5 | 1 | Last entry of its batch | Index of the segment the word points into |
+| 0x6 | 1 | Batch resolved | Padding |
+| 0x7 | 1 | Padding | Padding |
+| 0x8 | 4 | Addend | Addend |
 
 | Type | Meaning |
 | --- | --- |
@@ -100,11 +109,47 @@ A relocation entry carries a target position, a type, two batch flags and an add
 | 38 | Absolute address, second form |
 | 42 | Aligned relative address |
 
-Internal relocations point within the module. External relocations point at a symbol in another module and are resolved when that module is present.
+What a type does is given by `ApplyRelocation` in `cro_helper.cpp`, and it gives it for four of them. An absolute address, either form, writes the symbol's address plus the addend. A relative address writes the symbol's address plus the addend minus the address of the word being written. Nothing writes nothing. The four branch and aligned forms are marked unimplemented there, and no other source this project has read describes them.
 
-The batch flags matter: relocations are grouped, and the loader resolves a batch as a unit and records whether it succeeded, so that an unresolved import can be patched later when the module providing it loads.
+**An internal relocation** patches a word in the module with the address of something else in the module. It names its target only down to a segment, by index in byte 5, and the loader writes that segment's address plus the addend, so the addend holds the distance into the segment. `ApplyInternalRelocations` is the source.
 
-**This is the mechanism that makes CRO the project's hardest problem.** The addresses a module's code uses are not known until load time, and the resolution of a cross-module call depends on which modules happen to be loaded. A lifter that bakes an address into generated C++ is betting that the address will be the same every time. If that bet is wrong, the generated code calls the wrong function and the failure appears far from its cause. ADR 0004 records how Hexlith handles this.
+**An external relocation** patches a word with the address of a symbol in another module. External relocations come in batches: a run of consecutive entries that all receive the same symbol, the last of which has byte 5 set. An import names its batch by the file offset of the batch's first entry, and the loader patches each entry until it reaches the one marked last (`ApplyRelocationBatch`). Byte 6 of the first entry is set once the batch has been resolved, which is how the loader avoids resolving a named import twice and how it knows what to undo when the exporting module goes away.
+
+Before any import is resolved, the loader writes every external relocation as though it had resolved to the module's OnUnresolved hook (`ResetExternalRelocations`). An import whose module is never loaded therefore leaves its words pointing at that hook. A module with no hook leaves them holding the addend alone, because a tag that resolves nowhere is address zero.
+
+**A static relocation** has the external layout but patches the static module, so its position is in the static module's segments and not in the module that declares it. It is the receiving end of a static anonymous symbol, below.
+
+**This is the mechanism that makes CRO the project's hardest problem.** The addresses a module's code uses are not known until load time, and the resolution of a cross-module reference depends on which modules happen to be loaded. A lifter that bakes an address into generated C++ is betting that the address will be the same every time, and ADR 0004 records the trace that showed it is not.
+
+## Import tables
+
+| Table | Entry | Size | Source |
+| --- | --- | --- | --- |
+| Import modules | Name offset, indexed slice offset and count, anonymous slice offset and count | 20 bytes | `ImportModuleEntry` |
+| Named imports | Name offset, batch offset | 8 bytes | `ImportNamedSymbolEntry` |
+| Indexed imports | Export index in the exporting module, batch offset | 8 bytes | `ImportIndexedSymbolEntry` |
+| Anonymous imports | Position in the exporting module, batch offset | 8 bytes | `ImportAnonymousSymbolEntry` |
+| Static anonymous symbols | Position in this module, static batch offset | 8 bytes | `StaticAnonymousSymbolEntry` |
+
+Every offset in these entries is a file offset, rebased by the module address along with the header (`RebaseImportModuleTable` and the functions after it). A name offset lands in the import string table. A batch offset lands in the external relocation table, or in the static relocation table for a static anonymous symbol.
+
+**A named import** is looked for by name in every module the loader links with, in the order they were registered with the static module first, and the first module that exports the name supplies it (`ApplyImportNamedSymbol`). It belongs to no particular module. One name is special: an import of `__aeabi_atexit` is resolved against an export named `nnroAeabiAtexit_` instead (`ApplyExitRelocations`).
+
+**Indexed and anonymous imports** belong to an import module entry, which names the module and gives the slice of the indexed import table and the slice of the anonymous import table that come from it. When that module is loaded, the loader resolves an indexed import through the exporter's indexed export table, and an anonymous one by resolving its position against the exporter's segments directly (`ApplyModuleImport`, and `ApplyModuleExport` when the importer was loaded first). An anonymous import is how a module refers to something in another module that was never given a name.
+
+**A static anonymous symbol** is the reverse: a position in this module that the loader writes into the static module's own relocations. Azahar notes that no game is known to use them.
+
+## Hooks
+
+Four header fields at indices 8 to 11 are segment tags naming places in the module rather than tables. Azahar calls them `UnkSegmentTag`, `OnLoadSegmentTag`, `OnExitSegmentTag` and `OnUnresolvedSegmentTag`, and reads only the last, as the address unresolved imports are pointed at. What the first is for is not documented anywhere this project has looked.
+
+A hook that names nothing is written as `0xFFFFFFFF`, whose segment index of fifteen no module declares.
+
+## Validity
+
+The console's loader refuses a module before reading it if its table offsets are out of order. `RebaseHeader` requires them to increase through the code, the module name, the segment table, the named exports, the export tree, the indexed exports, the export strings, the import modules, the external relocations, the named, indexed and anonymous imports, the import strings, the static anonymous symbols, the internal relocations, the static relocations, the data, and the file size. Every table has to lie inside the file, every name inside its string table, every slice inside the table it slices, and every relocation has to patch a position inside its own segment.
+
+Hexlith makes the same checks and one more. The loader only asks that a batch offset land somewhere in the relocation table; Hexlith requires it to land on the first entry of a batch, because an offset into the middle of one would patch only part of it. Every batch offset in the reference title does.
 
 ## Positions, and why nothing in a module is an address
 
@@ -181,6 +226,22 @@ Every module declares six segment table entries, with the ones it does not use l
 `static.crs` declares no internal relocations, which follows from what it is: it describes code that is already at its final addresses, so there is nothing in it to relocate.
 
 `DllField.cro` imports from 30 modules and carries a 60 byte export string table, against the 78 modules and 17,559 bytes of the static module. The comparison is the shape of the problem in one line: the main executable publishes names and the modules consume them.
+
+### Imports and relocations, read
+
+All 134 modules pass every check above, and their tables reproduce the totals of the header counts: 44,151 internal relocations, 21,868 external relocations and 18,991 anonymous imports in 256 import module entries.
+
+**Every relocation in the title is an absolute address.** All 66,019 of them, internal and external, are type 2. The branch types that Azahar leaves unimplemented never occur, and neither does a relative address.
+
+**Every import is anonymous.** No module declares a named import, an indexed import, a static anonymous symbol or a static relocation, and none declares an indexed export. So the whole of the title's dynamic linking is by position, and no import resolves through the 640 named exports. Whether the title's own code looks names up at run time has not been checked.
+
+**No external relocation patches a data segment.** 17,859 patch a module's code segment, which is to say words of data sitting among the instructions, the shape of a literal pool. 3,678 patch read-only data. The remaining 331 are those of `static.crs`, and they patch words in the main executable's text segment. This matters because of a bug in the console's original `LoadCRO`: a relocation into `.data` was written to the buffer the data is later copied into, and the copy overwrote it. `LoadCRO_New` fixed that in system version 7.2.0, and a trace of the title shows it calling the old one (`docs/ldr-ro-trace.md`). With nothing external in `.data`, the bug has nothing to break.
+
+Each anonymous import has a batch of its own, and every batch is named by exactly one import. 18,429 of the 18,991 batches are a single word. The import module entries partition the anonymous import table between them with no gap and no overlap.
+
+27,219 internal relocations point into a code segment, and every one has an addend that is a multiple of four. So every code address a module stores for itself is ARM, which is what the 179 module exports said as well.
+
+The hooks: 113 modules set the undocumented tag at index 8, always into their code segment. Five set OnLoad and OnExit and six set OnUnresolved, among them `static.crs`, whose OnUnresolved lands in the main executable's text segment. The others write `0xFFFFFFFF`, so an unresolved import in them reads as the addend alone.
 
 ### Exports, read
 

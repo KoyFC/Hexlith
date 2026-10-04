@@ -2,6 +2,7 @@
 #define HEXLITH_TESTS_SUPPORT_SYNTHETIC_CRO_H
 
 #include "domain/ctr/cro.h"
+#include "domain/ctr/cro_link_tables.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -34,6 +35,42 @@ struct SyntheticCroExport {
     std::uint32_t offset_in_segment = 0;
 };
 
+// One relocation entry. The position is where the entry patches, in the
+// module's own segments for an external or internal relocation and in the
+// static module's for a static one.
+struct SyntheticCroRelocation {
+    std::uint32_t segment_index = 0;
+    std::uint32_t offset_in_segment = 0;
+    std::uint8_t type = static_cast<std::uint8_t>(domain::ctr::CroRelocationType::AbsoluteAddress);
+    std::uint32_t addend = 0;
+
+    // Internal relocations only: the segment the patched word points into.
+    std::uint8_t symbol_segment = 0;
+};
+
+// One import, with the batch of relocations it resolves. Which of the first
+// three fields means anything depends on the table the import is written to:
+// the name for a named import, the export index for an indexed one, and the
+// position in the exporting module for an anonymous one or a static anonymous
+// symbol.
+struct SyntheticCroImport {
+    std::string name;
+    std::uint32_t export_index = 0;
+    std::uint32_t segment_index = 0;
+    std::uint32_t offset_in_segment = 0;
+    std::vector<SyntheticCroRelocation> batch;
+};
+
+struct SyntheticCroImportModule {
+    std::string name;
+    std::vector<SyntheticCroImport> indexed;
+    std::vector<SyntheticCroImport> anonymous;
+};
+
+// The value the title writes into a hook field that names nothing. Its segment
+// index is fifteen, which no module declares.
+constexpr std::uint32_t NoSegmentTag = 0xFFFFFFFF;
+
 struct SyntheticCroSpec {
     std::string name = "DllTest";
 
@@ -53,8 +90,25 @@ struct SyntheticCroSpec {
     std::vector<SyntheticCroExport> named_exports;
     std::vector<SyntheticCroExport> indexed_exports;
 
-    // Written into the header as declared. The tables other than the export
-    // tables are not laid out, because nothing reads them yet.
+    // The tables the loader links with. The external relocation table is the
+    // batches of these imports laid end to end, named imports first, then each
+    // module's indexed and anonymous imports in order, the same order the
+    // title's own modules use. The static relocation table is built the same
+    // way from the static anonymous symbols.
+    std::vector<SyntheticCroImport> named_imports;
+    std::vector<SyntheticCroImportModule> import_modules;
+    std::vector<SyntheticCroRelocation> internal_relocations;
+    std::vector<SyntheticCroImport> static_anonymous_symbols;
+
+    std::uint32_t unknown_hook = NoSegmentTag;
+    std::uint32_t on_load_hook = NoSegmentTag;
+    std::uint32_t on_exit_hook = NoSegmentTag;
+    std::uint32_t on_unresolved_hook = NoSegmentTag;
+
+    // The counts of the tables the lists above leave empty. Such a table is
+    // declared with this many entries and given room in the file, but its
+    // entries are left zero, which is what a test of the count fields wants
+    // and what a test of the entries does not.
     domain::ctr::CroTableCounts counts;
 };
 

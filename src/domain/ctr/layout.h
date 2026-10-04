@@ -420,6 +420,48 @@ constexpr std::size_t NamedExportPositionOffset = 0x4;
 // for.
 constexpr std::size_t IndexedExportEntrySize = 4;
 
+// The segment tag at index 8, whose purpose nobody has documented. Azahar
+// names it UnkSegmentTag and never reads it.
+constexpr std::size_t UnknownSegmentTagField = 8;
+
+// An import module entry: the module's name, then the slice of the indexed
+// import table and the slice of the anonymous import table that come from it,
+// each as an offset and a count. Source: ImportModuleEntry in cro_helper.h.
+constexpr std::size_t ImportModuleEntrySize = 20;
+constexpr std::size_t ImportModuleNameOffsetOffset = 0x0;
+constexpr std::size_t ImportModuleIndexedTableOffset = 0x4;
+constexpr std::size_t ImportModuleIndexedCountOffset = 0x8;
+constexpr std::size_t ImportModuleAnonymousTableOffset = 0xC;
+constexpr std::size_t ImportModuleAnonymousCountOffset = 0x10;
+
+// The three import tables share a shape: a word that says what is imported,
+// a name offset, an export index or a position in the exporting module, and
+// the file offset of the relocation batch that the import resolves.
+// Source: ImportNamedSymbolEntry, ImportIndexedSymbolEntry and
+// ImportAnonymousSymbolEntry in cro_helper.h. A static anonymous symbol has
+// the same two words, with the batch in the static relocation table instead.
+constexpr std::size_t ImportEntrySize = 8;
+constexpr std::size_t ImportWhatOffset = 0x0;
+constexpr std::size_t ImportBatchOffset = 0x4;
+
+// A relocation entry, external, internal or static, is 12 bytes: the position
+// it patches, a type byte, two bytes that differ between the kinds, a byte of
+// padding and an addend. Source: RelocationEntry and InternalRelocationEntry
+// in cro_helper.h.
+constexpr std::size_t RelocationEntrySize = 12;
+constexpr std::size_t RelocationTargetOffset = 0x0;
+constexpr std::size_t RelocationTypeOffset = 0x4;
+constexpr std::size_t RelocationAddendOffset = 0x8;
+
+// In an external or static relocation, byte 5 marks the last entry of a batch
+// and byte 6 records whether the loader has resolved the batch.
+constexpr std::size_t RelocationBatchEndOffset = 0x5;
+constexpr std::size_t RelocationBatchResolvedOffset = 0x6;
+
+// In an internal relocation, byte 5 is the index of the segment the patched
+// word points into.
+constexpr std::size_t RelocationSymbolSegmentOffset = 0x5;
+
 // The module name of the CRS, with the pipe characters included, which is how
 // the loader tells it apart from a loadable module. Its segment offsets are
 // absolute virtual addresses rather than file offsets, because the segments
