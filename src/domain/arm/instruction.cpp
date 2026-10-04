@@ -135,7 +135,17 @@ bool HasKnownTarget(const Instruction& instruction) {
 
 std::uint32_t BranchTarget(const Instruction& instruction, std::uint32_t address) {
     const std::uint32_t origin = address + PipelineOffset(instruction.instruction_set);
-    return origin + static_cast<std::uint32_t>(instruction.branch_offset);
+    const std::uint32_t target = origin + static_cast<std::uint32_t>(instruction.branch_offset);
+
+    // A branch from Thumb that exchanges into ARM lands on a word boundary, and
+    // the architecture rounds down to reach one rather than refusing. It has to:
+    // a Thumb instruction can sit at any even address, so the program counter it
+    // reads is not word aligned half the time, and the displacement cannot make
+    // up for it.
+    const bool exchanges_into_arm =
+        instruction.operation == Operation::BranchLinkExchangeImmediate &&
+        instruction.instruction_set == InstructionSet::Thumb;
+    return exchanges_into_arm ? target & ~3U : target;
 }
 
 bool IsCall(const Instruction& instruction) {
@@ -194,9 +204,17 @@ std::optional<std::uint32_t> ProgramCounterRelativeAddress(const Instruction& in
         return std::nullopt;
     }
 
+    // The program counter a Thumb instruction reads is rounded down to a
+    // multiple of four, because a literal pool holds words and a Thumb
+    // instruction can sit at any even address. Forgetting it reads two bytes into
+    // the wrong word for half the instructions in a function.
+    std::uint32_t origin = address + PipelineOffset(instruction.instruction_set);
+    if (instruction.instruction_set == InstructionSet::Thumb) {
+        origin &= ~3U;
+    }
+
     // A post-indexed transfer reads the base before the offset is applied, so
     // the address is the program counter itself.
-    const std::uint32_t origin = address + PipelineOffset(instruction.instruction_set);
     if (!instruction.preindexed) {
         return origin;
     }

@@ -1,3 +1,3 @@
-hexlith_add_test(hexlith_domain_arm_test decode_arm_test.cpp instruction_test.cpp)
+hexlith_add_test(hexlith_domain_arm_test decode_arm_test.cpp decode_thumb_test.cpp instruction_test.cpp)
 
 target_link_libraries(hexlith_domain_arm_test PRIVATE Hexlith::Domain)

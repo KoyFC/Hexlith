@@ -1,8 +1,20 @@
-# The ARM decoder
+# The ARM and Thumb decoders
 
-`DecodeArm` turns one 32-bit word into a typed instruction. It is total: every one of the four billion words gets an answer, and the answer for the ones ARMv6K does not define is `Undefined`.
+`DecodeArm` turns one 32-bit word into a typed instruction, and `DecodeThumb` does the same for one or two halfwords. It is total: every one of the four billion words gets an answer, and the answer for the ones ARMv6K does not define is `Undefined`.
 
 That totality is the point. A pass that has to tell code from data asks this question of data constantly, so a decoder that failed instead of answering would need its failure handled at every step, and a decoder that guessed would plant instructions in the middle of a table.
+
+## Thumb
+
+ARMv6K has Thumb-1: sixteen bits per instruction, except for the branch with link, which is a pair of halfwords and the only four-byte instruction in it. Thumb-2 belongs to ARMv6T2 and the ARM11 does not have it, so a halfword pair that would be a 32-bit Thumb-2 instruction on a later core is not one here. `DecodeThumb` refuses the if-then blocks, the compare-and-branch instructions and the rest of that space, and a disassembler for a later architecture decodes them, which the comparison counts.
+
+Two details in Thumb are easy to get wrong and are both measurable against the image.
+
+**A literal pool read rounds the program counter down to a word.** A Thumb instruction can sit at any even address, so the program counter it reads is not word aligned half the time, and `ldr rd, [pc, #imm]` reads from `Align(pc, 4) + imm`. Getting this wrong reads two bytes into the wrong word for half the instructions in a function.
+
+**A branch with link that exchanges into ARM lands on a word boundary**, and the architecture rounds down to reach one. Hexlith had this wrong until the comparison found 109 branch targets in the text segment where it disagreed, all of them a `blx` at an address that was not a multiple of four.
+
+Of the 65,536 halfwords, 58,852 are instructions, which is 89.8 percent. Thumb leaves far less of its space undefined than ARM does, having sixteen bits to spend rather than thirty-two, which makes "does this decode" even weaker evidence there than in ARM.
 
 ## How it is verified
 
@@ -19,16 +31,23 @@ scripts/compare_arm_decoder.py --image ~/recomp-data/work/<id>/exefs/.code \
 
 `hexlith-arm-dump` prints one record per word and the script checks each one. Capstone is a development dependency and nothing else: the build does not use it, the tests do not need it, and the decoder does not depend on it.
 
-Current result, five million random words and the whole text segment:
+Current result:
 
-| | Random | Text segment |
-| --- | --- | --- |
-| Words compared | 5,000,000 | 1,053,596 |
-| Disagreements | 0 | 0 |
-| Hexlith stricter | 3.7 percent | 0.11 percent |
-| Floating point | 3.4 percent | 5.2 percent |
+| | ARM, random | ARM, text segment | Thumb, random | Thumb, text segment |
+| --- | --- | --- | --- | --- |
+| Instructions compared | 5,000,000 | 1,053,596 | 1,000,000 | 2,218,060 |
+| Disagreements | 0 | 0 | 0 | 0 |
+| Hexlith stricter | 3.7 percent | 0.11 percent | 0.08 percent | 71 words |
+| Floating point | 3.4 percent | 5.2 percent | none | none |
 
-The comparison checks more than the operation. Over the text segment it agreed on 166,430 branch targets, 308,516 transfer base registers, 298,228 transfer offsets with their direction and write-back, and 52,542 register lists.
+The comparison checks more than the operation. Over the text segment read as ARM it agreed on 166,430 branch targets, 308,516 transfer base registers, 298,228 transfer offsets with their direction and write-back, and 52,542 register lists; read as Thumb, on 774,368 branch targets and 180,720 transfer bases. The Thumb sweep is run from offset 0 and from offset 2, so that every halfword position is covered.
+
+Add `--thumb` to compare the Thumb decoder:
+
+```sh
+scripts/compare_arm_decoder.py --thumb --random 1000000
+scripts/compare_arm_decoder.py --thumb --image <path> --length 0x43BEDC --address 0x00100000
+```
 
 ## What the comparison found
 
@@ -42,6 +61,7 @@ Worth recording, because it is the argument for the method. Each of these was in
 - `clrex` and `smc` were not decoded at all.
 - `umaal` accepted a flag-setting bit it does not have, and a breakpoint accepted a condition it cannot carry.
 - A coprocessor transfer accepted an addressing mode that does not exist.
+- In Thumb, `setend` was matched on one bit too few, a linking exchange through the program counter was accepted, and the rounding of a `blx` target was missing.
 
 ## Two differences that are expected
 

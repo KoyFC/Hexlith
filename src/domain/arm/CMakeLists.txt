@@ -4,6 +4,8 @@ target_sources(
             condition.h
             decode_arm.cpp
             decode_arm.h
+            decode_thumb.cpp
+            decode_thumb.h
             instruction.cpp
             instruction.h
             instruction_set.cpp

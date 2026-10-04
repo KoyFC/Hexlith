@@ -1,4 +1,5 @@
 #include "domain/arm/decode_arm.h"
+#include "domain/arm/decode_thumb.h"
 
 #include <algorithm>
 #include <array>
@@ -34,13 +35,17 @@ constexpr int Success = 0;
 constexpr int Failure = 1;
 
 constexpr std::string_view Usage =
-    "usage: hexlith-arm-dump <file> [offset] [length] [address]\n"
-    "       hexlith-arm-dump -\n"
+    "usage: hexlith-arm-dump [--thumb] <file> [offset] [length] [address]\n"
+    "       hexlith-arm-dump [--thumb] -\n"
     "\n"
-    "Prints one record per word. Offsets and lengths are decimal or 0x-prefixed.\n"
-    "The address is where the first word is taken to live, which is what branch\n"
-    "targets are counted from. With - the words are read as hexadecimal from\n"
-    "standard input instead of from a file.\n";
+    "Prints one record per instruction. Offsets and lengths are decimal or\n"
+    "0x-prefixed. The address is where the first instruction is taken to live,\n"
+    "which is what branch targets are counted from. With - the words are read as\n"
+    "hexadecimal from standard input instead of from a file, one per line in ARM\n"
+    "and one halfword pair per line in Thumb.\n"
+    "\n"
+    "With --thumb the input is decoded as Thumb, where an instruction is two bytes\n"
+    "unless it is a branch with link, which is four.\n";
 
 // A decimal number, or a hexadecimal one behind 0x. Written out so that it reads
 // a string_view without taking its data pointer.
@@ -132,10 +137,10 @@ bool UsesAddressing(arm::Operation operation) {
     }
 }
 
-std::string Record(std::uint32_t address, std::uint32_t word) {
-    const arm::Instruction decoded = arm::DecodeArm(word);
-
-    std::string line = std::format("0x{:08X} encoding=0x{:08X}", address, word);
+std::string Record(std::uint32_t address, const arm::Instruction& decoded) {
+    std::string line = decoded.width == 2
+                           ? std::format("0x{:08X} encoding=0x{:04X}", address, decoded.encoding)
+                           : std::format("0x{:08X} encoding=0x{:08X}", address, decoded.encoding);
     Field(line, "op", arm::Mnemonic(decoded.operation));
     Field(line, "cond", ConditionText(decoded.condition));
 
@@ -205,7 +210,18 @@ std::string Record(std::uint32_t address, std::uint32_t word) {
     return line;
 }
 
-int DumpStandardInput() {
+// One instruction decoded at an address, in whichever encoding the caller asked
+// for. In Thumb the second halfword is only read when the first one needs it, and
+// the width the decoder reports says how far the next instruction is.
+arm::Instruction Decode(std::uint32_t word, bool thumb) {
+    if (!thumb) {
+        return arm::DecodeArm(word);
+    }
+    return arm::DecodeThumb(static_cast<std::uint16_t>(word),
+                            static_cast<std::uint16_t>(word >> 16U));
+}
+
+int DumpStandardInput(bool thumb) {
     std::string text;
     std::uint32_t address = 0;
     while (std::cin >> text) {
@@ -214,14 +230,24 @@ int DumpStandardInput() {
             std::cerr << std::format("hexlith-arm-dump: '{}' is not a word\n", text);
             return Failure;
         }
-        std::cout << Record(address, static_cast<std::uint32_t>(word.value()));
+        const arm::Instruction decoded = Decode(static_cast<std::uint32_t>(word.value()), thumb);
+        std::cout << Record(address, decoded);
+
+        // One line is one word either way, so the addresses advance by four even
+        // in Thumb, where a line holds a pair of halfwords.
         address += 4;
     }
     return Success;
 }
 
 int Main(std::span<char* const> arguments_in) {
-    const std::vector<std::string_view> arguments{arguments_in.begin() + 1, arguments_in.end()};
+    std::vector<std::string_view> arguments{arguments_in.begin() + 1, arguments_in.end()};
+
+    bool thumb = false;
+    if (!arguments.empty() && arguments.front() == "--thumb") {
+        thumb = true;
+        arguments.erase(arguments.begin());
+    }
 
     if (arguments.empty() || arguments.front() == "--help") {
         std::cout << Usage;
@@ -229,7 +255,7 @@ int Main(std::span<char* const> arguments_in) {
     }
 
     if (arguments.front() == "-") {
-        return DumpStandardInput();
+        return DumpStandardInput(thumb);
     }
 
     std::ifstream file{std::string{arguments.front()}, std::ios::binary};
@@ -261,14 +287,30 @@ int Main(std::span<char* const> arguments_in) {
     }
     length = std::min(length, bytes.size() - offset);
 
+    const std::uint64_t smallest = thumb ? 2 : 4;
+
     std::string out;
-    for (std::uint64_t at = 0; at + 4 <= length; at += 4) {
+    for (std::uint64_t at = 0; at + smallest <= length;) {
         const auto byte = static_cast<std::size_t>(offset + at);
-        const std::uint32_t word = static_cast<std::uint32_t>(bytes[byte]) |
-                                   (static_cast<std::uint32_t>(bytes[byte + 1]) << 8U) |
-                                   (static_cast<std::uint32_t>(bytes[byte + 2]) << 16U) |
-                                   (static_cast<std::uint32_t>(bytes[byte + 3]) << 24U);
-        out.append(Record(static_cast<std::uint32_t>(address + at), word));
+
+        // Four bytes are read even in Thumb, because a branch with link needs the
+        // halfword after it. Near the end of the range the missing bytes read as
+        // zero, which decodes as no pair at all rather than as an invented one.
+        std::uint32_t word = 0;
+        for (unsigned index = 0; index < 4; ++index) {
+            if (byte + index < bytes.size() && at + index < length) {
+                word |= static_cast<std::uint32_t>(bytes[byte + index]) << (8U * index);
+            }
+        }
+
+        const arm::Instruction decoded = Decode(word, thumb);
+        out.append(Record(static_cast<std::uint32_t>(address + at), decoded));
+
+        // A Thumb instruction is two bytes unless it is a branch with link, so
+        // the decoder's answer is what says where the next one starts. Walking an
+        // instruction stream is the only way to know, which is the whole problem
+        // the analysis stage exists to solve.
+        at += decoded.width;
 
         // Written in blocks so that a sweep of a megabyte does not build a
         // string of a hundred megabytes first.

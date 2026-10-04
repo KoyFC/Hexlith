@@ -34,7 +34,7 @@ import subprocess
 import sys
 
 try:
-    from capstone import CS_ARCH_ARM, CS_MODE_ARM, Cs
+    from capstone import CS_ARCH_ARM, CS_MODE_ARM, CS_MODE_THUMB, Cs
     from capstone import arm as capstone_arm
 except ImportError:
     sys.exit("capstone is not installed: dnf install python3-capstone")
@@ -73,6 +73,8 @@ ALIAS = {
     # A branch into Java state behaves as a plain exchange on an ARM11, whose
     # Jazelle implementation cannot enter it.
     "bxj": "bx",
+    # Taking the address of something is an addition to the program counter.
+    "adr": "add",
     # A shift is a move whose operand is shifted.
     "lsl": "mov", "lsr": "mov", "asr": "mov", "ror": "mov", "rrx": "mov",
     # A halfword multiply's mnemonic is completed by which halves it reads.
@@ -103,7 +105,16 @@ NOT_IN_V6K = {
     "ldrht", "ldrsbt", "ldrsht", "strht",
     "qasx", "qsax", "shasx", "shsax", "sasx", "ssax", "uasx", "usax",
     "uqasx", "uqsax", "uhasx", "uhsax",
+    # Thumb-2, which ARMv6T2 added and the ARM11 does not have.
+    "cbz", "cbnz", "tbb", "tbh", "orn", "pkh",
+    # The security extension of ARMv8-M, which Capstone decodes in Thumb mode.
+    "bxns", "blxns", "sg", "tt", "tta", "ttat", "ttt",
 }
+
+
+def is_if_then(name):
+    """An IT block, which ARMv6T2 added. Its mnemonic spells out the block."""
+    return name is not None and name.startswith("it") and set(name) <= {"i", "t", "e"}
 
 # Where Hexlith is stricter than Capstone, because ARMv6K fixes a field the word
 # does not respect and calls the result unpredictable.
@@ -178,8 +189,9 @@ def register_mask(insn, listed):
 
 
 class Comparison:
-    def __init__(self):
-        self.engine = Cs(CS_ARCH_ARM, CS_MODE_ARM)
+    def __init__(self, thumb=False):
+        self.thumb = thumb
+        self.engine = Cs(CS_ARCH_ARM, CS_MODE_THUMB if thumb else CS_MODE_ARM)
         self.engine.detail = True
         self.counts = collections.Counter()
         self.disagreements = collections.Counter()
@@ -197,14 +209,18 @@ class Comparison:
         word = int(fields["encoding"], 16)
         mine = fields["op"]
 
-        decoded = list(self.engine.disasm(word.to_bytes(4, "little"), address))
+        # A Thumb record is two bytes unless it is a branch with link, and the
+        # encoding is printed at the width it was decoded at.
+        width = 4 if len(fields["encoding"]) > 6 else 2
+        encoded = word.to_bytes(width, "little")
+        decoded = list(self.engine.disasm(encoded, address))
         insn = decoded[0] if decoded else None
         theirs = base_name(insn) if insn else None
 
         if mine == "parallel":
             agreed = theirs in PARALLEL
         elif mine == "undefined":
-            if theirs is None or theirs in NOT_IN_V6K or theirs in PARALLEL:
+            if theirs is None or theirs in NOT_IN_V6K or theirs in PARALLEL or is_if_then(theirs):
                 agreed = True
             elif looks_floating_point(theirs):
                 agreed = True
@@ -317,6 +333,7 @@ def main():
     parser.add_argument("--offset", default="0", help="where to start in that file")
     parser.add_argument("--length", default=None, help="how much of it to read")
     parser.add_argument("--address", default="0x00100000", help="the address the first word lives at")
+    parser.add_argument("--thumb", action="store_true", help="decode as Thumb rather than ARM")
     parser.add_argument("--random", type=int, default=0, help="how many random words to sweep")
     parser.add_argument("--seed", type=int, default=1, help="the seed those words come from")
     options = parser.parse_args()
@@ -326,10 +343,11 @@ def main():
     if not options.image and not options.random:
         sys.exit("name an image with --image or a count with --random")
 
-    comparison = Comparison()
+    comparison = Comparison(options.thumb)
+    prefix = [str(options.dump)] + (["--thumb"] if options.thumb else [])
 
     if options.image:
-        arguments = [str(options.dump), str(options.image), options.offset]
+        arguments = prefix + [str(options.image), options.offset]
         if options.length:
             arguments += [options.length, options.address]
         output = subprocess.run(arguments, capture_output=True, text=True, check=True).stdout
@@ -337,7 +355,8 @@ def main():
             comparison.check(line)
 
     if options.random:
-        output = subprocess.run([str(options.dump), "-"], input=words_from_random(options.random, options.seed),
+        output = subprocess.run(prefix + ["-"],
+                                input=words_from_random(options.random, options.seed),
                                 capture_output=True, text=True, check=True).stdout
         for line in output.splitlines():
             comparison.check(line)
