@@ -6,6 +6,8 @@ target_sources(
             executable_loader.h
             handle_table.cpp
             handle_table.h
+            kernel.cpp
+            kernel.h
             objects.cpp
             objects.h
             region_allocator.cpp
@@ -13,6 +15,7 @@ target_sources(
             result_code.h
             scheduler.cpp
             scheduler.h
+            system_calls.cpp
             system_pages.cpp
             system_pages.h
 )

@@ -82,6 +82,35 @@ TEST(Interpreter, AddsAndSetsTheFlags) {
     EXPECT_EQ(machine.Pc(), Code + 8);
 }
 
+TEST(Interpreter, CountsWhatItExecutedUpToASupervisorCall) {
+    Machine machine;
+    machine.Arm({
+        0xE3A00001,  // mov r0, #1
+        0xE3A01002,  // mov r1, #2
+        0xEF000032,  // svc 0x32
+        0xE3A02003,  // mov r2, #3
+    });
+    std::uint64_t executed = 0;
+    const Stop stop = arm::Run(machine.state, machine.memory, 10, executed);
+    EXPECT_EQ(stop.reason, StopReason::SupervisorCall);
+    EXPECT_EQ(executed, 3U) << "the supervisor call completed, so it counts";
+
+    executed = 0;
+    EXPECT_EQ(arm::Run(machine.state, machine.memory, 1, executed).reason, StopReason::StepLimit);
+    EXPECT_EQ(executed, 1U);
+}
+
+TEST(Interpreter, DoesNotCountTheInstructionThatFaulted) {
+    Machine machine;
+    machine.Arm({
+        0xE3A00001,  // mov r0, #1
+        0xE5900000,  // ldr r0, [r0]
+    });
+    std::uint64_t executed = 0;
+    EXPECT_EQ(arm::Run(machine.state, machine.memory, 10, executed).reason, StopReason::ReadFault);
+    EXPECT_EQ(executed, 1U);
+}
+
 TEST(Interpreter, SkipsAnInstructionWhoseConditionFails) {
     Machine machine;
     // mov r0, #1; cmp r0, #2; moveq r1, #5; movne r1, #6

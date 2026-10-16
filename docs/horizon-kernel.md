@@ -40,6 +40,74 @@ A yield, SleepThread with zero nanoseconds, does nothing when no other thread is
 
 A timer armed with no initial delay fires at once. A periodic one fires again every interval on the virtual clock, exactly, since nothing is ever late on it.
 
+## System calls
+
+The interpreter stops at an `svc` with its number, and `Kernel::Run` answers it before the thread runs on. A call is one indirect call through a table of 128 entries, one per number, each with the name 3dbrew gives it and the function that implements it, or none. A call with no function stops the run with its name and leaves the thread before the `svc`, so that once it is implemented the same run can carry on from there. Nothing is answered with a guess.
+
+The arguments arrive in the registers the call's C prototype puts them in, with two changes the kernel makes to the ARM procedure call standard: outputs come back in r1 upwards after the result in r0, and arguments the standard would pass on the stack move into whatever registers are left. So SetTimer takes its initial delay in r2 and r3 and its interval in r1 and r4, and WaitSynchronizationN its timeout in r0 and r4. Source: `SVCWrapper` in Azahar, `svc_wrapper.h`, which derives each mapping from the prototype.
+
+The walk of the main executable finds 32 different calls in code it reached, 750 call sites in all, every one of them ARM. The modules make none: they reach the kernel through the main executable. The extended header allows 51, and every one of the 32 is among them.
+
+| Number | Call | Seen in the code | Implemented |
+| --- | --- | --- | --- |
+| `0x01` | ControlMemory | yes | yes |
+| `0x02` | QueryMemory | | yes |
+| `0x03` | ExitProcess | yes | yes |
+| `0x08` | CreateThread | yes | yes |
+| `0x09` | ExitThread | yes | yes |
+| `0x0A` | SleepThread | yes | yes |
+| `0x0B` | GetThreadPriority | yes | yes |
+| `0x0C` | SetThreadPriority | yes | yes |
+| `0x13` | CreateMutex | yes | yes |
+| `0x14` | ReleaseMutex | yes | yes |
+| `0x15` | CreateSemaphore | | yes |
+| `0x16` | ReleaseSemaphore | | yes |
+| `0x17` | CreateEvent | yes | yes |
+| `0x18` | SignalEvent | yes | yes |
+| `0x19` | ClearEvent | yes | yes |
+| `0x1A` | CreateTimer | yes | yes |
+| `0x1B` | SetTimer | yes | yes |
+| `0x1C` | CancelTimer | yes | yes |
+| `0x1D` | ClearTimer | | yes |
+| `0x1E` | CreateMemoryBlock | yes | yes |
+| `0x1F` | MapMemoryBlock | yes | yes |
+| `0x20` | UnmapMemoryBlock | yes | yes |
+| `0x21` | CreateAddressArbiter | yes | yes |
+| `0x22` | ArbitrateAddress | yes | yes |
+| `0x23` | CloseHandle | yes | yes |
+| `0x24` | WaitSynchronization1 | yes | yes |
+| `0x25` | WaitSynchronizationN | yes | yes |
+| `0x27` | DuplicateHandle | | yes |
+| `0x28` | GetSystemTick | yes | yes |
+| `0x29` | GetHandleInfo | yes | yes |
+| `0x2D` | ConnectToPort | yes | not yet |
+| `0x32` | SendSyncRequest | yes | not yet |
+| `0x35` | GetProcessId | yes | yes |
+| `0x37` | GetThreadId | yes | yes |
+| `0x38` | GetResourceLimit | yes | yes |
+| `0x39` | GetResourceLimitLimitValues | | yes |
+| `0x3A` | GetResourceLimitCurrentValues | yes | yes |
+| `0x3C` | Break | yes | yes |
+| `0x3D` | OutputDebugString | | yes |
+
+The ones not seen in the code are cheap and allowed by the extended header, and the 20 percent of the text the walk does not reach may call them.
+
+A few answers deserve a note.
+
+**ControlMemory** checks alignment, then ignores the region bits of the operation, as Azahar does, and commits heap where the game asks and linear memory where the kernel picks. FREE takes heap or linear memory by the range the address is in.
+
+**CreateThread** refuses a priority above the application's limit of `0x18`, which is the resource limit's Priority value, and maps processor -2 to the extended header's ideal processor and -1 to core 0. A new thread starts with r0 holding its argument and FPSCR `0x03C00000`.
+
+**ArbitrateAddress** answers Timeout from the two kinds that take one whether or not the thread slept, which Azahar notes the console does. A signal that wakes nobody costs a thread of priority 49 or lower 1614 ticks, a figure Azahar takes from the console's kernel.
+
+**The resource limit** reports the application's limits from Azahar's APPLICATION category: priority `0x18`, the region's size as committable memory, 32 threads, events and mutexes, 8 semaphores and timers, 16 memory blocks and 2 arbiters. The committed memory it reports as current is what the region has handed out, code and stack included.
+
+**GetProcessId** answers 11 for the game itself. The console's number depends on how many system modules started first; 11 is what Azahar gave the reference title, and keeping it keeps the two traces alike.
+
+**Memory blocks** a service hands out, and blocks the game makes without an address, come from the BASE region, which follows the application and system regions in FCRAM, and map by default at the linear address of their offset there. Blocks the game makes from its own heap lock that heap for as long as they exist.
+
+Where Azahar would write an uninitialised value into an output register, Hexlith leaves the register as it was.
+
 ## What is not modelled
 
 **The second core.** Threads the game puts on it share the first core's queue. ADR 0013 records the deviation and what would change it.

@@ -18,6 +18,9 @@ namespace layout {
 
 constexpr std::uint32_t PageSize = memory::ProcessMemory::PageSize;
 
+// Where an executable's image starts, the bottom of what a process may use.
+constexpr std::uint32_t ImageBase = 0x00100000;
+
 // The ordinary heap, which ControlMemory commits at addresses the game picks.
 // The main thread's stack sits at its very top.
 constexpr std::uint32_t HeapBase = 0x08000000;
@@ -154,6 +157,15 @@ public:
                           std::uint32_t size,
                           memory::Access access,
                           bool privileged);
+
+    // Moves a range from one state to another with a new access, if every page
+    // of it is in the expected state. VMManager::ChangeMemoryState in Azahar,
+    // which a heap-backed memory block uses to lock the heap it shares.
+    ResultCode ChangeState(std::uint32_t address,
+                           std::uint32_t size,
+                           MemoryState expected,
+                           MemoryState state,
+                           memory::Access access);
 
     // Changes the access of a mapped range, the PROTECT operation.
     ResultCode Protect(std::uint32_t address, std::uint32_t size, memory::Access access);

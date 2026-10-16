@@ -240,6 +240,19 @@ ResultCode AddressSpace::UnmapAlias(std::uint32_t target,
     return result::Success;
 }
 
+ResultCode AddressSpace::ChangeState(std::uint32_t address,
+                                     std::uint32_t size,
+                                     MemoryState expected,
+                                     MemoryState state,
+                                     Access access) {
+    if (!HasState(address, size, expected)) {
+        return result::InvalidAddressState;
+    }
+    static_cast<void>(memory_.Protect(address, size, access));
+    SetState(address, size, state);
+    return result::Success;
+}
+
 ResultCode AddressSpace::Protect(std::uint32_t address, std::uint32_t size, Access access) {
     if (!memory_.Protect(address, size, access)) {
         return result::InvalidAddressState;

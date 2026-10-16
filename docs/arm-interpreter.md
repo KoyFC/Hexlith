@@ -4,7 +4,7 @@
 
 ## Shape
 
-`Step` executes the instruction at r15 and `Run` repeats it up to a limit. Both live in `src/domain/arm/interpreter`, and both are templates over the `GuestMemory` concept, compiled once for `PagedMemory` in `interpreter.cpp`.
+`Step` executes the instruction at r15 and `Run` repeats it up to a limit, and can say how many instructions completed, which is what the kernel's clock counts; a supervisor call completes, since r15 has moved past it. Both live in `src/domain/arm/interpreter`, and both are templates over the `GuestMemory` concept, compiled in `interpreter.cpp` for `PagedMemory` and for the page table the kernel runs the game on.
 
 Every operation goes through the shared primitive library in `src/domain/arm/primitives`: the shifter and addition with carry, the multiplies, saturation, the parallel instructions, packing, and floating point. Generated code will call the same functions, so the interpreter and the lifter can only disagree by calling different ones.
 

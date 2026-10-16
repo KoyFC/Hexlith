@@ -200,7 +200,11 @@ void Scheduler::Yield() {
 
 void Scheduler::Sleep(std::int64_t nanoseconds) {
     current_->status = ThreadStatus::WaitSleep;
-    ScheduleWakeup(current_, nanoseconds);
+    // A negative time sleeps for ever, the way a negative timeout waits for
+    // ever.
+    if (nanoseconds >= 0) {
+        ScheduleWakeup(current_, nanoseconds);
+    }
 }
 
 void Scheduler::Wait(std::span<const std::shared_ptr<WaitObject>> objects,

@@ -3,6 +3,7 @@
 
 #include "domain/arm/cpu_state.h"
 #include "domain/kernel/result_code.h"
+#include "domain/memory/process_memory.h"
 
 #include <cstdint>
 #include <memory>
@@ -238,6 +239,48 @@ public:
     }
 
     std::vector<std::shared_ptr<Thread>> waiting;
+};
+
+// A block of memory that can be mapped into a process, by the process that
+// made it or, through a handle a service hands out, by another. Source:
+// SharedMemory in Azahar, src/core/hle/kernel/shared_memory.cpp.
+//
+// Its memory is either pages of the creating process's heap, when it was
+// created at an address, or a piece of the BASE region of FCRAM, when it was
+// created at none; the second kind can be mapped at no address, and then lands
+// at the linear address of its piece.
+class SharedMemory final : public Object {
+public:
+    [[nodiscard]] ObjectType Type() const override {
+        return ObjectType::SharedMemory;
+    }
+
+    // The pages it is made of, one target per page.
+    std::vector<memory::PageTarget> pages;
+    std::uint32_t size = 0;
+
+    // Where the creating process made it from, or zero.
+    std::uint32_t base_address = 0;
+
+    // Its linear address when it was made from FCRAM rather than from heap.
+    std::uint32_t linear_address = 0;
+
+    // MemoryPermission values as the system calls give them.
+    std::uint32_t permissions = 0;
+    std::uint32_t other_permissions = 0;
+
+    // Whether the game made it, in which case it maps it with its own
+    // permissions rather than the ones given to others.
+    bool made_by_game = false;
+};
+
+// A process's resource limit, which the game reads to learn how much memory it
+// may commit. Source: ResourceLimit in Azahar.
+class ResourceLimit final : public Object {
+public:
+    [[nodiscard]] ObjectType Type() const override {
+        return ObjectType::ResourceLimit;
+    }
 };
 
 // The result a mutex release answers when the caller does not hold it.

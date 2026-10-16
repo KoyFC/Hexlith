@@ -87,12 +87,22 @@ Stop Step(CpuState& state, Memory& memory);
 template<memory::GuestMemory Memory>
 Stop Run(CpuState& state, Memory& memory, std::uint64_t limit);
 
+// The same, saying how many instructions completed, which is what the kernel's
+// clock counts. A supervisor call completes, since r15 has moved past it; any
+// other stop leaves the instruction that stopped uncounted.
+template<memory::GuestMemory Memory>
+Stop Run(CpuState& state, Memory& memory, std::uint64_t limit, std::uint64_t& executed);
+
 // The interpreter is compiled once, in interpreter.cpp, for each memory it runs
 // against, rather than in every file that calls it.
 extern template Stop Step<memory::PagedMemory>(CpuState&, memory::PagedMemory&);
 extern template Stop Run<memory::PagedMemory>(CpuState&, memory::PagedMemory&, std::uint64_t);
 extern template Stop Step<memory::ProcessMemory>(CpuState&, memory::ProcessMemory&);
 extern template Stop Run<memory::ProcessMemory>(CpuState&, memory::ProcessMemory&, std::uint64_t);
+extern template Stop
+Run<memory::PagedMemory>(CpuState&, memory::PagedMemory&, std::uint64_t, std::uint64_t&);
+extern template Stop
+Run<memory::ProcessMemory>(CpuState&, memory::ProcessMemory&, std::uint64_t, std::uint64_t&);
 
 }  // namespace hexlith::domain::arm
 

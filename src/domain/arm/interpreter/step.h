@@ -221,14 +221,26 @@ Stop Step(CpuState& state, Memory& memory) {
 }
 
 template<memory::GuestMemory Memory>
-Stop Run(CpuState& state, Memory& memory, std::uint64_t limit) {
-    for (std::uint64_t executed = 0; executed < limit; ++executed) {
+Stop Run(CpuState& state, Memory& memory, std::uint64_t limit, std::uint64_t& executed) {
+    executed = 0;
+    while (executed < limit) {
         const Stop stop = Step(state, memory);
         if (stop.Stopped()) {
+            // A supervisor call has completed: r15 is already past it.
+            if (stop.reason == StopReason::SupervisorCall) {
+                ++executed;
+            }
             return stop;
         }
+        ++executed;
     }
     return Stop{.reason = StopReason::StepLimit, .detail = 0};
+}
+
+template<memory::GuestMemory Memory>
+Stop Run(CpuState& state, Memory& memory, std::uint64_t limit) {
+    std::uint64_t executed = 0;
+    return Run(state, memory, limit, executed);
 }
 
 }  // namespace hexlith::domain::arm
