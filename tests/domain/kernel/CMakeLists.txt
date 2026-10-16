@@ -3,6 +3,7 @@ hexlith_add_test(
     address_space_test.cpp
     executable_loader_test.cpp
     handle_table_test.cpp
+    ipc_test.cpp
     kernel_test.cpp
     region_allocator_test.cpp
     scheduler_test.cpp

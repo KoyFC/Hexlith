@@ -47,6 +47,8 @@ constexpr std::uint32_t ArbitrateAddressCall = 0x22;
 constexpr std::uint32_t WaitSynchronization1Call = 0x24;
 constexpr std::uint32_t GetSystemTickCall = 0x28;
 constexpr std::uint32_t ConnectToPortCall = 0x2D;
+constexpr std::uint32_t SendSyncRequest1Call = 0x2E;
+constexpr std::uint32_t SendSyncRequestCall = 0x32;
 
 // Registers by name, for reading the programs.
 constexpr unsigned R0 = 0;
@@ -345,12 +347,12 @@ TEST(Kernel, StopsBeforeASystemCallItDoesNotImplement) {
     Program program;
     program.Emit(MoveImmediate(R0, 0));
     const std::size_t call = program.Size();
-    program.Call(ConnectToPortCall).Call(ExitProcessCall);
+    program.Call(SendSyncRequest1Call).Call(ExitProcessCall);
 
     Machine machine(program);
     const KernelStop stop = machine.Run();
     EXPECT_EQ(stop.reason, KernelStopReason::UnimplementedSystemCall);
-    EXPECT_EQ(stop.detail, ConnectToPortCall);
+    EXPECT_EQ(stop.detail, SendSyncRequest1Call);
     EXPECT_EQ(stop.address, Program::AddressOfWord(call));
     EXPECT_EQ(machine.MainThread().context.registers.at(arm::ProgramCounter),
               Program::AddressOfWord(call))
@@ -473,7 +475,101 @@ TEST(Kernel, NamesEverySystemCallFrom3dbrew) {
     EXPECT_EQ(Kernel::SystemCallName(0x7F), "Unused");
     EXPECT_EQ(Kernel::SystemCallName(0x1234), "Unknown");
     EXPECT_TRUE(Kernel::IsImplemented(0x24));
-    EXPECT_FALSE(Kernel::IsImplemented(0x2D));
+    EXPECT_TRUE(Kernel::IsImplemented(0x32));
+    EXPECT_FALSE(Kernel::IsImplemented(0x2E)) << "SendSyncRequest1 is not used";
+}
+
+// A service that answers command 1 with its argument plus one, and does not
+// implement any other.
+class Incrementer final : public SessionHandler {
+public:
+    [[nodiscard]] std::string_view Name() const override {
+        return "inc:u";
+    }
+
+    bool Handle(IpcRequest& request) override {
+        if (request.Command() != 1) {
+            return false;
+        }
+        const std::uint32_t value = request.Pop();
+        request.Begin(2, 0);
+        request.Push(result::Success);
+        request.Push(value + 1);
+        return true;
+    }
+};
+
+// Writes the port name "inc:u" into the data page and connects to it, leaving
+// the session handle in r1.
+void ConnectToIncrementer(Program& program) {
+    constexpr std::uint32_t NameLow = 0x3A636E69;   // "inc:"
+    constexpr std::uint32_t NameHigh = 0x00000075;  // "u"
+    constexpr std::uint32_t NameOffset = 0x100;
+    program.Constant(R5, DataAddress)
+        .Constant(R6, NameLow)
+        .Emit(Store(R6, R5, NameOffset))
+        .Constant(R6, NameHigh)
+        .Emit(Store(R6, R5, NameOffset + 4))
+        .Constant(R1, DataAddress + NameOffset)
+        .Call(ConnectToPortCall);
+}
+
+// Puts a request with one normal word into the command buffer, which starts
+// 0x80 bytes into the thread's local storage, and sends it on the session in
+// r1.
+void SendToIncrementer(Program& program, std::uint32_t header, std::uint32_t argument) {
+    constexpr std::uint32_t ReadThreadId = 0xEE1D4F70;  // mrc p15, 0, r4, c13, c0, 3
+    constexpr std::uint32_t CommandBuffer = 0x80;
+    program.Emit(ReadThreadId)
+        .Constant(R6, header)
+        .Emit(Store(R6, R4, CommandBuffer))
+        .Constant(R6, argument)
+        .Emit(Store(R6, R4, CommandBuffer + 4))
+        .Emit(MoveImmediate(R0, 0))
+        .Emit(Store(R1, R5, FirstSlot))
+        .Emit(Load(R0, R5, FirstSlot))
+        .Call(SendSyncRequestCall)
+        .Emit(Load(R6, R4, CommandBuffer + 8))
+        .Emit(Store(R6, R5, SecondSlot));
+}
+
+TEST(Kernel, CarriesARequestToAServiceAndItsReplyBack) {
+    constexpr std::uint32_t Argument = 41;
+    Program program;
+    ConnectToIncrementer(program);
+    SendToIncrementer(program, ipc::MakeHeader(1, 1, 0), Argument);
+    program.Call(ExitProcessCall);
+
+    Machine machine(program);
+    machine.Get().RegisterPort("inc:u", std::make_shared<Incrementer>());
+    EXPECT_EQ(machine.Run().reason, KernelStopReason::ProcessExited);
+    EXPECT_EQ(machine.Data(SecondSlot), Argument + 1);
+}
+
+TEST(Kernel, StopsAtACommandTheServiceDoesNotImplement) {
+    constexpr std::uint32_t Unknown = ipc::MakeHeader(2, 1, 0);
+    Program program;
+    ConnectToIncrementer(program);
+    SendToIncrementer(program, Unknown, 0);
+    program.Call(ExitProcessCall);
+
+    Machine machine(program);
+    machine.Get().RegisterPort("inc:u", std::make_shared<Incrementer>());
+    const KernelStop stop = machine.Run();
+    EXPECT_EQ(stop.reason, KernelStopReason::UnimplementedServiceCommand);
+    EXPECT_EQ(stop.service, "inc:u");
+    EXPECT_EQ(stop.detail, Unknown);
+    EXPECT_EQ(machine.MainThread().context.registers.at(arm::ProgramCounter), stop.address);
+}
+
+TEST(Kernel, RefusesAPortThatDoesNotExist) {
+    Program program;
+    ConnectToIncrementer(program);
+    program.Emit(Store(R0, R5, FirstSlot)).Call(ExitProcessCall);
+
+    Machine machine(program);
+    EXPECT_EQ(machine.Run().reason, KernelStopReason::ProcessExited);
+    EXPECT_EQ(machine.Data(FirstSlot), result::NotFound.raw);
 }
 
 }  // namespace

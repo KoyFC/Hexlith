@@ -17,6 +17,19 @@ constexpr std::uint32_t ThumbInstructionSize = 2;
 // spinning with nothing scheduled still returns to the loop now and then.
 constexpr std::uint64_t LongestSlice = 1'000'000;
 
+// A stop, with the thread and address it happened at when there is one.
+KernelStop StopFor(KernelStopReason reason,
+                   std::uint32_t detail = 0,
+                   const Thread* thread = nullptr,
+                   std::uint32_t address = 0) {
+    KernelStop stop;
+    stop.reason = reason;
+    stop.detail = detail;
+    stop.thread_id = thread == nullptr ? 0 : thread->id;
+    stop.address = address;
+    return stop;
+}
+
 }  // namespace
 
 Kernel::Kernel(const KernelConfig& config)
@@ -45,7 +58,7 @@ KernelStop Kernel::Run(std::uint64_t instructions) {
         Thread* thread = scheduler_.Reschedule();
         if (thread == nullptr) {
             if (!scheduler_.AdvanceToNextEvent()) {
-                return KernelStop{.reason = KernelStopReason::Deadlock};
+                return StopFor(KernelStopReason::Deadlock);
             }
             continue;
         }
@@ -73,17 +86,19 @@ KernelStop Kernel::Run(std::uint64_t instructions) {
             continue;
         }
         if (stop.reason != arm::StopReason::SupervisorCall) {
-            return KernelStop{.reason = KernelStopReason::ProcessorStop,
-                              .processor = stop,
-                              .thread_id = thread->id,
-                              .address = thread->context.registers.at(arm::ProgramCounter)};
+            KernelStop halt = StopFor(KernelStopReason::ProcessorStop,
+                                      0,
+                                      thread,
+                                      thread->context.registers.at(arm::ProgramCounter));
+            halt.processor = stop;
+            return halt;
         }
 
         if (std::optional<KernelStop> halt = AnswerSystemCall(*thread, stop.detail)) {
             return *halt;
         }
     }
-    return KernelStop{.reason = KernelStopReason::BudgetSpent};
+    return StopFor(KernelStopReason::BudgetSpent);
 }
 
 std::optional<KernelStop> Kernel::AnswerSystemCall(Thread& thread, std::uint32_t number) {
@@ -97,6 +112,7 @@ std::optional<KernelStop> Kernel::AnswerSystemCall(Thread& thread, std::uint32_t
     std::copy_n(
         thread.context.registers.begin(), SystemCallArgumentCount, record.arguments.begin());
 
+    outcome_ = Outcome::Continue;
     record.implemented = Dispatch(thread, number);
     record.result = thread.context.registers.at(0);
     if (system_call_observer_) {
@@ -107,19 +123,22 @@ std::optional<KernelStop> Kernel::AnswerSystemCall(Thread& thread, std::uint32_t
         // Left before the call, so that once it is implemented the run can
         // carry on from exactly here.
         thread.context.registers.at(arm::ProgramCounter) = call_address;
-        return KernelStop{.reason = KernelStopReason::UnimplementedSystemCall,
-                          .detail = number,
-                          .thread_id = thread.id,
-                          .address = call_address};
+        return StopFor(KernelStopReason::UnimplementedSystemCall, number, &thread, call_address);
+    }
+    if (outcome_ == Outcome::UnimplementedCommand) {
+        thread.context.registers.at(arm::ProgramCounter) = call_address;
+        KernelStop halt = StopFor(KernelStopReason::UnimplementedServiceCommand,
+                                  unimplemented_header_,
+                                  &thread,
+                                  call_address);
+        halt.service = unimplemented_service_;
+        return halt;
     }
     if (outcome_ == Outcome::Exited) {
-        return KernelStop{.reason = KernelStopReason::ProcessExited, .thread_id = thread.id};
+        return StopFor(KernelStopReason::ProcessExited, 0, &thread);
     }
     if (outcome_ == Outcome::Break) {
-        return KernelStop{.reason = KernelStopReason::Break,
-                          .detail = break_reason_,
-                          .thread_id = thread.id,
-                          .address = call_address};
+        return StopFor(KernelStopReason::Break, break_reason_, &thread, call_address);
     }
     return std::nullopt;
 }
@@ -194,12 +213,12 @@ const std::array<Kernel::SystemCallEntry, Kernel::SystemCallCount>& Kernel::Syst
         {.name = "GetSystemInfo"},
         {.name = "GetProcessInfo"},
         {.name = "GetThreadInfo"},
-        {.name = "ConnectToPort"},
+        {.name = "ConnectToPort", .handler = &Invoke<&Kernel::ConnectToPort>},
         {.name = "SendSyncRequest1"},
         {.name = "SendSyncRequest2"},
         {.name = "SendSyncRequest3"},
         {.name = "SendSyncRequest4"},
-        {.name = "SendSyncRequest"},
+        {.name = "SendSyncRequest", .handler = &Invoke<&Kernel::SendSyncRequest>},
         {.name = "OpenProcess"},
         {.name = "OpenThread"},
         {.name = "GetProcessId", .handler = &Invoke<&Kernel::GetProcessId>},
@@ -310,6 +329,10 @@ std::shared_ptr<WaitObject> Kernel::ResolveWaitObject(Handle handle) const {
         return scheduler_.CurrentShared();
     }
     return std::dynamic_pointer_cast<WaitObject>(handles_.Get(handle));
+}
+
+void Kernel::RegisterPort(std::string name, std::shared_ptr<SessionHandler> handler) {
+    ports_.insert_or_assign(std::move(name), std::move(handler));
 }
 
 void Kernel::Signal(Event& event) {

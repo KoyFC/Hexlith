@@ -95,7 +95,12 @@ constexpr std::uint32_t NoWaitIndex = 0xFFFFFFFF;
 constexpr std::uint32_t WordBytes = 4;
 constexpr std::uint32_t DoublewordBytes = 8;
 
+// A port name is at most 11 characters. Source: PortNameMaxLength in Azahar's
+// svc.cpp; 3dbrew, SVC, ConnectToPort.
+constexpr std::uint32_t PortNameMaxLength = 11;
+
 namespace result_codes {
+constexpr ResultCode PortNameTooLong{0xE0E0181E};
 constexpr ResultCode NotAuthorized{0xD9001BEA};
 constexpr ResultCode InvalidCombinationKernel{0xD90007EE};
 constexpr ResultCode InvalidEnumValueFnd{0xD8E093ED};
@@ -868,6 +873,66 @@ void Kernel::OutputDebugString(Thread& thread) {
     }
     if (debug_output_observer_) {
         debug_output_observer_(text);
+    }
+}
+
+void Kernel::ConnectToPort(Thread& thread) {
+    const std::uint32_t name_address = Register(thread, 1);
+    std::string name;
+    for (std::uint32_t index = 0; index <= PortNameMaxLength; ++index) {
+        const std::optional<std::uint8_t> byte = space_.Memory().Read8(name_address + index);
+        if (!byte.has_value()) {
+            Answer(thread, result::InvalidPointer);
+            return;
+        }
+        if (*byte == 0) {
+            break;
+        }
+        name.push_back(static_cast<char>(*byte));
+    }
+    if (name.size() > PortNameMaxLength) {
+        Answer(thread, result_codes::PortNameTooLong);
+        return;
+    }
+    const auto port = ports_.find(name);
+    if (port == ports_.end()) {
+        Answer(thread, result::NotFound);
+        return;
+    }
+    AnswerHandle(thread, std::make_shared<ClientSession>(port->second));
+}
+
+void Kernel::SendSyncRequest(Thread& thread) {
+    const auto session =
+        handles_.Get<ClientSession>(Register(thread, 0), ObjectType::ClientSession);
+    if (session == nullptr) {
+        Answer(thread, result::InvalidHandle);
+        return;
+    }
+    IpcRequest request(*this, thread);
+    // The system call succeeds once the request reaches the service; what the
+    // service makes of it is in the reply.
+    Answer(thread, result::Success);
+    const bool implemented = session->handler->Handle(request);
+    if (implemented) {
+        request.Complete();
+    } else {
+        outcome_ = Outcome::UnimplementedCommand;
+        unimplemented_service_ = std::string(session->handler->Name());
+        unimplemented_header_ = request.Header();
+    }
+    if (service_request_observer_) {
+        constexpr std::uint32_t ResultWordOffset = ipc::CommandBufferOffset + WordBytes;
+        service_request_observer_(ServiceRequestRecord{
+            .tick = scheduler_.Ticks(),
+            .thread_id = thread.id,
+            .service = session->handler->Name(),
+            .header = request.Header(),
+            .result = implemented ? space_.Memory()
+                                        .Read32(thread.thread_local_storage + ResultWordOffset)
+                                        .value_or(0)
+                                  : 0,
+            .implemented = implemented});
     }
 }
 

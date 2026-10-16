@@ -6,6 +6,8 @@ target_sources(
             executable_loader.h
             handle_table.cpp
             handle_table.h
+            ipc.cpp
+            ipc.h
             kernel.cpp
             kernel.h
             objects.cpp

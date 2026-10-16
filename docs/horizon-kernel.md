@@ -80,8 +80,8 @@ The walk of the main executable finds 32 different calls in code it reached, 750
 | `0x27` | DuplicateHandle | | yes |
 | `0x28` | GetSystemTick | yes | yes |
 | `0x29` | GetHandleInfo | yes | yes |
-| `0x2D` | ConnectToPort | yes | not yet |
-| `0x32` | SendSyncRequest | yes | not yet |
+| `0x2D` | ConnectToPort | yes | yes |
+| `0x32` | SendSyncRequest | yes | yes |
 | `0x35` | GetProcessId | yes | yes |
 | `0x37` | GetThreadId | yes | yes |
 | `0x38` | GetResourceLimit | yes | yes |
@@ -105,6 +105,8 @@ A few answers deserve a note.
 **GetProcessId** answers 11 for the game itself. The console's number depends on how many system modules started first; 11 is what Azahar gave the reference title, and keeping it keeps the two traces alike.
 
 **Memory blocks** a service hands out, and blocks the game makes without an address, come from the BASE region, which follows the application and system regions in FCRAM, and map by default at the linear address of their offset there. Blocks the game makes from its own heap lock that heap for as long as they exist.
+
+**ConnectToPort and SendSyncRequest** carry the game's requests to services, which [`ipc.md`](ipc.md) describes. ConnectToPort refuses a name longer than 11 characters with `0xE0E0181E` and a port nobody registered with `0xD88007FA`. A command the service does not implement stops the run with the service's name and the command's header, the way an unimplemented system call does.
 
 Where Azahar would write an uninitialised value into an output register, Hexlith leaves the register as it was.
 

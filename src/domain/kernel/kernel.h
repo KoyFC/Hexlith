@@ -6,6 +6,7 @@
 #include "domain/kernel/address_space.h"
 #include "domain/kernel/executable_loader.h"
 #include "domain/kernel/handle_table.h"
+#include "domain/kernel/ipc.h"
 #include "domain/kernel/objects.h"
 #include "domain/kernel/region_allocator.h"
 #include "domain/kernel/scheduler.h"
@@ -15,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -59,6 +61,10 @@ enum class KernelStopReason : std::uint8_t {
     ProcessExited,
     // The game called Break. The detail is the reason it gave.
     Break,
+    // The game sent a service a command nothing here implements. The detail is
+    // the command's header and the service is named. The calling thread is
+    // left before its SendSyncRequest, as for a system call.
+    UnimplementedServiceCommand,
 };
 
 struct KernelStop {
@@ -67,6 +73,7 @@ struct KernelStop {
     arm::Stop processor{};
     std::uint32_t thread_id = 0;
     std::uint32_t address = 0;
+    std::string service;
 };
 
 // r0 to r4, the registers a system call takes its arguments in. CreateThread
@@ -83,6 +90,17 @@ struct SystemCallRecord {
     // r0 to r4 as the call found them, and r0 as it left it. A call that puts
     // the thread to sleep leaves the answer it gives on a timeout.
     std::array<std::uint32_t, SystemCallArgumentCount> arguments{};
+    std::uint32_t result = 0;
+    bool implemented = false;
+};
+
+// One IPC request as the game sent it, for a trace.
+struct ServiceRequestRecord {
+    std::uint64_t tick = 0;
+    std::uint32_t thread_id = 0;
+    std::string_view service;
+    std::uint32_t header = 0;
+    // The result word of the reply, or zero for a command not implemented.
     std::uint32_t result = 0;
     bool implemented = false;
 };
@@ -138,6 +156,19 @@ public:
         debug_output_observer_ = std::move(observer);
     }
 
+    void OnServiceRequest(std::function<void(const ServiceRequestRecord&)> observer) {
+        service_request_observer_ = std::move(observer);
+    }
+
+    // Makes a service reachable by ConnectToPort under a port name. srv: is
+    // the one port the game connects to; every other service it reaches
+    // through srv:.
+    void RegisterPort(std::string name, std::shared_ptr<SessionHandler> handler);
+
+    [[nodiscard]] std::uint32_t ProcessId() const {
+        return config_.process_id;
+    }
+
     // The name of a system call, from 3dbrew's list, and whether it is
     // implemented here.
     [[nodiscard]] static std::string_view SystemCallName(std::uint32_t number);
@@ -173,7 +204,7 @@ private:
     static const std::array<SystemCallEntry, SystemCallCount>& SystemCalls();
 
     // What a system call asks of Run beyond answering in registers.
-    enum class Outcome : std::uint8_t { Continue, Exited, Break };
+    enum class Outcome : std::uint8_t { Continue, Exited, Break, UnimplementedCommand };
 
     bool Dispatch(Thread& thread, std::uint32_t number);
 
@@ -231,6 +262,8 @@ private:
     void GetResourceLimitCurrentValues(Thread& thread);
     void Break(Thread& thread);
     void OutputDebugString(Thread& thread);
+    void ConnectToPort(Thread& thread);
+    void SendSyncRequest(Thread& thread);
 
     [[nodiscard]] std::int64_t ResourceLimitValue(std::uint32_t type) const;
     [[nodiscard]] std::int64_t ResourceCurrentValue(std::uint32_t type) const;
@@ -250,9 +283,14 @@ private:
     Thread* last_run_ = nullptr;
     Outcome outcome_ = Outcome::Continue;
     std::uint32_t break_reason_ = 0;
+    std::string unimplemented_service_;
+    std::uint32_t unimplemented_header_ = 0;
+
+    std::map<std::string, std::shared_ptr<SessionHandler>, std::less<>> ports_;
 
     std::function<void(const SystemCallRecord&)> system_call_observer_;
     std::function<void(std::string_view)> debug_output_observer_;
+    std::function<void(const ServiceRequestRecord&)> service_request_observer_;
 };
 
 }  // namespace hexlith::domain::kernel

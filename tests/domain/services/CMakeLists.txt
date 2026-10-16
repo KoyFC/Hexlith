@@ -1,0 +1,3 @@
+hexlith_add_test(hexlith_domain_services_test service_manager_test.cpp)
+
+target_link_libraries(hexlith_domain_services_test PRIVATE Hexlith::Domain)
