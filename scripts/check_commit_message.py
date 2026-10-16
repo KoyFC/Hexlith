@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Check a commit message against Hexlith's history rules.
 
-Commit messages carry no AI attribution. Hexlith discloses AI assistance once,
-at project level, in README.md, so a per-commit trailer adds noise without
-adding information. Several tools insert one by default, which is why this is a
-hook rather than a note. HEXLITH_ALLOW_AI_ATTRIBUTION=1 skips that one check for
-a commit; the rest still run.
+AI attribution takes one form only: the trailer in ASSISTANT_CO_AUTHOR, which
+credits Claude as co-author of the commit. Anything else that tools insert by
+default, such as session identifiers or "generated with" lines, is rejected,
+because it adds noise without adding information. HEXLITH_ALLOW_AI_ATTRIBUTION=1
+skips that check for a commit; the rest still run.
 
 The remaining rules are ordinary commit hygiene: a short imperative subject, a
 blank line before the body, and no placeholder commits, because the history has
@@ -27,6 +27,10 @@ from pathlib import Path
 ATTRIBUTION_OPT_OUT = "HEXLITH_ALLOW_AI_ATTRIBUTION"
 
 MAX_SUBJECT_LENGTH = 72
+
+# The one assistant attribution a commit may carry. It is matched as a whole
+# line, so a variant with another name or address is still rejected.
+ASSISTANT_CO_AUTHOR = "Co-Authored-By: Claude <noreply@anthropic.com>"
 
 # Trailers and sign-off lines that name a coding assistant. Matching the
 # assistant by name, rather than matching Co-Authored-By itself, keeps
@@ -76,18 +80,26 @@ def strip_comments(raw_message: str) -> str:
     ).strip("\n")
 
 
+def strip_assistant_co_author(message: str) -> str:
+    """Remove the permitted co-author trailer before the attribution check."""
+    return "\n".join(
+        line for line in message.splitlines() if line.strip() != ASSISTANT_CO_AUTHOR
+    )
+
+
 def check_message(raw_message: str, *, allow_attribution: bool = False) -> list[str]:
     """Return every rule the message breaks, as readable sentences."""
     message = strip_comments(raw_message)
     problems = []
 
     if not allow_attribution:
+        unpermitted = strip_assistant_co_author(message)
         for pattern, description in FORBIDDEN_PATTERNS:
-            if pattern.search(message):
+            if pattern.search(unpermitted):
                 problems.append(
-                    f"The message contains {description}. Hexlith discloses AI "
-                    "assistance in README.md, not per commit. Remove the line, "
-                    f"or set {ATTRIBUTION_OPT_OUT}=1 to keep it."
+                    f"The message contains {description}. The only AI "
+                    f"attribution allowed is '{ASSISTANT_CO_AUTHOR}'. Remove "
+                    f"the line, or set {ATTRIBUTION_OPT_OUT}=1 to keep it."
                 )
 
     lines = message.splitlines()
@@ -216,7 +228,17 @@ def self_test() -> int:
     )
     expect(
         "assistant co-author",
-        "Add Gitignore\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
+        "Add Gitignore\n\nBody.\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
+        should_fail=False,
+    )
+    expect(
+        "assistant co-author with another name",
+        "Add Gitignore\n\nCo-Authored-By: Claude Opus <noreply@anthropic.com>\n",
+        should_fail=True,
+    )
+    expect(
+        "other assistant co-author",
+        "Add Gitignore\n\nCo-Authored-By: Copilot <copilot@example.com>\n",
         should_fail=True,
     )
     expect(
@@ -247,7 +269,7 @@ def self_test() -> int:
         should_fail=True,
     )
 
-    attributed = "Add Gitignore\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n"
+    attributed = "Add Gitignore\n\nClaude-Session: abc123\n"
     if check_message(attributed, allow_attribution=True):
         print("FAIL opt-out: attribution still rejected when allowed")
         failures += 1

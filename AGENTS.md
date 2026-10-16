@@ -142,4 +142,4 @@ With `ccache` warm this is fast enough to run before every push.
 
 Hexlith is written almost entirely by Claude (Anthropic) through Claude Code. The maintainer sets the goals and the scope of each phase and decides or delegates the design questions. Generated code may contain errors.
 
-Disclosure is at project level, in `README.md`.
+Disclosure is in `README.md` and in each commit Claude worked on, which ends with the trailer `Co-Authored-By: Claude <noreply@anthropic.com>`.
