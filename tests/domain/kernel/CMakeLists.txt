@@ -1,5 +1,7 @@
 hexlith_add_test(hexlith_domain_kernel_test address_space_test.cpp
     executable_loader_test.cpp
-    region_allocator_test.cpp)
+    handle_table_test.cpp
+    region_allocator_test.cpp
+    scheduler_test.cpp)
 
 target_link_libraries(hexlith_domain_kernel_test PRIVATE Hexlith::Domain)
