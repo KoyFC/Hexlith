@@ -1,0 +1,3 @@
+hexlith_add_test(hexlith_domain_kernel_test address_space_test.cpp region_allocator_test.cpp)
+
+target_link_libraries(hexlith_domain_kernel_test PRIVATE Hexlith::Domain)

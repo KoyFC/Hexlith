@@ -3,4 +3,6 @@ target_sources(
     PRIVATE guest_memory.h
             paged_memory.cpp
             paged_memory.h
+            process_memory.cpp
+            process_memory.h
 )

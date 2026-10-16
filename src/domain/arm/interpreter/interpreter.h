@@ -4,6 +4,7 @@
 #include "domain/arm/cpu_state.h"
 #include "domain/memory/guest_memory.h"
 #include "domain/memory/paged_memory.h"
+#include "domain/memory/process_memory.h"
 
 #include <cstdint>
 #include <string_view>
@@ -90,6 +91,8 @@ Stop Run(CpuState& state, Memory& memory, std::uint64_t limit);
 // against, rather than in every file that calls it.
 extern template Stop Step<memory::PagedMemory>(CpuState&, memory::PagedMemory&);
 extern template Stop Run<memory::PagedMemory>(CpuState&, memory::PagedMemory&, std::uint64_t);
+extern template Stop Step<memory::ProcessMemory>(CpuState&, memory::ProcessMemory&);
+extern template Stop Run<memory::ProcessMemory>(CpuState&, memory::ProcessMemory&, std::uint64_t);
 
 }  // namespace hexlith::domain::arm
 

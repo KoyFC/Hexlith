@@ -1,3 +1,3 @@
-hexlith_add_test(hexlith_domain_memory_test paged_memory_test.cpp)
+hexlith_add_test(hexlith_domain_memory_test paged_memory_test.cpp process_memory_test.cpp)
 
 target_link_libraries(hexlith_domain_memory_test PRIVATE Hexlith::Domain)

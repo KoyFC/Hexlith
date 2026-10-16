@@ -2,6 +2,7 @@
 
 #include "domain/arm/interpreter/step.h"
 #include "domain/memory/paged_memory.h"
+#include "domain/memory/process_memory.h"
 
 namespace hexlith::domain::arm {
 
@@ -37,5 +38,7 @@ std::string_view Describe(StopReason reason) {
 
 template Stop Step<memory::PagedMemory>(CpuState&, memory::PagedMemory&);
 template Stop Run<memory::PagedMemory>(CpuState&, memory::PagedMemory&, std::uint64_t);
+template Stop Step<memory::ProcessMemory>(CpuState&, memory::ProcessMemory&);
+template Stop Run<memory::ProcessMemory>(CpuState&, memory::ProcessMemory&, std::uint64_t);
 
 }  // namespace hexlith::domain::arm

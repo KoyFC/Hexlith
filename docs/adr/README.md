@@ -17,5 +17,6 @@ The format is deliberately short: context, the options that were actually consid
 | [0009](0009-sha256-from-openssl.md) | SHA-256 comes from OpenSSL's libcrypto | Accepted |
 | [0010](0010-floating-point-on-the-host.md) | VFP arithmetic runs on the host's floating point | Accepted |
 | [0011](0011-only-underivable-records-in-the-repository.md) | Only records nothing can derive are committed | Accepted |
+| [0012](0012-guest-memory-is-a-page-table.md) | Guest memory is a page table | Accepted |
 
 A record marked provisional has a named condition that will settle it. It is written down because work has to proceed in the meantime, not because the question is closed.
