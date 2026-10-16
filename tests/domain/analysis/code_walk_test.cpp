@@ -130,7 +130,7 @@ TEST(WalkCode, FollowsACallAndStopsAtTheReturn) {
 
     EXPECT_EQ(result.report.instructions, 5U);
     EXPECT_EQ(result.report.undefined_stops, 0U);
-    EXPECT_EQ(result.report.instruction_set_conflicts, 0U);
+    EXPECT_TRUE(result.report.instruction_set_conflicts.empty());
     EXPECT_TRUE(HasFunction(result, SixthWord, arm::InstructionSet::Arm));
 
     // Two regions: the caller, and the callee past the two words nothing reaches.
@@ -189,7 +189,7 @@ TEST(WalkCode, ChangesInstructionSetAtAnExchangingBranch) {
     const WalkResult result =
         WalkCode(WalkImage{.bytes = image.Bytes(), .base = Base}, seeds, Options(image));
 
-    EXPECT_EQ(result.report.instruction_set_conflicts, 0U);
+    EXPECT_TRUE(result.report.instruction_set_conflicts.empty());
     EXPECT_TRUE(HasFunction(result, FourthWord, arm::InstructionSet::Thumb))
         << "the exchange establishes which encoding the target is in";
 
@@ -213,8 +213,8 @@ TEST(WalkCode, ReportsAnAddressReachedInBothInstructionSets) {
     const WalkResult result =
         WalkCode(WalkImage{.bytes = image.Bytes(), .base = Base}, seeds, Options(image));
 
-    EXPECT_EQ(result.report.instruction_set_conflicts, 1U)
-        << "one of the two paths is wrong and the walk has to say so";
+    EXPECT_EQ(result.report.instruction_set_conflicts, std::vector<std::uint32_t>{FourthWord})
+        << "one of the two paths is wrong and the walk has to say where";
 }
 
 TEST(WalkCode, MarksALiteralPoolWordAsDataAndFollowsWhatItPointsAt) {

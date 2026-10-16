@@ -147,7 +147,7 @@ private:
         const std::uint8_t mark = marks_.at(offset);
 
         if ((mark & OtherMarkFor(seed.instruction_set)) != 0) {
-            ++result_.report.instruction_set_conflicts;
+            result_.report.instruction_set_conflicts.push_back(address);
             return false;
         }
         if ((mark & MarkFor(seed.instruction_set)) != 0 && (mark & MarkInstructionStart) != 0) {

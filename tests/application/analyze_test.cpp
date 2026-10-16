@@ -340,5 +340,21 @@ TEST(RenderAnalyzeSummary, NamesTheNumbersWorthWatching) {
     EXPECT_NE(summary.find("11824"), std::string::npos);
 }
 
+TEST(RenderAnalyzeSummary, ListsEachConflictOnceWithHowOftenItWasReported) {
+    // Two addresses the real run reported, one of them twice.
+    constexpr std::uint32_t ReportedTwice = 0x00101C90;
+    constexpr std::uint32_t ReportedOnce = 0x00100184;
+
+    AnalyzeReport report;
+    report.walk.instruction_set_conflicts = {ReportedTwice, ReportedOnce, ReportedTwice};
+
+    const std::string summary = RenderAnalyzeSummary(report);
+    EXPECT_NE(summary.find("3 instruction set conflict(s)"), std::string::npos);
+    EXPECT_NE(summary.find("conflict at 0x00100184, reported 1 time(s)"), std::string::npos);
+    EXPECT_NE(summary.find("conflict at 0x00101C90, reported 2 time(s)"), std::string::npos);
+    EXPECT_LT(summary.find("0x00100184"), summary.find("0x00101C90"))
+        << "listed by address, so two runs can be compared line by line";
+}
+
 }  // namespace
 }  // namespace hexlith::application

@@ -45,6 +45,14 @@ repos:
         files: '^scripts/compare_cro_link\.py$'
         stages: [pre-commit]
 
+      - id: compare-ghidra-analysis-self-test
+        name: Ghidra analysis comparison self-test
+        entry: scripts/compare_ghidra_analysis.py --self-test
+        language: system
+        pass_filenames: false
+        files: '^scripts/compare_ghidra_analysis\.py$'
+        stages: [pre-commit]
+
       - id: commit-message
         name: Check commit message
         entry: scripts/check_commit_message.py

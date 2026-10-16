@@ -7,6 +7,7 @@
 #include "domain/ctr/layout.h"
 
 #include <format>
+#include <map>
 #include <set>
 #include <span>
 #include <vector>
@@ -44,6 +45,20 @@ PositionsImportedFromStatic(std::span<const core::ByteSpan> modules) {
         }
     }
     return positions;
+}
+
+// One line per address that two paths disagree about, with how many paths ran
+// into it, so that each one can be read and checked against another tool.
+std::string RenderConflicts(const std::vector<std::uint32_t>& conflicts) {
+    std::map<std::uint32_t, std::size_t> reports;
+    for (const std::uint32_t address : conflicts) {
+        ++reports[address];
+    }
+    std::string text;
+    for (const auto& [address, count] : reports) {
+        text.append(std::format("  conflict at 0x{:08X}, reported {} time(s)\n", address, count));
+    }
+    return text;
 }
 
 }  // namespace
@@ -193,8 +208,9 @@ std::string RenderAnalyzeSummary(const AnalyzeReport& report) {
                             report.bounds.overlapping));
     text.append(std::format("{} instruction set conflict(s), {} stop(s) at a word that is not an "
                             "instruction\n",
-                            report.walk.instruction_set_conflicts,
+                            report.walk.instruction_set_conflicts.size(),
                             report.walk.undefined_stops));
+    text.append(RenderConflicts(report.walk.instruction_set_conflicts));
     text.append(std::format("{} pointer(s) in data, {} word(s) swept without a prologue\n",
                             report.tables.pointers,
                             report.walk.words_without_a_prologue));

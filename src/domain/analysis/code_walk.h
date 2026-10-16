@@ -122,10 +122,11 @@ struct WalkReport {
     // means a call into a module, which is the normal case rather than an error.
     std::size_t targets_outside_the_image = 0;
 
-    // An address reached as ARM on one path and as Thumb on another. This should
-    // not happen and every one of them is worth looking at: one of the two paths
-    // is wrong.
-    std::size_t instruction_set_conflicts = 0;
+    // Each time an address was reached as ARM on one path and as Thumb on
+    // another, the address, in the order the walk met them. This should not
+    // happen and every one of them is worth looking at: one of the two paths is
+    // wrong. An address appears once per path that ran into it.
+    std::vector<std::uint32_t> instruction_set_conflicts;
 
     std::size_t literal_pool_words = 0;
     std::size_t pointers_followed = 0;

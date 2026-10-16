@@ -118,7 +118,7 @@ std::string RenderModulesReport(const AnalyzeModulesReport& report) {
             one.imported_positions,
             one.relocated_code_pointers,
             one.imported_words,
-            one.walk.instruction_set_conflicts,
+            one.walk.instruction_set_conflicts.size(),
             one.walk.undefined_stops));
     }
     return text;
@@ -129,7 +129,7 @@ std::string RenderModulesSummary(const AnalyzeModulesReport& report) {
     std::size_t stops = 0;
     std::size_t preserved = 0;
     for (const ModuleSummary& module : report.modules) {
-        conflicts += module.report.walk.instruction_set_conflicts;
+        conflicts += module.report.walk.instruction_set_conflicts.size();
         stops += module.report.walk.undefined_stops;
         preserved += module.tables.Preserved();
     }

@@ -196,12 +196,66 @@ Two properties hold and the tests hold them. Running it twice writes identical b
 
 The tables are written beside the extraction and not into this repository. [ADR 0011](adr/0011-only-underivable-records-in-the-repository.md) settles what does go into `data/profiles/`: only records nothing can derive, such as a name a person worked out, and not the derived tables, which are regenerated from the image in half a second.
 
+## Checked against Ghidra
+
+Ghidra answers the same two questions, where functions start and which bytes are code, with heuristics of its own. It is not a source of truth any more than Hexlith is, so a disagreement between the two is a place to look and not a verdict. Where they disagree, the bytes themselves, decoded by the decoder that was checked against Capstone, are the third source.
+
+The comparison runs Ghidra 12.1.4 headless over the decompressed `.code`, with a raw import at `0x00100000` and the language `ARM:LE:32:v6`, which is the ARM11's architecture. REA opens a raw image as ARMv7, which would accept encodings the ARM11 does not have, so the bulk comparison does not go through it. A pre-script marks the entry point, since a raw image has none, and a post-script writes function entries, runs of instructions and resolved computed jumps, as addresses and counts, into the workspace:
+
+```sh
+W=~/recomp-data/work/<id>
+$GHIDRA_INSTALL_DIR/support/analyzeHeadless $W/rea/ghidra-project code \
+    -import $W/exefs/.code -loader BinaryLoader -loader-baseAddr 0x100000 \
+    -processor ARM:LE:32:v6 -scriptPath scripts/ghidra \
+    -preScript MarkEntryPoint.java 0x00100000 \
+    -postScript ExportAnalysisFacts.java $W/rea/export
+hexlith-analyze --work-dir ~/recomp-data/work > analyze.txt
+scripts/compare_ghidra_analysis.py --ghidra $W/rea/export --tables $W/analysis \
+    --text-start 0x00100000 --text-size 0x43BEDC --summary analyze.txt
+```
+
+The analysis takes several minutes, against half a second for `hexlith-analyze`. Measured on 2026-10-16, over the text segment only:
+
+| | Hexlith | Ghidra |
+| --- | --- | --- |
+| Functions | 17,308 | 14,860 |
+| Code bytes | 3,567,824, 80.4 percent | 3,749,360, 84.4 percent |
+
+| | |
+| --- | --- |
+| Entries both found | 13,289 |
+| Shared entries in different instruction sets | 0 |
+| Entries only Hexlith found | 4,019, of which Ghidra has 828 as code |
+| Entries only Ghidra found | 1,571, of which Hexlith has 501 as code |
+| Code to both, same instruction set | 3,203,476 bytes |
+| Code to both, different instruction set | 44 bytes |
+| Code to Hexlith only | 364,304 bytes |
+| Code to Ghidra only | 545,840 bytes |
+
+Between them the two call 92.7 percent of the text code, so most of what each misses the other has reached. Where both call a byte code they agree on its encoding everywhere except 44 bytes, and those are the conflicts below.
+
+**Jump tables.** Ghidra resolved 450 computed jumps with more than one target, 3,227 distinct targets in all. 371 of those jumps sit in code Hexlith already walks, and 3,019 of the targets are bytes Hexlith has not reached. That is the gap the walk leaves at every `ldr pc` through a table and every `add pc`, measured for the first time, and it is the largest one.
+
+**The conflicts.** `hexlith-analyze` now names each address it was told was both ARM and Thumb. Against Ghidra:
+
+| Address | Reports | Ghidra |
+| --- | --- | --- |
+| `0x00100048` | 1 | Thumb, a function entry |
+| `0x00100184` | 1 | Thumb, inside the function at `0x00100134` |
+| `0x00101C90` | 11 | Thumb, inside the function at `0x00101928` |
+| `0x001FBDF0` to `0x00209FF8` | 8 addresses, one report each | ARM, each inside a function |
+| `0x0020C49A` | 2 | not code |
+| `0x0040049C` | 1 | ARM |
+| `0x00470048` | 1 | ARM |
+
+Ghidra agreeing with one side does not settle a conflict, and `0x00100184` shows why. A module imports that position as ARM. Decoded as ARM, the bytes there are a complete function, a push of r4 and lr, three moves, a load, an add and the matching pop. Decoded as Thumb, the second halfword is undefined. So the import is right, and Hexlith's heuristic path and Ghidra are both wrong in the same way. It also shows a fault in the table: `functions.txt` records the address with `isa=thumb` and `source=relocation`, so the function record took its instruction set from the heuristic path that reached the byte first rather than from the relocation that named it. The other thirteen have not been read yet.
+
 ## What is not done yet
 
 **The 20 percent the walk does not reach.** Some of it is code reached through a dispatch the analysis cannot follow, some is data, and nothing here can say which without more work. The honest form of that is a gap in the tables.
 
-**Jump tables.** A computed branch through a table ends a path. The tables are not found, the entries are not followed, and no region is marked as one. This is the largest single gap and the hardest case, which is why [ADR 0006](adr/0006-analysis-layer-format.md) gave `jump-table` a region kind of its own before anything could produce one.
+**Jump tables.** A computed branch through a table ends a path. The tables are not found, the entries are not followed, and no region is marked as one. Ghidra's 450, with 3,019 targets Hexlith does not reach, put a number on it. This is the largest single gap and the hardest case, which is why [ADR 0006](adr/0006-analysis-layer-format.md) gave `jump-table` a region kind of its own before anything could produce one.
 
-**The ten conflicts, the nine overlaps and the nine stops.** Each is a place where two paths disagree, about an encoding or about which function owns a byte, and each is worth reading rather than counting.
+**The conflicts, overlaps and stops of the main executable.** 25 conflict reports at 14 addresses, of which one has been read, and 14 stops. Each is a place where two paths disagree, about an encoding or about which function owns a byte, and each is worth reading rather than counting. The modules have no conflicts and no stops.
 
-**The ten conflicts and the stops of the main executable.** The modules have neither, as the next section says.
+**The instruction set of a seeded function record.** At `0x00100184` a record seeded by a relocation carries the instruction set of the heuristic path that got there first. The relocation should win.
