@@ -1,5 +1,6 @@
 #include "domain/ctr/exheader.h"
 
+#include <bit>
 #include <format>
 
 namespace hexlith::domain::ctr {
@@ -61,7 +62,57 @@ ReadServices(core::ByteSpan region, std::size_t offset, std::size_t count, std::
     return services;
 }
 
+// How many ones a descriptor starts with, which is its type.
+unsigned LeadingOnes(std::uint32_t word) {
+    return static_cast<unsigned>(std::countl_one(word));
+}
+
+KernelCapabilities ReadKernelCapabilities(core::ByteSpan region) {
+    KernelCapabilities capabilities;
+    for (std::size_t index = 0; index < exheader::KernelDescriptorCount; ++index) {
+        const std::uint32_t word =
+            core::ReadU32At(region, exheader::KernelCapabilitiesOffset + (index * 4)).ValueOr(0);
+        if (word == exheader::UnusedDescriptor) {
+            continue;
+        }
+        switch (LeadingOnes(word)) {
+        case exheader::SystemCallMaskOnes: {
+            const std::uint32_t table =
+                (word >> exheader::SystemCallTableShift) & exheader::SystemCallTableMask;
+            capabilities.system_call_masks.at(table) |= word & exheader::SystemCallMaskBits;
+            break;
+        }
+        case exheader::KernelVersionOnes:
+            capabilities.kernel_version =
+                static_cast<std::uint16_t>(word & exheader::KernelVersionMask);
+            break;
+        case exheader::HandleTableSizeOnes:
+            capabilities.handle_table_size = word & exheader::HandleTableSizeMask;
+            break;
+        case exheader::KernelFlagsOnes:
+            capabilities.kernel_flags = word & exheader::KernelFlagsMask;
+            capabilities.memory_type =
+                static_cast<std::uint8_t>((capabilities.kernel_flags >> exheader::MemoryTypeShift) &
+                                          exheader::MemoryTypeMask);
+            break;
+        default:
+            // Interrupts and memory mappings say what hardware the process may
+            // touch directly, which an HLE process never does.
+            break;
+        }
+    }
+    return capabilities;
+}
+
 }  // namespace
+
+bool KernelCapabilities::AllowsSystemCall(unsigned number) const {
+    const std::size_t table = number / exheader::SystemCallsPerMask;
+    if (table >= system_call_masks.size()) {
+        return false;
+    }
+    return ((system_call_masks.at(table) >> (number % exheader::SystemCallsPerMask)) & 1U) != 0;
+}
 
 core::Result<ExHeader> ParseExHeader(core::ByteSpan region) {
     if (region.size() < exheader::SizeOnDisk) {
@@ -120,6 +171,12 @@ core::Result<ExHeader> ParseExHeader(core::ByteSpan region) {
     header.program_id = core::ReadU64At(region, exheader::AciProgramIdOffset).Value();
     header.core_version = core::ReadU32At(region, exheader::AciCoreVersionOffset).Value();
     header.main_thread_priority = core::ReadU8At(region, exheader::AciPriorityOffset).Value();
+
+    const std::uint8_t flag0 = core::ReadU8At(region, exheader::AciFlag0Offset).Value();
+    header.ideal_processor = flag0 & exheader::IdealProcessorMask;
+    header.affinity_mask = (flag0 >> exheader::AffinityMaskShift) & exheader::AffinityMaskMask;
+    header.system_mode = (flag0 >> exheader::SystemModeShift) & exheader::SystemModeMask;
+    header.kernel = ReadKernelCapabilities(region);
 
     const core::Result<std::vector<std::string>> services =
         ReadServices(region,

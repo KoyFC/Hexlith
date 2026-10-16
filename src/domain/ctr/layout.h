@@ -208,6 +208,47 @@ constexpr std::size_t NcchPublicKeyOffset = 0x500;
 constexpr std::size_t NcchPublicKeySize = 0x100;
 constexpr std::size_t LimitationAciOffset = 0x600;
 
+// Flag0 of the local system capabilities: the core the main thread prefers in
+// bits 0 and 1, the cores it may run on in bits 2 and 3, and the Old 3DS memory
+// mode in bits 4 to 7, of which 0 is the 64 MiB application region every retail
+// title asks for. Source: 3dbrew, NCCH/Extended Header.
+constexpr std::uint8_t IdealProcessorMask = 0x03;
+constexpr unsigned AffinityMaskShift = 2;
+constexpr std::uint8_t AffinityMaskMask = 0x03;
+constexpr unsigned SystemModeShift = 4;
+constexpr std::uint8_t SystemModeMask = 0x0F;
+
+// The ARM11 kernel capabilities: 28 descriptors at 0x370, each a word whose
+// type is the number of ones it starts with before its first zero. An unused
+// descriptor is all ones. Source: 3dbrew, NCCH/Extended Header, ARM11 Kernel
+// Capabilities.
+constexpr std::size_t KernelCapabilitiesOffset = 0x370;
+constexpr std::size_t KernelDescriptorCount = 28;
+constexpr std::uint32_t UnusedDescriptor = 0xFFFFFFFF;
+
+constexpr unsigned InterruptInfoOnes = 3;
+constexpr unsigned SystemCallMaskOnes = 4;
+constexpr unsigned KernelVersionOnes = 6;
+constexpr unsigned HandleTableSizeOnes = 7;
+constexpr unsigned KernelFlagsOnes = 8;
+
+// A system call mask covers 24 calls, and bits 24 to 26 say which 24: table n
+// covers calls 24n to 24n + 23.
+constexpr std::size_t SystemCallMaskTableCount = 8;
+constexpr unsigned SystemCallsPerMask = 24;
+constexpr std::uint32_t SystemCallMaskBits = 0x00FFFFFF;
+constexpr unsigned SystemCallTableShift = 24;
+constexpr std::uint32_t SystemCallTableMask = 0x7;
+
+constexpr std::uint32_t KernelVersionMask = 0xFFFF;
+constexpr std::uint32_t HandleTableSizeMask = 0x7FFFF;
+constexpr std::uint32_t KernelFlagsMask = 0xFFFFF;
+
+// Bits 8 to 11 of the kernel flags: the memory region the process allocates
+// from, 1 for the application region.
+constexpr unsigned MemoryTypeShift = 8;
+constexpr std::uint32_t MemoryTypeMask = 0xF;
+
 }  // namespace exheader
 
 // ExeFS. Source: docs/formats/exefs.md, 3dbrew ExeFS.

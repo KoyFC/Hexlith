@@ -5,6 +5,7 @@
 #include "core/result.h"
 #include "domain/ctr/layout.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -30,6 +31,26 @@ struct CodeSetInfo {
     [[nodiscard]] bool Present() const {
         return page_count > 0;
     }
+};
+
+// What the kernel lets the process do, from the ARM11 kernel capabilities.
+// docs/formats/exheader.md has the descriptor format and the values the
+// reference title declares.
+struct KernelCapabilities {
+    // The kernel version the title was built for, major in the high byte and
+    // minor in the low one. It decides where the linear heap is.
+    std::uint16_t kernel_version = 0;
+
+    std::uint32_t handle_table_size = 0;
+    std::uint32_t kernel_flags = 0;
+
+    // Which region of FCRAM the process allocates from, 1 for the application.
+    std::uint8_t memory_type = 0;
+
+    // One mask of 24 system calls per table, in table order.
+    std::array<std::uint32_t, exheader::SystemCallMaskTableCount> system_call_masks{};
+
+    [[nodiscard]] bool AllowsSystemCall(unsigned number) const;
 };
 
 // The extended header: how to load the executable, and what it is allowed to
@@ -63,6 +84,14 @@ struct ExHeader {
     std::uint64_t program_id = 0;
     std::uint32_t core_version = 0;
     std::uint8_t main_thread_priority = 0;
+
+    // From flag0: the core the main thread prefers, the cores it may run on as
+    // a mask, and the Old 3DS memory mode, 0 for the 64 MiB application region.
+    std::uint8_t ideal_processor = 0;
+    std::uint8_t affinity_mask = 0;
+    std::uint8_t system_mode = 0;
+
+    KernelCapabilities kernel;
 
     // The authoritative statement of which Horizon services the title can
     // reach, and therefore the work list for the HLE layer. A service absent

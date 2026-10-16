@@ -72,10 +72,30 @@ ARM11 local system capabilities, relative to 0x200:
 
 The service access control list is the authoritative statement of which Horizon services a title uses, which makes it the work list for the HLE layer. A service absent from this list cannot be reached by the title at all.
 
+Flag0, at 0x20E, packs three fields: the core the main thread prefers in bits 0 and 1, the cores it may run on in bits 2 and 3, and the Old 3DS memory mode in bits 4 to 7. Mode 0 gives the application a 64 MiB region of FCRAM. Source: 3dbrew, NCCH/Extended Header.
+
+ARM11 kernel capabilities, at 0x370, are 28 descriptors of one word each, followed by 0x10 reserved bytes. A descriptor's type is the number of ones it starts with before its first zero, and an unused one is all ones. Source: 3dbrew, NCCH/Extended Header, ARM11 Kernel Capabilities.
+
+| Leading ones | Type | Fields |
+| --- | --- | --- |
+| 3 | Interrupt info | |
+| 4 | System call mask | Bits 24 to 26 pick a table of 24 calls, bits 0 to 23 allow them: table n covers calls 24n to 24n + 23 |
+| 6 | Kernel release version | Major in bits 8 to 15, minor in bits 0 to 7 |
+| 7 | Handle table size | Bits 0 to 18 |
+| 8 | Kernel flags | Memory type in bits 8 to 11, 1 for the application region |
+| 9 | Map an address range | Two descriptors, start and exclusive end |
+| 11 | Map one I/O page | Page index in bits 0 to 19 |
+
+The kernel version matters beyond bookkeeping: the kernel puts the linear heap at `0x14000000` for a title declaring a version below 2.44 and at `0x30000000` otherwise. [`horizon-memory.md`](../horizon-memory.md) has the source.
+
 ## Observed in the reference image
 
 The application title is `kujira-1`. CompressExefsCode is set and SDApplication is not. Thirty dependency module title IDs are listed, the save data size is 1 MiB, and the jump ID equals the program ID.
 
 The service access control list holds 28 entries. `ldr:ro` is among them, which is what established before any module was parsed that the title loads CRO modules at runtime. The extended service access control list is empty.
+
+Flag0 is `0x04`: ideal processor 0, affinity mask 1, memory mode 0. The main thread priority is `0x30`.
+
+The kernel capabilities declare kernel version 2.35, a handle table of 512 entries, memory type 1, three system call mask tables and six address range descriptors, with the remaining descriptors unused. The masks allow 51 calls: `0x01` to `0x03`, `0x06`, `0x08` to `0x0C`, `0x0F`, `0x11`, `0x13` to `0x25`, `0x27` to `0x32`, `0x35` to `0x3D`. Every one of the 32 calls the walked code of the main executable makes is among them, which is a check on both the parser and that count.
 
 Segment addresses and sizes are recorded in the GameProfile rather than here, since they are version-specific data rather than format knowledge.

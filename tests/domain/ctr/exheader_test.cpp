@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <gtest/gtest.h>
 #include <string>
+#include <vector>
 
 namespace hexlith::domain::ctr {
 namespace {
@@ -159,6 +160,70 @@ TEST(ParseExHeader, RefusesAnApplicationTitleThatIsNotText) {
     ASSERT_FALSE(header.Ok());
     EXPECT_NE(header.Failure().Message().find("the application title"), std::string::npos)
         << header.Failure().Message();
+}
+
+// Writes a little-endian word into a copy of an extended header.
+void Put32(std::vector<std::uint8_t>& region, std::size_t offset, std::uint32_t value) {
+    for (std::size_t byte = 0; byte < 4; ++byte) {
+        region.at(offset + byte) = static_cast<std::uint8_t>(value >> (8 * byte));
+    }
+}
+
+// A copy of a synthetic extended header with the kernel capability
+// descriptors and flag0 replaced. The descriptors are laid out the way 3dbrew
+// gives them, the type being the run of ones at the top: kernel version 2.35, a
+// 512-entry handle table, memory type 1, and one allowed system call in each of
+// the first three mask tables. Flag0 says ideal processor 0, affinity 1, memory
+// mode 0.
+std::vector<std::uint8_t> RegionWithKernelCapabilities() {
+    constexpr std::uint32_t KernelVersion = 0xFC000223;
+    constexpr std::uint32_t HandleTable = 0xFE000200;
+    constexpr std::uint32_t KernelFlags = 0xFF000101;
+    constexpr std::uint32_t MaskTable0 = 0xF0000002;  // call 0x01
+    constexpr std::uint32_t MaskTable1 = 0xF1000800;  // call 0x18 + 11 = 0x23
+    constexpr std::uint32_t MaskTable2 = 0xF2000004;  // call 0x30 + 2 = 0x32
+    constexpr std::uint8_t Flag0 = 0x04;
+
+    const SyntheticImage image = BuildSyntheticImage(DefaultImageSpec());
+    const core::ByteSpan original = Region(image);
+    std::vector<std::uint8_t> region(original.begin(), original.end());
+    const std::vector<std::uint32_t> descriptors = {
+        MaskTable0, MaskTable1, MaskTable2, KernelFlags, HandleTable, KernelVersion};
+    for (std::size_t index = 0; index < exheader::KernelDescriptorCount; ++index) {
+        Put32(region,
+              exheader::KernelCapabilitiesOffset + (index * 4),
+              index < descriptors.size() ? descriptors.at(index) : exheader::UnusedDescriptor);
+    }
+    region.at(exheader::AciFlag0Offset) = Flag0;
+    return region;
+}
+
+TEST(ParseExHeader, ReadsTheKernelCapabilities) {
+    const core::Result<ExHeader> header = ParseExHeader(RegionWithKernelCapabilities());
+    ASSERT_TRUE(header.Ok()) << header.Failure().Message();
+    const KernelCapabilities& kernel = header.Value().kernel;
+    EXPECT_EQ(kernel.kernel_version, 0x0223);
+    EXPECT_EQ(kernel.handle_table_size, 0x200U);
+    EXPECT_EQ(kernel.memory_type, 1U);
+}
+
+TEST(ParseExHeader, ReadsWhichSystemCallsAreAllowed) {
+    const core::Result<ExHeader> header = ParseExHeader(RegionWithKernelCapabilities());
+    ASSERT_TRUE(header.Ok()) << header.Failure().Message();
+    const KernelCapabilities& kernel = header.Value().kernel;
+    EXPECT_TRUE(kernel.AllowsSystemCall(0x01));
+    EXPECT_TRUE(kernel.AllowsSystemCall(0x23));
+    EXPECT_TRUE(kernel.AllowsSystemCall(0x32));
+    EXPECT_FALSE(kernel.AllowsSystemCall(0x02));
+    EXPECT_FALSE(kernel.AllowsSystemCall(0xFF)) << "past the last table";
+}
+
+TEST(ParseExHeader, ReadsFlag0) {
+    const core::Result<ExHeader> header = ParseExHeader(RegionWithKernelCapabilities());
+    ASSERT_TRUE(header.Ok()) << header.Failure().Message();
+    EXPECT_EQ(header.Value().ideal_processor, 0U);
+    EXPECT_EQ(header.Value().affinity_mask, 1U);
+    EXPECT_EQ(header.Value().system_mode, 0U);
 }
 
 }  // namespace
