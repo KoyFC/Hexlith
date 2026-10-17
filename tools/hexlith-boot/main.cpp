@@ -1,8 +1,10 @@
 #include "adapters/filesystem/cartridge_image.h"
+#include "adapters/filesystem/directory_tree_store.h"
 #include "adapters/filesystem/file_rom_source.h"
 #include "adapters/filesystem/workspace_locator.h"
 #include "application/boot.h"
 #include "application/command_line.h"
+#include "application/save_storage.h"
 #include "application/workspace.h"
 #include "domain/profile/game_profile.h"
 #include "domain/profile/registry.h"
@@ -45,6 +47,9 @@ constexpr int Usage = 2;
 constexpr double Million = 1e6;
 
 constexpr std::string_view CaptureExtension = ".bin";
+
+// Where the title's save data is kept, under its directory in the workspace.
+constexpr std::string_view SaveDirectory = "save";
 
 void Report(std::string_view message) {
     std::cerr << "hexlith-boot: " << message << '\n';
@@ -235,6 +240,31 @@ int Run(const application::BootOptions& options) {
         Trace(running);
     }
 
+    // The save data outlives the run unless this is a new game, and a commit
+    // that cannot be written stops nothing: it is reported, and the run goes
+    // on with the archive in memory.
+    const std::filesystem::path save_root = workspace.Value().work_directory.path /
+                                            profile::WorkspaceDirectoryName(*target) /
+                                            SaveDirectory;
+    adapters::DirectoryTreeStore saves{save_root};
+    if (!options.new_game) {
+        const core::Status restored = application::RestoreSaves(saves, title.Save(), title.Extra());
+        if (!restored) {
+            Report(restored.Failure().Message());
+            return Failure;
+        }
+        std::cout << std::format(
+            "saves   {}{}\n", saves.Describe(), title.Save().IsFormatted() ? "" : ", none yet");
+        title.Save().OnCommit([&saves, &title](const auto&) {
+            const core::Status stored = application::StoreSaves(saves, title.Save(), title.Extra());
+            if (!stored) {
+                Report(stored.Failure().Message());
+            }
+        });
+    } else {
+        std::cout << "saves   none, a new game\n";
+    }
+
     const auto began = std::chrono::steady_clock::now();
     const kernel::KernelStop stop = running.Run(options.instruction_limit);
     const double seconds =
@@ -242,6 +272,12 @@ int Run(const application::BootOptions& options) {
 
     PrintStop(stop);
     PrintModules(title);
+    if (!options.new_game) {
+        const core::Status stored = application::StoreSaves(saves, title.Save(), title.Extra());
+        if (!stored) {
+            Report(stored.Failure().Message());
+        }
+    }
     std::cout << std::format("{} instructions, {} ticks, in {:.2f} s: {:.1f} million a second\n",
                              running.Executed(),
                              running.Threads().Ticks(),

@@ -2,6 +2,7 @@ hexlith_add_test(
     hexlith_adapters_filesystem_test
     cartridge_image_test.cpp
     directory_blob_sink_test.cpp
+    directory_tree_store_test.cpp
     file_rom_source_test.cpp
 )
 

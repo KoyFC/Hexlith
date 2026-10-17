@@ -4,6 +4,8 @@ target_sources(
             cartridge_image.h
             directory_blob_sink.cpp
             directory_blob_sink.h
+            directory_tree_store.cpp
+            directory_tree_store.h
             file_rom_source.cpp
             file_rom_source.h
             workspace_locator.cpp

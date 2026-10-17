@@ -18,6 +18,7 @@ constexpr std::string_view NoSweepOption = "--no-sweep";
 constexpr std::string_view LimitOption = "--limit";
 constexpr std::string_view CompareOption = "--compare";
 constexpr std::string_view TraceOption = "--trace";
+constexpr std::string_view NewGameOption = "--new-game";
 
 core::Status TakeValue(std::span<const std::string_view> arguments,
                        std::size_t& index,
@@ -203,6 +204,10 @@ core::Result<BootOptions> ParseBootCommandLine(std::span<const std::string_view>
             options.trace = true;
             continue;
         }
+        if (argument == NewGameOption) {
+            options.new_game = true;
+            continue;
+        }
 
         core::Status taken;
         if (argument == RomDirectoryOption) {
@@ -250,7 +255,11 @@ std::string BootUsage() {
         "  {} <path>      a directory of memory captured at the moment the run stops,\n"
         "                       one file per range named by its address, to compare with\n"
         "  {}              every service request and system call as it happens\n"
+        "  {}           no save data at the start and none written, the same run every time\n"
         "  {}               this text\n"
+        "\n"
+        "Without {} the save data under <work-dir>/<title>/save is read at the start and\n"
+        "written each time the title commits it, and when the run stops.\n"
         "\n"
         "Paths are taken from the command line first, then from {} and {},\n"
         "then from the configuration file, the same way hexlith-extract takes them.\n",
@@ -261,7 +270,9 @@ std::string BootUsage() {
         DefaultBootInstructionLimit,
         CompareOption,
         TraceOption,
+        NewGameOption,
         HelpOption,
+        NewGameOption,
         RomDirectoryVariable,
         WorkDirectoryVariable);
 }

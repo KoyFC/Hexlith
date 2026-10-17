@@ -6,6 +6,7 @@ hexlith_add_test(
     command_line_test.cpp
     extract_test.cpp
     manifest_test.cpp
+    save_storage_test.cpp
     workspace_test.cpp
 )
 

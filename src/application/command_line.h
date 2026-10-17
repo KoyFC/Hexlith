@@ -65,6 +65,11 @@ struct BootOptions {
     // Prints every request to a service and every system call as it happens.
     bool trace = false;
 
+    // Starts from no save data and writes none, so that the run is the same
+    // every time. Otherwise the save data under the work directory is read
+    // at the start and written on every commit and at the end.
+    bool new_game = false;
+
     bool help = false;
 };
 

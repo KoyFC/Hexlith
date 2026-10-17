@@ -23,7 +23,7 @@ The console itself writes save data through a journal: what the title writes is 
 
 The second. `services::SaveData` is a tree of directories and files held in memory, with the rules of the console's archive: the results Azahar's save data archive gives for each case, and for extra data the fixed-size files Azahar's extra data archive enforces. The FS service hands every commit to a function the application layer supplies, and the application writes the archive out then and when the run ends.
 
-On disk it is a directory per archive under `work/<id>/save/`: `savedata/` for the title's save data and `extdata/<media>-<high>-<low>/` for each extra data archive, each holding a `format.txt` with what the archive was formatted with and a `files/` tree that mirrors the archive's own, empty directories included. A write goes to a sibling directory first and replaces the old one by renaming, so a run that stops halfway never leaves half an archive.
+On disk it is a directory per archive under `work/<id>/save/`: `savedata/` for the title's save data and `extdata/<media>-<high>-<low>/` for each extra data archive, each holding a `format.txt` with what the archive was formatted with and a `files/` tree that mirrors the archive's own, empty directories included. A write goes whole to a sibling directory first and replaces the old one by renaming, so a run that stops halfway never leaves half an archive where the next run reads one.
 
 A run started as a new game neither reads nor writes any of it: the archive starts unformatted and stays in memory.
 

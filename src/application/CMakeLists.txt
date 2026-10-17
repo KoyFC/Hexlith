@@ -14,6 +14,8 @@ add_library(
     extract.h
     manifest.cpp
     manifest.h
+    save_storage.cpp
+    save_storage.h
     workspace.cpp
     workspace.h
 )

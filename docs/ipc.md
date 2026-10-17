@@ -65,7 +65,7 @@ Each answers from 3dbrew's description of the command and the answer Azahar give
 | `ptm:u` | `PowerManager` | A step history of zero steps an hour | |
 | `ldr:ro` | `RelocatableObjects` | The CRS, the CRR, and CRO modules loaded, linked and fixed as the console's loader leaves them | Unloading, LoadCRO_New, linking by hand. [`cro-linking.md`](cro-linking.md) has the rest |
 
-Save data and extra data are trees held in memory with the console's rules for each, and fs:USER hands every commit to whoever owns the archive. [ADR 0015](adr/0015-save-data-lives-in-memory-and-is-written-on-commit.md) records why they are not written through to the disk.
+Save data and extra data are trees held in memory with the console's rules for each, and fs:USER hands every commit to whoever owns the archive. [ADR 0015](adr/0015-save-data-lives-in-memory-and-is-written-on-commit.md) records why they are not written through to the disk. `hexlith-boot` reads them from `<work-dir>/<title>/save/` when it starts and writes them back on each commit and when it stops; with `--new-game` it does neither, which is how a run is made to start from a first boot every time.
 
 The shared font is a stand-in built in code from the format, since the console's is not on the cartridge and the game stops without one. [ADR 0014](adr/0014-a-stand-in-for-the-shared-font.md) records why.
 
