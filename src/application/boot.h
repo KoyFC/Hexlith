@@ -7,6 +7,7 @@
 #include "domain/kernel/kernel.h"
 #include "domain/services/registry.h"
 #include "domain/services/relocatable_objects.h"
+#include "domain/services/save_data.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -45,6 +46,17 @@ public:
         return header_;
     }
 
+    // The title's save data, empty and unformatted until something restores
+    // it or the game formats it.
+    domain::services::SaveData& Save() {
+        return *save_;
+    }
+
+    // Its extra data archives, none until the game creates one.
+    domain::services::ExtraData& Extra() {
+        return *extra_;
+    }
+
     // ldr:ro, for what it has loaded.
     [[nodiscard]] const domain::services::RelocatableObjects& Loader() const {
         return *loader_;
@@ -59,6 +71,8 @@ private:
     core::ByteSpan romfs_;
     domain::kernel::Kernel kernel_;
     domain::services::ServiceRegistry registry_;
+    std::shared_ptr<domain::services::SaveData> save_;
+    std::shared_ptr<domain::services::ExtraData> extra_;
     std::shared_ptr<domain::services::RelocatableObjects> loader_;
 };
 

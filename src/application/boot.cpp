@@ -132,6 +132,8 @@ BootedTitle::BootedTitle(domain::ctr::ExHeader header, core::ByteSpan romfs)
       romfs_(romfs),
       kernel_(ConfigFor(header_)),
       registry_(AllowedServices(header_)),
+      save_(std::make_shared<services::SaveData>()),
+      extra_(std::make_shared<services::ExtraData>()),
       loader_(std::make_shared<services::RelocatableObjects>(kernel_)) {}
 
 core::Result<std::unique_ptr<BootedTitle>> BootedTitle::FromCartridge(core::ByteSpan image,
@@ -161,7 +163,7 @@ core::Status BootedTitle::Start(core::ByteSpan code) {
 
     registry_.Provide(std::make_shared<services::AppletManager>(kernel_));
     registry_.Provide(std::make_shared<services::NetworkDaemonManager>());
-    registry_.Provide(std::make_shared<services::FileSystem>(romfs_));
+    registry_.Provide(std::make_shared<services::FileSystem>(romfs_, save_, extra_));
     registry_.Provide(std::make_shared<services::Configuration>());
     registry_.Provide(std::make_shared<services::HumanInterface>(kernel_));
     registry_.Provide(std::make_shared<services::Graphics>(kernel_));

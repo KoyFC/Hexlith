@@ -23,6 +23,8 @@ target_sources(
             relocatable_objects.h
             registry.cpp
             registry.h
+            save_data.cpp
+            save_data.h
             service_manager.cpp
             service_manager.h
             spot_pass.cpp

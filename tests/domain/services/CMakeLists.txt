@@ -10,6 +10,7 @@ hexlith_add_test(
     network_daemons_test.cpp
     power_manager_test.cpp
     relocatable_objects_test.cpp
+    save_data_test.cpp
     service_harness.cpp
     service_harness.h
     service_manager_test.cpp
