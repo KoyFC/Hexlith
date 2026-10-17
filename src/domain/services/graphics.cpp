@@ -1,6 +1,10 @@
 #include "domain/services/graphics.h"
 
+#include "core/byte_reader.h"
+
+#include <algorithm>
 #include <array>
+#include <vector>
 
 namespace hexlith::domain::services {
 namespace {
@@ -47,16 +51,101 @@ constexpr std::uint32_t MemoryFill = 2;
 constexpr std::uint32_t DisplayTransfer = 3;
 constexpr std::uint32_t TextureCopy = 4;
 
-// A memory fill's two start addresses, at words 1 and 4 of the command; a
-// fill with a start of zero raises nothing, as Azahar observes. A DMA's
-// source, destination and size at words 1 to 3.
-constexpr std::uint32_t FillFirstStart = 4;
-constexpr std::uint32_t FillSecondStart = 16;
+// The parameters of each command, by byte offset into it. Source: the
+// structures in Azahar's gsp_command.h; 3dbrew, GSP Shared Memory.
 constexpr std::uint32_t DmaSource = 4;
 constexpr std::uint32_t DmaDestination = 8;
 constexpr std::uint32_t DmaSize = 12;
+constexpr std::uint32_t ListAddress = 4;
+constexpr std::uint32_t ListSize = 8;
+// A fill's start, value and end for each of its two buffers, then their two
+// controls as halfwords of one word.
+constexpr std::uint32_t FillFirst = 4;
+constexpr std::uint32_t FillSecond = 16;
+constexpr std::uint32_t FillValue = 4;
+constexpr std::uint32_t FillEnd = 8;
+constexpr std::uint32_t FillControls = 28;
+constexpr std::uint32_t TransferInput = 4;
+constexpr std::uint32_t TransferOutput = 8;
+constexpr std::uint32_t TransferInputSize = 12;
+constexpr std::uint32_t TransferFlags = 20;
+constexpr std::uint32_t CopySize = 12;
+constexpr std::uint32_t CopyInputLayout = 16;
+constexpr std::uint32_t CopyOutputLayout = 20;
 
 constexpr std::uint32_t WordBytes = 4;
+constexpr std::uint32_t HalfwordMask = 0xFFFF;
+constexpr unsigned HighHalfword = 16;
+
+// A fill's control: whether it writes 24-bit or 32-bit values, 16-bit if
+// neither. Source: MemoryFillConfig in Azahar's regs_external.h.
+constexpr std::uint32_t Fill24Bit = 1U << 8U;
+constexpr std::uint32_t Fill32Bit = 1U << 9U;
+
+// A texture copy moves whole 16-byte units, and its widths and gaps count in
+// them. Source: SwBlitter::TextureCopy in Azahar.
+constexpr std::uint32_t CopyUnit = 16;
+
+// The transfer's input format, in bits 8 to 10 of its flags, and the bytes a
+// pixel of each takes: RGBA8, RGB8, RGB565, RGB5A1, RGBA4. Source:
+// DisplayTransferConfig and BytesPerPixel in Azahar.
+constexpr unsigned InputFormatShift = 8;
+constexpr std::uint32_t FormatMask = 0x7;
+constexpr std::array<std::uint32_t, 5> BytesPerPixel = {4, 3, 2, 2, 2};
+
+// The time a copy takes, at the rates Azahar measured on hardware, in MiB a
+// second for RAM to RAM, RAM to VRAM, VRAM to RAM and VRAM to VRAM, by DMA and
+// by the texture engine, which fills are taken to match. Source:
+// DelayGenerator in Azahar's video_core/gpu.cpp.
+constexpr std::array<std::array<double, 4>, 2> CopyRates = {{
+    {190.0, 310.0, 380.0, 380.0},
+    {450.0, 3100.0, 5400.0, 5400.0},
+}};
+
+// What every request costs before its interrupt, and a command of a list.
+// Source: sync_delay_nanoseconds in Azahar's gsp_gpu.cpp, and
+// nanoseconds_per_command in pica_core.h, which Azahar says is unmeasured.
+constexpr std::uint64_t SyncNanoseconds = 300'000;
+constexpr double NanosecondsPerCommand = 22.4;
+
+constexpr double NanosecondsPerSecond = 1e9;
+constexpr double BytesPerMebibyte = 1024.0 * 1024.0;
+
+std::uint64_t TicksFor(std::uint64_t nanoseconds) {
+    return nanoseconds * kernel::Arm11TicksPerSecond /
+           static_cast<std::uint64_t>(NanosecondsPerSecond);
+}
+
+bool InVram(std::uint32_t address) {
+    return address >= kernel::Kernel::VramBase &&
+           address < kernel::Kernel::VramBase + kernel::Kernel::VramSize;
+}
+
+std::uint64_t CopyNanoseconds(bool texture, bool from_vram, bool to_vram, std::uint64_t bytes) {
+    const std::size_t mode = (from_vram ? 2U : 0U) + (to_vram ? 1U : 0U);
+    const double rate = CopyRates.at(texture ? 1 : 0).at(mode) * BytesPerMebibyte;
+    return static_cast<std::uint64_t>(static_cast<double>(bytes) * NanosecondsPerSecond / rate);
+}
+
+// The register writes a PICA command list makes: each header word announces
+// one write and any extra parameters after it, and each command is padded to
+// eight bytes. Source: 3dbrew, GPU/Internal Registers, command lists.
+std::uint64_t CountCommands(std::span<const std::uint8_t> list) {
+    constexpr unsigned ExtraShift = 20;
+    constexpr std::uint32_t ExtraMask = 0xFF;
+    constexpr std::size_t CommandAlignment = 8;
+    std::uint64_t writes = 0;
+    std::size_t at = 0;
+    constexpr std::size_t HeaderAndParameter = 2 * std::size_t{WordBytes};
+    while (at + HeaderAndParameter <= list.size()) {
+        const std::uint32_t header = core::ReadU32At(list, at + WordBytes).ValueOr(0);
+        const std::uint32_t extra = (header >> ExtraShift) & ExtraMask;
+        writes += 1 + extra;
+        const std::size_t length = (2 + static_cast<std::size_t>(extra)) * WordBytes;
+        at += (length + CommandAlignment - 1) / CommandAlignment * CommandAlignment;
+    }
+    return writes;
+}
 
 }  // namespace
 
@@ -163,37 +252,172 @@ void Graphics::Raise(Interrupt interrupt) {
     }
 }
 
+// Operations finish in the order they were started, each once the one
+// before it has: the game counts its completions in that order, and lets
+// its GPU work stall if a later one overtakes an earlier one.
+void Graphics::RaiseAfter(Interrupt interrupt, std::uint64_t nanoseconds) {
+    kernel::Scheduler& scheduler = kernel_->Threads();
+    const std::uint64_t start = std::max(scheduler.Ticks(), busy_until_);
+    busy_until_ = start + TicksFor(nanoseconds + SyncNanoseconds);
+    scheduler.ScheduleAt(busy_until_, [this, interrupt] { Raise(interrupt); });
+}
+
 void Graphics::Execute(std::uint32_t offset) {
     const std::uint32_t id = Word(offset) & ByteMask;
     switch (id) {
-    case RequestDma: {
-        memory::ProcessMemory& memory = kernel_->Space().Memory();
-        std::vector<std::uint8_t> bytes(Word(offset + DmaSize));
-        if (memory.Copy(Word(offset + DmaSource), bytes).Ok()) {
-            static_cast<void>(memory.Load(Word(offset + DmaDestination), bytes));
-        }
-        Raise(Interrupt::Dma);
+    case RequestDma:
+        Dma(offset);
         break;
-    }
     case SubmitCommandList:
-        Raise(Interrupt::P3d);
+        CommandList(offset);
         break;
     case MemoryFill:
-        if (Word(offset + FillFirstStart) != 0) {
-            Raise(Interrupt::Psc0);
-        }
-        if (Word(offset + FillSecondStart) != 0) {
-            Raise(Interrupt::Psc1);
-        }
+        Fill(offset);
         break;
     case DisplayTransfer:
+        Transfer(offset);
+        break;
     case TextureCopy:
-        Raise(Interrupt::Ppf);
+        Copy(offset);
         break;
     default:
         // A cache flush, which needs nothing.
         break;
     }
+}
+
+void Graphics::Dma(std::uint32_t offset) {
+    memory::ProcessMemory& memory = kernel_->Space().Memory();
+    const std::uint32_t source = Word(offset + DmaSource);
+    const std::uint32_t destination = Word(offset + DmaDestination);
+    std::vector<std::uint8_t> bytes(Word(offset + DmaSize));
+    if (memory.Copy(source, bytes).Ok()) {
+        static_cast<void>(memory.Load(destination, bytes));
+    }
+    RaiseAfter(Interrupt::Dma,
+               CopyNanoseconds(false, InVram(source), InVram(destination), bytes.size()));
+}
+
+// The list is not run: nothing is drawn. Its end is raised as if it had been,
+// once its commands' worth of time has passed. Azahar raises P3D when a list
+// writes the interrupt request register, which lists end with, and adds the
+// cost of the triangles drawn, which is not counted here.
+void Graphics::CommandList(std::uint32_t offset) {
+    std::vector<std::uint8_t> list(Word(offset + ListSize));
+    static_cast<void>(kernel_->Space().Memory().Copy(Word(offset + ListAddress), list));
+    const auto nanoseconds = static_cast<std::uint64_t>(static_cast<double>(CountCommands(list)) *
+                                                        NanosecondsPerCommand);
+    RaiseAfter(Interrupt::P3d, nanoseconds);
+}
+
+// Each buffer with a start is filled. With both, only PSC0 is raised, as the
+// console's GSP module dispatches it. Source: GPU::Execute and MemoryFill in
+// Azahar.
+void Graphics::Fill(std::uint32_t offset) {
+    const std::uint32_t controls = Word(offset + FillControls);
+    const bool both = Word(offset + FillFirst) != 0 && Word(offset + FillSecond) != 0;
+    for (std::uint32_t buffer = 0; buffer < 2; ++buffer) {
+        const std::uint32_t base = offset + (buffer == 0 ? FillFirst : FillSecond);
+        const std::uint32_t start = Word(base);
+        if (start == 0) {
+            continue;
+        }
+        const std::uint32_t end = Word(base + FillEnd);
+        const std::uint32_t control = (controls >> (buffer * HighHalfword)) & HalfwordMask;
+        FillRange(start, end, Word(base + FillValue), control);
+        const std::uint64_t nanoseconds =
+            CopyNanoseconds(true, true, InVram(start), end > start ? end - start : 0);
+        if (buffer == 0) {
+            if (!both) {
+                RaiseAfter(Interrupt::Psc0, nanoseconds);
+            }
+        } else {
+            RaiseAfter(both ? Interrupt::Psc0 : Interrupt::Psc1, nanoseconds);
+        }
+    }
+}
+
+void Graphics::FillRange(std::uint32_t start,
+                         std::uint32_t end,
+                         std::uint32_t value,
+                         std::uint32_t control) {
+    if (end <= start) {
+        return;
+    }
+    std::vector<std::uint8_t> bytes(end - start);
+    std::size_t width = 2;
+    if ((control & Fill24Bit) != 0) {
+        width = 3;
+    } else if ((control & Fill32Bit) != 0) {
+        width = 4;
+    }
+    for (std::size_t at = 0; at + width <= bytes.size(); at += width) {
+        for (std::size_t byte = 0; byte < width; ++byte) {
+            bytes.at(at + byte) = static_cast<std::uint8_t>(value >> (8U * byte));
+        }
+    }
+    static_cast<void>(kernel_->Space().Memory().Load(start, bytes));
+}
+
+// A display transfer converts and tiles pixels into a framebuffer nothing
+// reads before drawing exists, so only its time is kept.
+void Graphics::Transfer(std::uint32_t offset) {
+    const std::uint32_t size = Word(offset + TransferInputSize);
+    const std::uint32_t format = (Word(offset + TransferFlags) >> InputFormatShift) & FormatMask;
+    const std::uint32_t bytes_per_pixel =
+        format < BytesPerPixel.size() ? BytesPerPixel.at(format) : 2;
+    const std::uint64_t bytes =
+        static_cast<std::uint64_t>(size & HalfwordMask) * (size >> HighHalfword) * bytes_per_pixel;
+    RaiseAfter(Interrupt::Ppf,
+               CopyNanoseconds(true,
+                               InVram(Word(offset + TransferInput)),
+                               InVram(Word(offset + TransferOutput)),
+                               bytes));
+}
+
+// A texture copy moves rows of whole units from one layout to another, each
+// with a gap after it. A gap of zero means the data is contiguous. Source:
+// SwBlitter::TextureCopy in Azahar.
+void Graphics::Copy(std::uint32_t offset) {
+    const std::uint32_t input = Word(offset + TransferInput);
+    const std::uint32_t output = Word(offset + TransferOutput);
+    const std::uint32_t size = Word(offset + CopySize) / CopyUnit * CopyUnit;
+    const std::uint32_t in_layout = Word(offset + CopyInputLayout);
+    const std::uint32_t out_layout = Word(offset + CopyOutputLayout);
+    const std::uint32_t in_gap = (in_layout >> HighHalfword) * CopyUnit;
+    const std::uint32_t out_gap = (out_layout >> HighHalfword) * CopyUnit;
+    const std::uint32_t in_width = in_gap == 0 ? size : (in_layout & HalfwordMask) * CopyUnit;
+    const std::uint32_t out_width = out_gap == 0 ? size : (out_layout & HalfwordMask) * CopyUnit;
+
+    if (size != 0 && in_width != 0 && out_width != 0) {
+        memory::ProcessMemory& memory = kernel_->Space().Memory();
+        std::uint32_t from = input;
+        std::uint32_t to = output;
+        std::uint32_t left_in = in_width;
+        std::uint32_t left_out = out_width;
+        std::uint32_t remaining = size;
+        while (remaining > 0) {
+            const std::uint32_t step = std::min({left_in, left_out, remaining});
+            std::vector<std::uint8_t> chunk(step);
+            if (memory.Copy(from, chunk).Ok()) {
+                static_cast<void>(memory.Load(to, chunk));
+            }
+            from += step;
+            to += step;
+            left_in -= step;
+            left_out -= step;
+            remaining -= step;
+            if (left_in == 0) {
+                left_in = in_width;
+                from += in_gap;
+            }
+            if (left_out == 0) {
+                left_out = out_width;
+                to += out_gap;
+            }
+        }
+    }
+    RaiseAfter(Interrupt::Ppf, CopyNanoseconds(true, InVram(input), InVram(output), size));
 }
 
 void Graphics::TriggerCmdReqQueue(kernel::IpcRequest& request) {

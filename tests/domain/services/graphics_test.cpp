@@ -2,6 +2,7 @@
 
 #include "service_harness.h"
 
+#include <array>
 #include <cstdint>
 #include <gtest/gtest.h>
 #include <vector>
@@ -80,19 +81,85 @@ TEST(Graphics, QueuesBothVerticalBlanksEachFrame) {
     EXPECT_EQ(gsp.Shared()[QueueSlots + 1], Pdc1);
 }
 
-TEST(Graphics, CompletesAQueuedMemoryFillAtOnce) {
-    constexpr std::uint32_t FillStart = 0x1F000000;
-    Harness gsp;
-    gsp.Register();
-    ASSERT_TRUE(gsp.harness.Send(gsp.service, {AcquireRight, 0, ipc::CopyHandlesDescriptor(1), 0}));
-    gsp.PutWord(FirstCommand, MemoryFill);
-    gsp.PutWord(FirstCommand + 4, FillStart);
-    gsp.PutWord(CommandQueue, 1U << 8U);  // one command queued, at index 0
+// The time every request costs, 300 microseconds, in ticks. Source:
+// sync_delay_nanoseconds in Azahar's gsp_gpu.cpp.
+constexpr std::uint64_t SyncTicks = 300'000ULL * kernel::Arm11TicksPerSecond / 1'000'000'000ULL;
 
+constexpr std::uint8_t TextureCopy = 4;
+constexpr std::uint8_t Ppf = 4;
+constexpr std::uint32_t Area = ServiceHarness::BufferAddress;
+constexpr std::uint32_t Fill32Bit = 1U << 9U;
+
+// Takes the right, queues commands from the given words, eight each, and
+// triggers the queue.
+void RunCommands(Harness& gsp, const std::vector<std::array<std::uint32_t, 8>>& commands) {
+    ASSERT_TRUE(gsp.harness.Send(gsp.service, {AcquireRight, 0, ipc::CopyHandlesDescriptor(1), 0}));
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+        for (std::size_t word = 0; word < 8; ++word) {
+            gsp.PutWord(FirstCommand + static_cast<std::uint32_t>((index * 0x20) + (word * 4)),
+                        commands.at(index).at(word));
+        }
+    }
+    gsp.PutWord(CommandQueue, static_cast<std::uint32_t>(commands.size()) << 8U);
     ASSERT_TRUE(gsp.harness.Send(gsp.service, {TriggerCmdReqQueue}));
+}
+
+TEST(Graphics, FillsMemoryAndRaisesTheInterruptOnceItsTimeHasPassed) {
+    constexpr std::uint32_t Value = 0xAABBCCDD;
+    Harness gsp;
+    const auto event = gsp.Register();
+    RunCommands(gsp, {{MemoryFill, Area, Value, Area + 16, 0, 0, 0, Fill32Bit}});
+    EXPECT_EQ(gsp.harness.Read32(Area + 12), Value);
+    EXPECT_EQ(gsp.Shared()[CommandQueue + 1], 0) << "the queue is empty";
+    EXPECT_EQ(gsp.Shared()[QueueCount], 0) << "not raised yet";
+
+    gsp.harness.Kernel().Threads().Advance(SyncTicks + 1);
+    EXPECT_TRUE(event->signaled);
     EXPECT_EQ(gsp.Shared()[QueueCount], 1);
     EXPECT_EQ(gsp.Shared()[QueueSlots], Psc0);
-    EXPECT_EQ(gsp.Shared()[CommandQueue + 1], 0) << "the queue is empty";
+}
+
+TEST(Graphics, RaisesOnlyPsc0ForAFillOfTwoBuffers) {
+    Harness gsp;
+    gsp.Register();
+    constexpr std::uint32_t Second = Area + 16;
+    constexpr std::uint32_t Length = 8;
+    RunCommands(gsp, {{MemoryFill, Area, 1, Area + Length, Second, 2, Second + Length, 0}});
+    gsp.harness.Kernel().Threads().Advance((2 * SyncTicks) + 2);
+    EXPECT_EQ(gsp.Shared()[QueueCount], 1);
+    EXPECT_EQ(gsp.Shared()[QueueSlots], Psc0);
+    EXPECT_EQ(gsp.harness.Read32(Area + 16), 0x00020002U)
+        << "the second buffer is filled all the same, in halfwords";
+}
+
+TEST(Graphics, CopiesTextureRowsAcrossTheirGaps) {
+    Harness gsp;
+    gsp.Register();
+    std::vector<std::uint8_t> rows(64);
+    for (std::size_t byte = 0; byte < rows.size(); ++byte) {
+        rows.at(byte) = static_cast<std::uint8_t>(byte);
+    }
+    gsp.harness.WriteBytes(Area, rows);
+    // 32 bytes, read as rows of 16 with a gap of 16, written contiguously.
+    constexpr std::uint32_t Output = Area + 0x200;
+    RunCommands(gsp, {{TextureCopy, Area, Output, 32, 1U | (1U << 16U), 0, 0, 0}});
+    EXPECT_EQ(gsp.harness.ReadBytes(Output + 16, 1), std::vector<std::uint8_t>{32})
+        << "the second row comes from past the gap";
+}
+
+TEST(Graphics, FinishesOperationsInTheOrderTheyStarted) {
+    Harness gsp;
+    gsp.Register();
+    // A long fill, then a short copy that would otherwise finish first.
+    constexpr std::uint32_t LongFill = 0x800;
+    constexpr std::uint32_t CopyTarget = Area + 0x900;
+    RunCommands(gsp,
+                {{MemoryFill, Area, 0, Area + LongFill, 0, 0, 0, 0},
+                 {TextureCopy, Area, CopyTarget, 16, 0, 0, 0, 0}});
+    gsp.harness.Kernel().Threads().Advance(4 * SyncTicks);
+    EXPECT_EQ(gsp.Shared()[QueueCount], 2);
+    EXPECT_EQ(gsp.Shared()[QueueSlots], Psc0);
+    EXPECT_EQ(gsp.Shared()[QueueSlots + 1], Ppf);
 }
 
 TEST(Graphics, AnswersBackTheRegistersWritten) {

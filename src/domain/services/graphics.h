@@ -19,11 +19,15 @@ namespace hexlith::domain::services {
 // src/core/hle/service/gsp/gsp_gpu.cpp, and the GPU's side of the commands,
 // src/video_core/gpu.cpp.
 //
-// Nothing is drawn. A command in the queue completes at once and raises the
-// interrupt the GPU raises when it finishes one: a memory fill PSC0 or PSC1, a
-// transfer or a texture copy PPF, a command list P3D, a DMA DMA, which copies
-// the memory as asked. Both screens' vertical blanks, PDC0 and PDC1, arrive
-// every 4,481,136 ticks, the frame time Azahar gives as measured on hardware.
+// Nothing is drawn. A command in the queue raises the interrupt the GPU
+// raises when it finishes it, once the time Azahar gives it has passed on the
+// virtual clock: the copy at the rates it measured on hardware, a list at its
+// cost per command, and 300 microseconds of synchronisation on each. A memory
+// fill writes its values and raises PSC0 or PSC1, a texture copy copies and
+// raises PPF, a DMA copies and raises DMA, a display transfer raises PPF
+// without converting anything, and a command list raises P3D without being
+// run. Both screens' vertical blanks, PDC0 and PDC1, arrive every 4,481,136
+// ticks, the frame time Azahar gives as measured on hardware.
 // Registers keep what is written to them and answer it back.
 class Graphics final : public CommandTable<Graphics> {
 public:
@@ -80,6 +84,16 @@ private:
 
     void ScheduleVerticalBlank();
     void Raise(Interrupt interrupt);
+    // Raises an interrupt once a GPU operation that takes this long is done,
+    // with the time every request costs on top.
+    void RaiseAfter(Interrupt interrupt, std::uint64_t nanoseconds);
+    void Dma(std::uint32_t offset);
+    void CommandList(std::uint32_t offset);
+    void Fill(std::uint32_t offset);
+    void
+    FillRange(std::uint32_t start, std::uint32_t end, std::uint32_t value, std::uint32_t control);
+    void Transfer(std::uint32_t offset);
+    void Copy(std::uint32_t offset);
     void Queue(const Client& client, Interrupt interrupt);
     void Execute(std::uint32_t offset);
     [[nodiscard]] std::uint32_t Word(std::uint32_t offset) const;
@@ -93,6 +107,8 @@ private:
     bool has_right_ = false;
     std::map<std::uint32_t, std::uint32_t> registers_;
     std::uint64_t frames_ = 0;
+    // When the last operation started will be done.
+    std::uint64_t busy_until_ = 0;
 };
 
 }  // namespace hexlith::domain::services
