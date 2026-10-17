@@ -119,3 +119,21 @@ Run from its entry point on 2026-10-17, the reference title called Initialize wi
 | The module's data buffer | 28 | 0 |
 
 That covers every word the linker writes into the module and the 315 words of the main executable the dump holds, as `compare_cro_link.py` found against Azahar, and beyond them every header field, table entry, batch flag and list pointer the service writes.
+
+### After the unload and at the title screen
+
+On 2026-10-17 a fresh Azahar profile was played through the language selection with two presses of A, and its memory dumped by gdb at two breakpoints: on the instruction after the game's UnloadCRO request returns, and on the instruction after its fourth LoadCRO returns, the last of the title screen's three modules. Hexlith ran the same boot from a script of two taps of A, at frames 100 and 200, and stopped at the same two places with `--stop-after cro-unload:DllLangSelect` and `--stop-after cro-load:DllSequence`. Azahar's log gave the same buffers, data and BSS addresses for all four modules as Hexlith used.
+
+| Moment | Range | Bytes | Differing |
+| --- | --- | --- | --- |
+| After the unload | The buffer `DllLangSelect` was mapped from, `0x08044000`, as the game gets it back | 16,384 | 0 |
+| | Its data buffer | 28 | 0 |
+| | The main executable from `0x00190000` | 65,536 | 0 |
+| Title screen | `DllTitle`, `0x006A5000` to `0x006C6000` | 135,168 | 0 |
+| | `DllBackGround`, `0x006C8000` to `0x006D0000` | 32,768 | 0 |
+| | `DllSequence`, `0x006D1000` to `0x006EA000` | 102,400 | 0 |
+| | Their three data buffers | 480 | 0 |
+| | The main executable from `0x00190000` | 65,536 | 0 |
+
+The first row is the whole of what the unload leaves: the header and tables back to offsets, the list fields and the fixed size cleared, the module's own imports and the static module's imports from it reset, and the batch flags with them. The title screen's rows are each module whole, header and tables included, linked against each other and against the static module after the unload.
+
