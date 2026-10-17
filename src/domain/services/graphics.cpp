@@ -440,6 +440,13 @@ void Graphics::TriggerCmdReqQueue(kernel::IpcRequest& request) {
                 next |= StatusStopped << StatusShift;
             }
             SetWord(queue, next);
+            if (command_observer_) {
+                GxCommand taken{.frame = frames_, .words = {}};
+                for (std::uint32_t word = 0; word < taken.words.size(); ++word) {
+                    taken.words.at(word) = Word(command + (word * WordBytes));
+                }
+                command_observer_(taken);
+            }
             Execute(command);
         }
     }

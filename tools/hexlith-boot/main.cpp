@@ -1,11 +1,13 @@
 #include "adapters/filesystem/cartridge_image.h"
 #include "adapters/filesystem/directory_tree_store.h"
 #include "adapters/filesystem/file_rom_source.h"
+#include "adapters/filesystem/gpu_recording_directory.h"
 #include "adapters/filesystem/scripted_input.h"
 #include "adapters/filesystem/workspace_locator.h"
 #include "application/boot.h"
 #include "application/command_line.h"
 #include "application/golden_trace.h"
+#include "application/gpu_recording.h"
 #include "application/save_storage.h"
 #include "application/workspace.h"
 #include "domain/profile/game_profile.h"
@@ -50,8 +52,25 @@ constexpr double Million = 1e6;
 
 constexpr std::string_view CaptureExtension = ".bin";
 
-// Where the title's save data is kept, under its directory in the workspace.
+// Where the title's save data and GPU recording are kept, under its directory
+// in the workspace.
 constexpr std::string_view SaveDirectory = "save";
+constexpr std::string_view GpuDirectory = "gpu";
+
+void PrintRecording(const application::GpuRecordingSummary& summary, std::string_view where) {
+    constexpr std::array<std::string_view, 6> Names = {
+        "DMA", "command list", "memory fill", "display transfer", "texture copy", "cache flush"};
+    std::cout << std::format("gpu     {}\n", where);
+    for (std::size_t id = 0; id < Names.size(); ++id) {
+        std::cout << std::format("        {:>8} {}\n", summary.commands.at(id), Names.at(id));
+    }
+    std::cout << std::format("        {} lists of {} to {} bytes, {} in all; {} pages\n",
+                             summary.lists,
+                             summary.smallest_list,
+                             summary.largest_list,
+                             summary.list_bytes,
+                             summary.pages);
+}
 
 void Report(std::string_view message) {
     std::cerr << "hexlith-boot: " << message << '\n';
@@ -327,6 +346,17 @@ int Run(const application::BootOptions& options) {
     if (options.stop_after.has_value()) {
         StopAfter(*options.stop_after, title);
     }
+    adapters::GpuRecordingDirectory gpu{workspace.Value().work_directory.path /
+                                        profile::WorkspaceDirectoryName(*target) / GpuDirectory};
+    std::unique_ptr<application::GpuRecording> recording;
+    if (options.record_gpu) {
+        const core::Status prepared = gpu.Prepare();
+        if (!prepared) {
+            Report(prepared.Failure().Message());
+            return Failure;
+        }
+        recording = std::make_unique<application::GpuRecording>(title, gpu);
+    }
 
     const auto began = std::chrono::steady_clock::now();
     const kernel::KernelStop stop = running.Run(options.instruction_limit);
@@ -335,6 +365,13 @@ int Run(const application::BootOptions& options) {
 
     PrintStop(stop);
     PrintModules(title);
+    if (recording != nullptr) {
+        const core::Status finished = recording->Finish();
+        if (!finished) {
+            Report(finished.Failure().Message());
+        }
+        PrintRecording(recording->Summary(), gpu.Describe());
+    }
     if (!options.new_game) {
         StoreSaves(saves, title);
     }

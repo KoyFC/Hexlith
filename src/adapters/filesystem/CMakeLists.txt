@@ -6,6 +6,8 @@ target_sources(
             directory_blob_sink.h
             directory_tree_store.cpp
             directory_tree_store.h
+            gpu_recording_directory.cpp
+            gpu_recording_directory.h
             file_rom_source.cpp
             file_rom_source.h
             scripted_input.cpp

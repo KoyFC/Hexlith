@@ -87,6 +87,10 @@ struct BootOptions {
     // breakpoint after the game's request would stop Azahar.
     std::optional<BootStopPoint> stop_after;
 
+    // Records the GPU's work under the work directory, as
+    // docs/formats/gpu-recording.md describes.
+    bool record_gpu = false;
+
     bool help = false;
 };
 

@@ -88,7 +88,8 @@ TEST(ParseBootCommandLine, TakesALimitAndADirectoryToCompareWith) {
                                                      "--input",
                                                      "/tmp/i",
                                                      "--stop-after",
-                                                     "cro-unload:DllA"};
+                                                     "cro-unload:DllA",
+                                                     "--record-gpu"};
     const core::Result<BootOptions> options = ParseBootCommandLine(arguments);
     ASSERT_TRUE(options.Ok()) << options.Failure().Message();
     EXPECT_EQ(options.Value().instruction_limit, 1000U);
@@ -97,6 +98,7 @@ TEST(ParseBootCommandLine, TakesALimitAndADirectoryToCompareWith) {
     EXPECT_TRUE(options.Value().new_game);
     EXPECT_EQ(options.Value().golden, "/tmp/g");
     EXPECT_EQ(options.Value().input, "/tmp/i");
+    EXPECT_TRUE(options.Value().record_gpu);
     ASSERT_TRUE(options.Value().stop_after.has_value());
     EXPECT_TRUE(options.Value().stop_after.value_or(BootStopPoint{}).unload);
     EXPECT_EQ(options.Value().stop_after.value_or(BootStopPoint{}).module, "DllA");
@@ -132,6 +134,7 @@ TEST(BootUsage, NamesEveryOption) {
                                           "--golden",
                                           "--input",
                                           "--stop-after",
+                                          "--record-gpu",
                                           "--help"}) {
         EXPECT_NE(usage.find(option), std::string::npos) << option;
     }

@@ -22,6 +22,7 @@ constexpr std::string_view NewGameOption = "--new-game";
 constexpr std::string_view GoldenOption = "--golden";
 constexpr std::string_view InputOption = "--input";
 constexpr std::string_view StopAfterOption = "--stop-after";
+constexpr std::string_view RecordGpuOption = "--record-gpu";
 
 constexpr std::string_view LoadEvent = "cro-load:";
 constexpr std::string_view UnloadEvent = "cro-unload:";
@@ -226,6 +227,27 @@ std::string ExtractUsage() {
         WorkDirectoryVariable);
 }
 
+namespace {
+
+// The options of hexlith-boot that take no value, or nothing for another.
+bool* BootFlag(BootOptions& options, std::string_view argument) {
+    if (argument == HelpOption || argument == "-h") {
+        return &options.help;
+    }
+    if (argument == TraceOption) {
+        return &options.trace;
+    }
+    if (argument == NewGameOption) {
+        return &options.new_game;
+    }
+    if (argument == RecordGpuOption) {
+        return &options.record_gpu;
+    }
+    return nullptr;
+}
+
+}  // namespace
+
 core::Result<BootOptions> ParseBootCommandLine(std::span<const std::string_view> arguments) {
     BootOptions options;
     std::optional<std::string> limit;
@@ -233,16 +255,8 @@ core::Result<BootOptions> ParseBootCommandLine(std::span<const std::string_view>
     for (std::size_t index = 0; index < arguments.size(); ++index) {
         const std::string_view argument = arguments[index];
 
-        if (argument == HelpOption || argument == "-h") {
-            options.help = true;
-            continue;
-        }
-        if (argument == TraceOption) {
-            options.trace = true;
-            continue;
-        }
-        if (argument == NewGameOption) {
-            options.new_game = true;
+        if (bool* flag = BootFlag(options, argument)) {
+            *flag = true;
             continue;
         }
 
@@ -302,6 +316,7 @@ std::string BootUsage() {
         "  {} <path>       write the golden trace there, to compare with Azahar's\n"
         "  {} <path>        a script of the player's input, by frame\n"
         "  {} <event>  stop once ldr:ro has done cro-load:<module> or cro-unload:<module>\n"
+        "  {}         record the GPU's work under <work-dir>/<title>/gpu\n"
         "  {}               this text\n"
         "\n"
         "Without {} the save data under <work-dir>/<title>/save is read at the start and\n"
@@ -320,6 +335,7 @@ std::string BootUsage() {
         GoldenOption,
         InputOption,
         StopAfterOption,
+        RecordGpuOption,
         HelpOption,
         NewGameOption,
         RomDirectoryVariable,

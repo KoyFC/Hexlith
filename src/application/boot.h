@@ -78,6 +78,10 @@ public:
         return *graphics_;
     }
 
+    domain::services::Graphics& Gpu() {
+        return *graphics_;
+    }
+
 private:
     BootedTitle(domain::ctr::ExHeader header, core::ByteSpan romfs);
 

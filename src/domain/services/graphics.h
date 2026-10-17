@@ -4,7 +4,9 @@
 #include "domain/kernel/kernel.h"
 #include "domain/services/command_table.h"
 
+#include <array>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <span>
@@ -55,6 +57,21 @@ public:
     // Answered to the first client to register for interrupts, which tells it
     // to set the GPU up. A success code: bit 31 is clear.
     static constexpr kernel::ResultCode FirstInitialization{0x00002A07};
+
+    // One command taken from the queue, as the game wrote it, with the frame
+    // it was taken in.
+    struct GxCommand {
+        std::uint64_t frame = 0;
+        std::array<std::uint32_t, 8> words{};
+    };
+
+    // Called with each command before it is carried out.
+    void OnCommand(std::function<void(const GxCommand&)> observer) {
+        command_observer_ = std::move(observer);
+    }
+
+    // Command IDs. Source: CommandId in Azahar's gsp_command.h.
+    static constexpr std::uint32_t SubmitCommandListId = 1;
 
     // Vertical blanks of the top screen since the process started, which is
     // what a frame is counted in.
@@ -109,6 +126,7 @@ private:
     std::uint64_t frames_ = 0;
     // When the last operation started will be done.
     std::uint64_t busy_until_ = 0;
+    std::function<void(const GxCommand&)> command_observer_;
 };
 
 }  // namespace hexlith::domain::services
