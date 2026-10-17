@@ -1,0 +1,86 @@
+diff --git a/src/core/hle/service/fs/directory.cpp b/src/core/hle/service/fs/directory.cpp
+index dfb6e5eb8..25f45bc10 100644
+--- a/src/core/hle/service/fs/directory.cpp
++++ b/src/core/hle/service/fs/directory.cpp
+@@ -28,7 +28,7 @@ Directory::Directory(std::unique_ptr<FileSys::DirectoryBackend>&& backend,
+     this->path = path;
+ }
+ 
+-Directory::Directory() : ServiceFramework("", 1), path(""), backend(nullptr) {
++Directory::Directory() : ServiceFramework("fs:directory", 1), path(""), backend(nullptr) {
+     static const FunctionInfo functions[] = {
+         // clang-format off
+         {0x0801, &Directory::Read, "Read"},
+diff --git a/src/core/hle/service/fs/file.cpp b/src/core/hle/service/fs/file.cpp
+index 94420cf22..73784e210 100644
+--- a/src/core/hle/service/fs/file.cpp
++++ b/src/core/hle/service/fs/file.cpp
+@@ -38,7 +38,7 @@ File::File(Kernel::KernelSystem& kernel, std::unique_ptr<FileSys::FileBackend>&&
+ }
+ 
+ File::File(Kernel::KernelSystem& kernel)
+-    : ServiceFramework("", 1), path(""), backend(nullptr), kernel(kernel) {
++    : ServiceFramework("fs:file", 1), path(""), backend(nullptr), kernel(kernel) {
+     static const FunctionInfo functions[] = {
+         {0x0801, &File::OpenSubFile, "OpenSubFile"},
+         {0x0802, &File::Read, "Read"},
+diff --git a/src/core/hle/service/ldr_ro/ldr_ro.cpp b/src/core/hle/service/ldr_ro/ldr_ro.cpp
+index 5fd3f36ba..0a0f5efd0 100644
+--- a/src/core/hle/service/ldr_ro/ldr_ro.cpp
++++ b/src/core/hle/service/ldr_ro/ldr_ro.cpp
+@@ -329,6 +329,7 @@ void RO::LoadCRO(Kernel::HLERequestContext& ctx, bool link_on_load_bug_fix) {
+ 
+     LOG_INFO(Service_LDR, "CRO \"{}\" loaded at 0x{:08X}, fixed_end=0x{:08X}", cro.ModuleName(),
+              cro_address, cro_address + fix_size);
++    LOG_INFO(Service_LDR, "golden cro-load {} {:08X}", cro.ModuleName(), cro_address);
+ 
+     rb.Push(ResultSuccess, fix_size);
+ }
+@@ -367,6 +368,7 @@ void RO::UnloadCRO(Kernel::HLERequestContext& ctx) {
+     }
+ 
+     LOG_INFO(Service_LDR, "Unloading CRO \"{}\"", cro.ModuleName());
++    LOG_INFO(Service_LDR, "golden cro-unload {} {:08X}", cro.ModuleName(), cro_address);
+ 
+     u32 fixed_size = cro.GetFixedSize();
+ 
+diff --git a/src/core/hle/service/service.cpp b/src/core/hle/service/service.cpp
+index 0fecc3b8b..80a49652d 100644
+--- a/src/core/hle/service/service.cpp
++++ b/src/core/hle/service/service.cpp
+@@ -176,16 +176,22 @@ void ServiceFrameworkBase::ReportUnimplementedFunction(u32* cmd_buf, const Funct
+ }
+ 
+ void ServiceFrameworkBase::HandleSyncRequest(Kernel::HLERequestContext& context) {
++    // Hexlith golden trace: the request header, written once the handler has
++    // run so that what it logs comes first, as in hexlith-boot.
++    const u32 golden_header = context.CommandBuffer()[0];
+     auto itr = handlers.find(context.CommandHeader().command_id.Value());
+     const FunctionInfoBase* info = itr == handlers.end() ? nullptr : &itr->second;
+     if (info == nullptr || info->handler_callback == nullptr) {
+         context.ReportUnimplemented();
+-        return ReportUnimplementedFunction(context.CommandBuffer(), info);
++        ReportUnimplementedFunction(context.CommandBuffer(), info);
++        LOG_INFO(Service, "golden ipc {} {:08X}", GetServiceName(), golden_header);
++        return;
+     }
+ 
+     LOG_TRACE(Service, "{}",
+               MakeFunctionString(info->name, GetServiceName(), context.CommandBuffer()));
+     handler_invoker(this, info->handler_callback, context);
++    LOG_INFO(Service, "golden ipc {} {:08X}", GetServiceName(), golden_header);
+ }
+ 
+ std::string ServiceFrameworkBase::GetFunctionName(IPC::Header header) const {
+diff --git a/src/video_core/gpu.cpp b/src/video_core/gpu.cpp
+index 40f29fea0..f6453af20 100644
+--- a/src/video_core/gpu.cpp
++++ b/src/video_core/gpu.cpp
+@@ -486,6 +486,7 @@ void GPU::MemoryTransfer() {
+ }
+ 
+ void GPU::VBlankCallback(std::uintptr_t user_data, s64 cycles_late) {
++    LOG_INFO(HW_GPU, "golden vblank");
+     // Signal to GSP that GPU interrupt has occurred
+     impl->signal_interrupt(Service::GSP::InterruptId::PDC0, 0);
+     impl->signal_interrupt(Service::GSP::InterruptId::PDC1, 0);

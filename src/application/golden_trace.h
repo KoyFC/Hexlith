@@ -12,7 +12,7 @@ namespace hexlith::application {
 
 // A golden trace: the sequence of service requests and module loads a run
 // makes, one line each, with the frame it happened in. hexlith-boot writes
-// one, and Azahar writes the same lines once scripts/azahar/golden-trace.patch
+// one, and Azahar writes the same lines once third_party/azahar/golden-trace.patch
 // is applied to it, so scripts/compare_golden_trace.py can find the first
 // place the two disagree. docs/golden-traces.md describes the format and what
 // the comparison does and does not mean.

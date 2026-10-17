@@ -4,9 +4,7 @@ Origins and attributions for code and documentation Hexlith takes from elsewhere
 
 ## Current state
 
-**No third-party code has been incorporated yet.** The repository currently contains only original contributions.
-
-This file exists from the start so that the first adoption has somewhere to go, and so that the format is settled before anyone is in a hurry.
+No third-party code is built into Hexlith. One file carries a few lines of another project's code, the patch below, which is applied to that project and never compiled here.
 
 ## Linked dependencies
 
@@ -45,6 +43,17 @@ Changes:   <what was modified, and why>
 ```
 
 Donor code is vendored under a `third_party/` directory with its own licence file rather than being mixed into Hexlith's sources, so that the boundary stays visible in the file tree and not only in a notice.
+
+## Adopted
+
+### Azahar
+
+Upstream:  https://github.com/azahar-emu/azahar
+Licence:   GPL-2.0-or-later
+Copyright: Citra Emulator Project / Azahar Emulator Project
+Files:     `third_party/azahar/golden-trace.patch`
+Taken at:  219d743a1, the version of the Flatpak build in use
+Changes:   A patch of Hexlith's own against five Azahar files, whose context lines are Azahar's code. It makes Azahar log the events of a golden trace; `third_party/azahar/README.md` says what it changes.
 
 ## Not covered
 
