@@ -68,7 +68,7 @@ The intent is that a `GpuBackend` is a virtual interface chosen once at startup,
 
 ## The runtime
 
-Planned, apart from the interpreter. Recorded here so the pieces have names.
+Planned, apart from the interpreter, the kernel, and the services and the module loader the boot reaches. Recorded here so the pieces have names.
 
 **Guest memory** is a page table: one host pointer per 4 KiB guest page, into backings that stand for the console's physical memory, so that two guest addresses can share bytes the way Horizon's aliases require. A guest word read is an index and a host load. [ADR 0012](adr/0012-guest-memory-is-a-page-table.md) records why it is not the flat allocation first planned, and [`horizon-memory.md`](horizon-memory.md) describes the address space the kernel builds in it. Memory-mapped I/O, misaligned access and exclusive access stay explicit transactions.
 
@@ -80,7 +80,7 @@ The interpreter and the primitive library exist, in `src/domain/arm/interpreter`
 
 **Services** implement a common interface and live in a registry, keyed by the port name the game connects to. The extended header's service access control list names every service the title can reach, which makes it the work list, and srv: refuses any other. A request is answered on the calling thread within its SendSyncRequest, and a command nothing implements stops the run by name. See [`ipc.md`](ipc.md) and [`formats/exheader.md`](formats/exheader.md).
 
-**Dynamic modules** are the hard part. Roughly half the title's executable code sits in 133 CRO modules that are relocated at load time. [ADR 0004](adr/0004-cro-modules-and-the-ldr-ro-hle.md) records the approach, and the trace that showed a module can land at a different address each time it is loaded. The linking itself exists already, offline, in `src/domain/linker`: given the modules and the addresses chosen for them, it computes what every relocated word holds, the way the service does. [`cro-linking.md`](cro-linking.md) describes it.
+**Dynamic modules** are the hard part. Roughly half the title's executable code sits in 133 CRO modules that are relocated at load time. [ADR 0004](adr/0004-cro-modules-and-the-ldr-ro-hle.md) records the approach, and the trace that showed a module can land at a different address each time it is loaded. The linking exists in `src/domain/linker`: given the modules and the addresses chosen for them, it computes what every relocated word holds, the way the service does. The `ldr:ro` service is built on it and leaves a module in memory as the console's loader does. [`cro-linking.md`](cro-linking.md) describes both.
 
 **Graphics** translate PICA200 state and command lists into Vulkan. Azahar's `video_core` is the reference for PICA behaviour and `nihstro` for its shader format.
 

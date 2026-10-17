@@ -100,7 +100,7 @@ That is 2,880 of the 14,561 words the two modules and the static module have bet
 
 ### What the service left in memory
 
-Run from its entry point on 2026-10-17, the reference title called Initialize with the CRS and LoadCRO with `DllLangSelect` at `0x006A5000`, its data at `0x080480F0` and its BSS at `0x0804810C`, the same addresses Azahar logged on a fresh boot. The game went on to run code in the module. Once it had stopped, at the first request nothing answers yet, Hexlith's memory was compared with Azahar's dump of the same moment, `traces/dump-2026-10-16-lang-select` in the workspace:
+Run from its entry point on 2026-10-17, the reference title called Initialize with the CRS and LoadCRO with `DllLangSelect` at `0x006A5000`, its data at `0x080480F0` and its BSS at `0x0804810C`, the same addresses Azahar logged on a fresh boot. The game went on to run code in the module. Once it had stopped, at the first request nothing answers yet, Hexlith's memory was compared with Azahar's dump of the same moment, `traces/dump-2026-10-16-lang-select` in the workspace, by `hexlith-boot --compare` with that directory:
 
 | Range | Bytes | Differing |
 | --- | --- | --- |

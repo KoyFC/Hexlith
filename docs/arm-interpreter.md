@@ -86,3 +86,18 @@ Four mistakes, all with passing unit tests at the time. Three were in the decode
 - The interpreter stopped on a block transfer with r15 as its base only when it wrote back. It is unpredictable either way.
 
 Getting Unicorn to be a fair witness took four corrections of the script's own, each of which made every case after a certain point disagree, and each of which is now handled and commented there. Its stack pointer and link register are banked, so the mode has to be written first. It keeps translated code across a rewrite of the bytes at the same address. Its instruction count leaves the program counter of a branch behind. And it keeps executing in the instruction set the previous case ended in, whatever the next case's CPSR says. The script refuses to report at all if Unicorn runs past the instruction it was asked to stop after, so a fifth problem of that kind would show up as a failure, not as a column of disagreements.
+
+## How fast it is
+
+Measured on 2026-10-17 with `hexlith-boot`, which runs the reference title from its entry point to the first request nothing answers yet, past its first module: 19,446,357 instructions, every one of them through the interpreter, the kernel and the services. On an Intel Core Ultra 7 258V, one host thread:
+
+| Build | Seconds | Instructions a second |
+| --- | --- | --- |
+| Release, gcc | 0.78 | 24.9 million |
+| Debug, gcc | 3.73 | 5.2 million |
+
+Three runs of the release build agreed to within half a percent, and executed exactly the same instructions, which is the determinism [ADR 0013](adr/0013-one-host-thread-and-a-virtual-clock.md) asks for.
+
+The ARM11 runs 268 million cycles a second, so the interpreter is about eleven times slower than the console when the game is busy. The boot is not busy all the time: its 19.4 million instructions span 67.2 million ticks, because the clock jumps over waits for a vertical blank or an audio frame, and the run took about three times as long as the quarter of a second it covers on the console. That is fast enough to reach a module in under a second, which is what this phase needed, and too slow to play, which is what the lifter is for.
+
+Nothing has been tuned. Every instruction is decoded again each time it runs, and caching the decoded instruction is the obvious first step if the interpreter has to be faster before the lifter exists. That change waits for a reason to make it.

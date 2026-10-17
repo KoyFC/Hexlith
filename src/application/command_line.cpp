@@ -15,6 +15,9 @@ constexpr std::string_view HelpOption = "--help";
 constexpr std::string_view ExtractionOption = "--extraction";
 constexpr std::string_view OutputOption = "--out";
 constexpr std::string_view NoSweepOption = "--no-sweep";
+constexpr std::string_view LimitOption = "--limit";
+constexpr std::string_view CompareOption = "--compare";
+constexpr std::string_view TraceOption = "--trace";
 
 core::Status TakeValue(std::span<const std::string_view> arguments,
                        std::size_t& index,
@@ -35,6 +38,26 @@ core::Status TakeValue(std::span<const std::string_view> arguments,
     into = std::string{value};
     ++index;
     return {};
+}
+
+// A count of instructions, in decimal, with no sign and no suffix.
+core::Result<std::uint64_t> ParseCount(std::string_view option, std::string_view text) {
+    constexpr std::uint64_t Decimal = 10;
+    if (text.empty()) {
+        return core::Error{std::format("{} needs a number", option)};
+    }
+    std::uint64_t value = 0;
+    for (const char digit : text) {
+        if (digit < '0' || digit > '9') {
+            return core::Error{std::format("{} needs a number and was given {}", option, text)};
+        }
+        const auto next = static_cast<std::uint64_t>(digit - '0');
+        if (value > (UINT64_MAX - next) / Decimal) {
+            return core::Error{std::format("{} is too large", text)};
+        }
+        value = (value * Decimal) + next;
+    }
+    return value;
 }
 
 }  // namespace
@@ -160,6 +183,84 @@ std::string ExtractUsage() {
         WorkDirectoryOption,
         ImageOption,
         AllowMismatchOption,
+        HelpOption,
+        RomDirectoryVariable,
+        WorkDirectoryVariable);
+}
+
+core::Result<BootOptions> ParseBootCommandLine(std::span<const std::string_view> arguments) {
+    BootOptions options;
+    std::optional<std::string> limit;
+
+    for (std::size_t index = 0; index < arguments.size(); ++index) {
+        const std::string_view argument = arguments[index];
+
+        if (argument == HelpOption || argument == "-h") {
+            options.help = true;
+            continue;
+        }
+        if (argument == TraceOption) {
+            options.trace = true;
+            continue;
+        }
+
+        core::Status taken;
+        if (argument == RomDirectoryOption) {
+            taken = TakeValue(arguments, index, options.rom_directory);
+        } else if (argument == WorkDirectoryOption) {
+            taken = TakeValue(arguments, index, options.work_directory);
+        } else if (argument == ImageOption) {
+            taken = TakeValue(arguments, index, options.image);
+        } else if (argument == LimitOption) {
+            taken = TakeValue(arguments, index, limit);
+        } else if (argument == CompareOption) {
+            taken = TakeValue(arguments, index, options.compare);
+        } else if (argument.starts_with("-")) {
+            return core::Error{std::format("{} is not an option this tool knows", argument)};
+        } else {
+            return core::Error{std::format(
+                "'{}' is not an option. Every path is given with the option it belongs to",
+                argument)};
+        }
+
+        if (!taken) {
+            return taken.Failure();
+        }
+    }
+
+    if (limit.has_value()) {
+        const core::Result<std::uint64_t> count = ParseCount(LimitOption, *limit);
+        if (!count) {
+            return count.Failure();
+        }
+        options.instruction_limit = count.Value();
+    }
+    return options;
+}
+
+std::string BootUsage() {
+    return std::format(
+        "hexlith-boot: runs the title from its entry point under the HLE kernel and services,\n"
+        "until it stops, and says why it stopped.\n"
+        "\n"
+        "  {} <path>      where the cartridge image is\n"
+        "  {} <path>     the work directory, which the workspace requires\n"
+        "  {} <path>        a specific image, instead of the one in the ROM directory\n"
+        "  {} <count>       instructions to run at most, {} by default\n"
+        "  {} <path>      a directory of memory captured at the moment the run stops,\n"
+        "                       one file per range named by its address, to compare with\n"
+        "  {}              every service request and system call as it happens\n"
+        "  {}               this text\n"
+        "\n"
+        "Paths are taken from the command line first, then from {} and {},\n"
+        "then from the configuration file, the same way hexlith-extract takes them.\n",
+        RomDirectoryOption,
+        WorkDirectoryOption,
+        ImageOption,
+        LimitOption,
+        DefaultBootInstructionLimit,
+        CompareOption,
+        TraceOption,
         HelpOption,
         RomDirectoryVariable,
         WorkDirectoryVariable);

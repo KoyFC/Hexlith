@@ -3,12 +3,16 @@
 
 #include "core/result.h"
 
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 
 namespace hexlith::application {
+
+// Two billion instructions, about eight seconds of the console's time.
+constexpr std::uint64_t DefaultBootInstructionLimit = 2'000'000'000;
 
 struct ExtractOptions {
     std::optional<std::string> rom_directory;
@@ -44,6 +48,26 @@ struct AnalyzeOptions {
     bool help = false;
 };
 
+struct BootOptions {
+    std::optional<std::string> rom_directory;
+    std::optional<std::string> work_directory;
+    std::optional<std::string> image;
+
+    // How many instructions to run at most. The default is enough to reach the
+    // first module and well past it.
+    std::uint64_t instruction_limit = DefaultBootInstructionLimit;
+
+    // A directory of memory captured elsewhere, one file per range named by
+    // its address in hexadecimal, to compare the process's memory with once
+    // the run stops.
+    std::optional<std::string> compare;
+
+    // Prints every request to a service and every system call as it happens.
+    bool trace = false;
+
+    bool help = false;
+};
+
 // Parses the arguments of hexlith-extract.
 //
 // This lives in the application layer rather than in the tool so that it has
@@ -56,6 +80,10 @@ std::string ExtractUsage();
 core::Result<AnalyzeOptions> ParseAnalyzeCommandLine(std::span<const std::string_view> arguments);
 
 std::string AnalyzeUsage();
+
+core::Result<BootOptions> ParseBootCommandLine(std::span<const std::string_view> arguments);
+
+std::string BootUsage();
 
 }  // namespace hexlith::application
 

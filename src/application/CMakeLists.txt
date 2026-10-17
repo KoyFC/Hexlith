@@ -6,6 +6,8 @@ add_library(
     analyze.h
     analyze_modules.cpp
     analyze_modules.h
+    boot.cpp
+    boot.h
     command_line.cpp
     command_line.h
     extract.cpp

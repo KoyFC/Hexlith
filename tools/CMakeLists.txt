@@ -1,6 +1,7 @@
 add_subdirectory(hexlith-analyze)
 add_subdirectory(hexlith-arm-dump)
 add_subdirectory(hexlith-arm-run)
+add_subdirectory(hexlith-boot)
 add_subdirectory(hexlith-cro-dump)
 add_subdirectory(hexlith-cro-link)
 add_subdirectory(hexlith-extract)

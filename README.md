@@ -6,7 +6,7 @@ The goal is to run the game natively rather than emulate it: translate its ARM11
 
 ## Status
 
-Early. Nothing is playable and nothing runs.
+Early. Nothing is playable, and the game runs only as far as its first module, interpreted and with no picture or sound.
 
 What works is extraction. `hexlith-extract` validates a cartridge image against a game profile and writes its contents into a working directory: the extended header, the ExeFS with its executable decompressed, the RomFS as a directory tree, and a manifest of every file with its hash. Two runs produce identical manifests. [`docs/extraction.md`](docs/extraction.md) describes it.
 
@@ -18,7 +18,9 @@ On top of the decoder is an interpreter for ARM, Thumb and VFPv2 floating point,
 
 The CRO modules can be linked offline the way the console's `ldr:ro` service links them: given the modules and the addresses chosen for them, Hexlith works out what every relocated word holds. Its reading of the import tables agrees with every count Azahar logged over three runs, and the words it computes agree with the memory of a module Azahar had loaded, on all 2,880 that were compared. [`docs/cro-linking.md`](docs/cro-linking.md) describes it.
 
-The repository also holds the project's guardrails, its build skeleton, its architecture and decision records, and verified notes on the cartridge formats. Lifting is the next piece of work, and the `ldr:ro` service itself waits for the kernel and the service registry.
+The game boots. `hexlith-boot` runs it from its entry point on the interpreter, under a reimplemented kernel with a deterministic scheduler and the services its boot reaches, through 2,473 system calls and the requests behind them, to its first CRO module, which `ldr:ro` loads and links. The module's 16 KiB, header and tables included, the part of the main executable the capture holds and the module's data match Azahar's memory at the same moment, byte for byte, and the game goes on to run code in the module. The interpreter does 25 million instructions a second there. [`docs/ipc.md`](docs/ipc.md) and [`docs/cro-linking.md`](docs/cro-linking.md) describe it.
+
+The repository also holds the project's guardrails, its build skeleton, its architecture and decision records, and verified notes on the cartridge formats. Lifting is the next piece of work.
 
 The design is documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), the decisions behind it in [`docs/adr/`](docs/adr/), and the formats in [`docs/formats/`](docs/formats/). Those documents mark what exists against what is planned.
 
