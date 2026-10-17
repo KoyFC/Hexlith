@@ -3,6 +3,7 @@
 
 #include "core/result.h"
 #include "domain/arm/interpreter/interpreter.h"
+#include "domain/ctr/exheader.h"
 #include "domain/kernel/address_space.h"
 #include "domain/kernel/executable_loader.h"
 #include "domain/kernel/handle_table.h"
@@ -19,6 +20,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -174,10 +176,35 @@ public:
     [[nodiscard]] static std::string_view SystemCallName(std::uint32_t number);
     [[nodiscard]] static bool IsImplemented(std::uint32_t number);
 
-    // A block of memory from the BASE region, the kind a service hands out for
-    // the game to map, such as the GPU's shared memory.
-    [[nodiscard]] std::shared_ptr<SharedMemory>
-    CreateSystemMemoryBlock(std::uint32_t size, std::uint32_t other_permissions);
+    // The two FCRAM regions a service's memory comes from.
+    enum class Region : std::uint8_t { System, Base };
+
+    // A block of memory a service hands out for the game to map, such as the
+    // GPU's shared memory, from the BASE region unless it says otherwise.
+    [[nodiscard]] std::shared_ptr<SharedMemory> CreateSystemMemoryBlock(
+        std::uint32_t size, std::uint32_t other_permissions, Region region = Region::Base);
+
+    // Where the device memory a process may map lives: VRAM, which the GPU
+    // reads and the application mostly may not write, and the DSP's memory,
+    // through which the application and the DSP exchange audio state. Source:
+    // 3dbrew, Memory layout; VRAM_VADDR and DSP_RAM_VADDR in Azahar.
+    static constexpr std::uint32_t VramBase = 0x1F000000;
+    static constexpr std::uint32_t VramSize = 0x00600000;
+    static constexpr std::uint32_t DspMemoryBase = 0x1FF00000;
+    static constexpr std::uint32_t DspMemorySize = 0x00080000;
+
+    // Maps the parts of VRAM and DSP memory the extended header grants. A
+    // range outside both is a register block, which the game reaches only
+    // through services, and is not mapped.
+    void MapDeviceMemory(std::span<const ctr::MappedRange> ranges);
+
+    [[nodiscard]] const std::shared_ptr<memory::Backing>& DspMemory() const {
+        return dsp_memory_;
+    }
+
+    [[nodiscard]] const std::shared_ptr<memory::Backing>& Vram() const {
+        return vram_;
+    }
 
     // Signals an event the way SignalEvent does, for services.
     void Signal(Event& event);
@@ -215,7 +242,7 @@ private:
     [[nodiscard]] std::shared_ptr<WaitObject> ResolveWaitObject(Handle handle) const;
     static void Answer(Thread& thread, ResultCode result);
     void AnswerHandle(Thread& thread, const std::shared_ptr<Object>& object);
-    std::uint32_t AllocateBaseMemory(std::uint32_t size);
+    std::uint32_t AllocateRegionMemory(Region region, std::uint32_t size);
     ResultCode MapSharedMemory(SharedMemory& block,
                                std::uint32_t address,
                                std::uint32_t permissions,
@@ -274,6 +301,9 @@ private:
     HandleTable handles_;
     SystemPages pages_;
     std::shared_ptr<ResourceLimit> resource_limit_;
+    std::shared_ptr<memory::Backing> vram_ = memory::Backing::Allocate(VramSize);
+    std::shared_ptr<memory::Backing> dsp_memory_ = memory::Backing::Allocate(DspMemorySize);
+    RegionAllocator system_region_;
     RegionAllocator base_region_;
 
     // Every object the game has made, by type, for the resource counts.

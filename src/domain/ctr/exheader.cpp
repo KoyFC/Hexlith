@@ -2,6 +2,7 @@
 
 #include <bit>
 #include <format>
+#include <optional>
 
 namespace hexlith::domain::ctr {
 namespace {
@@ -62,6 +63,8 @@ ReadServices(core::ByteSpan region, std::size_t offset, std::size_t count, std::
     return services;
 }
 
+constexpr auto MapPageBytes = static_cast<std::uint32_t>(exheader::PageSize);
+
 // How many ones a descriptor starts with, which is its type.
 unsigned LeadingOnes(std::uint32_t word) {
     return static_cast<unsigned>(std::countl_one(word));
@@ -69,6 +72,7 @@ unsigned LeadingOnes(std::uint32_t word) {
 
 KernelCapabilities ReadKernelCapabilities(core::ByteSpan region) {
     KernelCapabilities capabilities;
+    std::optional<std::uint32_t> range_start;
     for (std::size_t index = 0; index < exheader::KernelDescriptorCount; ++index) {
         const std::uint32_t word =
             core::ReadU32At(region, exheader::KernelCapabilitiesOffset + (index * 4)).ValueOr(0);
@@ -95,8 +99,20 @@ KernelCapabilities ReadKernelCapabilities(core::ByteSpan region) {
                 static_cast<std::uint8_t>((capabilities.kernel_flags >> exheader::MemoryTypeShift) &
                                           exheader::MemoryTypeMask);
             break;
+        case exheader::MapRangeOnes:
+            if (!range_start.has_value()) {
+                range_start = word;
+                break;
+            }
+            capabilities.mapped_ranges.push_back(
+                MappedRange{.start = (*range_start & exheader::MapPageMask) * MapPageBytes,
+                            .end = (word & exheader::MapPageMask) * MapPageBytes,
+                            .read_only = ((*range_start >> exheader::MapFlagShift) & 1U) != 0,
+                            .is_static = ((word >> exheader::MapFlagShift) & 1U) != 0});
+            range_start.reset();
+            break;
         default:
-            // Interrupts and memory mappings say what hardware the process may
+            // Interrupts and single I/O pages say what hardware the process may
             // touch directly, which an HLE process never does.
             break;
         }

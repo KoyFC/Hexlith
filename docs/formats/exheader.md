@@ -83,7 +83,7 @@ ARM11 kernel capabilities, at 0x370, are 28 descriptors of one word each, follow
 | 6 | Kernel release version | Major in bits 8 to 15, minor in bits 0 to 7 |
 | 7 | Handle table size | Bits 0 to 18 |
 | 8 | Kernel flags | Memory type in bits 8 to 11, 1 for the application region |
-| 9 | Map an address range | Two descriptors, start and exclusive end |
+| 9 | Map an address range | Two descriptors: the first page in bits 0 to 19 with bit 20 set for read-only, then the page after the last with bit 20 set for static memory rather than I/O |
 | 11 | Map one I/O page | Page index in bits 0 to 19 |
 
 The kernel version matters beyond bookkeeping: the kernel puts the linear heap at `0x14000000` for a title declaring a version below 2.44 and at `0x30000000` otherwise. [`horizon-memory.md`](../horizon-memory.md) has the source.
@@ -96,6 +96,6 @@ The service access control list holds 28 entries. `ldr:ro` is among them, which 
 
 Flag0 is `0x04`: ideal processor 0, affinity mask 1, memory mode 0. The main thread priority is `0x30`.
 
-The kernel capabilities declare kernel version 2.35, a handle table of 512 entries, memory type 1, three system call mask tables and six address range descriptors, with the remaining descriptors unused. The masks allow 51 calls: `0x01` to `0x03`, `0x06`, `0x08` to `0x0C`, `0x0F`, `0x11`, `0x13` to `0x25`, `0x27` to `0x32`, `0x35` to `0x3D`. Every one of the 32 calls the walked code of the main executable makes is among them, which is a check on both the parser and that count.
+The kernel capabilities declare kernel version 2.35, a handle table of 512 entries, memory type 1, three system call mask tables and six address range descriptors, with the remaining descriptors unused. The six make three ranges: `0x1FF50000` to `0x1FF58000` and `0x1FF70000` to `0x1FF78000`, read-write I/O, which are the two windows of DSP memory, and `0x1F000000` to `0x1F600000`, read-only static memory, which is VRAM. The masks allow 51 calls: `0x01` to `0x03`, `0x06`, `0x08` to `0x0C`, `0x0F`, `0x11`, `0x13` to `0x25`, `0x27` to `0x32`, `0x35` to `0x3D`. Every one of the 32 calls the walked code of the main executable makes is among them, which is a check on both the parser and that count.
 
 Segment addresses and sizes are recorded in the GameProfile rather than here, since they are version-specific data rather than format knowledge.

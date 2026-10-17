@@ -33,6 +33,16 @@ struct CodeSetInfo {
     }
 };
 
+// A range of physical memory the process may map, by its virtual address.
+struct MappedRange {
+    std::uint32_t start = 0;
+    std::uint32_t end = 0;
+    bool read_only = false;
+    bool is_static = false;
+
+    friend bool operator==(const MappedRange&, const MappedRange&) = default;
+};
+
 // What the kernel lets the process do, from the ARM11 kernel capabilities.
 // docs/formats/exheader.md has the descriptor format and the values the
 // reference title declares.
@@ -49,6 +59,10 @@ struct KernelCapabilities {
 
     // One mask of 24 system calls per table, in table order.
     std::array<std::uint32_t, exheader::SystemCallMaskTableCount> system_call_masks{};
+
+    // The ranges of device memory the process may map: VRAM and DSP memory
+    // for an application.
+    std::vector<MappedRange> mapped_ranges;
 
     [[nodiscard]] bool AllowsSystemCall(unsigned number) const;
 };

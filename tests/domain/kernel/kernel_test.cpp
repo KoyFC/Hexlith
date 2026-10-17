@@ -572,5 +572,45 @@ TEST(Kernel, RefusesAPortThatDoesNotExist) {
     EXPECT_EQ(machine.Data(FirstSlot), result::NotFound.raw);
 }
 
+// A kernel with nothing running, for what services ask of it directly.
+Kernel IdleKernel() {
+    return Kernel(KernelConfig{
+        .regions = {.application = RegionSize, .system = RegionSize, .base = RegionSize}});
+}
+
+TEST(Kernel, TakesServiceMemoryFromTheSystemOrTheBaseRegion) {
+    Kernel kernel = IdleKernel();
+    const auto system = kernel.CreateSystemMemoryBlock(Page, 1, Kernel::Region::System);
+    const auto base = kernel.CreateSystemMemoryBlock(Page, 1);
+    const auto next = kernel.CreateSystemMemoryBlock(Page, 1, Kernel::Region::System);
+    EXPECT_EQ(system->linear_address, layout::OldLinearHeapBase + RegionSize);
+    EXPECT_EQ(base->linear_address, layout::OldLinearHeapBase + (2 * RegionSize));
+    EXPECT_EQ(next->linear_address, system->linear_address + Page);
+}
+
+TEST(Kernel, MapsTheDeviceMemoryTheHeaderGrants) {
+    constexpr std::uint32_t DspStart = 0x1FF50000;
+    constexpr std::uint32_t DspEnd = 0x1FF58000;
+    constexpr std::uint32_t VramEnd = 0x1F001000;
+    constexpr std::uint32_t Registers = 0x1EC00000;
+    constexpr std::uint32_t Marker = 0x5A5A5A5A;
+    Kernel kernel = IdleKernel();
+    const std::vector<ctr::MappedRange> ranges = {
+        {.start = DspStart, .end = DspEnd, .read_only = false, .is_static = true},
+        {.start = Kernel::VramBase, .end = VramEnd, .read_only = true, .is_static = false},
+        {.start = Registers, .end = Registers + Page, .read_only = false, .is_static = false},
+    };
+    kernel.MapDeviceMemory(ranges);
+
+    memory::ProcessMemory& memory = kernel.Space().Memory();
+    EXPECT_TRUE(memory.Write32(DspStart, Marker));
+    EXPECT_EQ(kernel.DspMemory()->Bytes()[DspStart - Kernel::DspMemoryBase], 0x5A)
+        << "the process sees the DSP's own memory";
+    EXPECT_FALSE(memory.Write32(Kernel::VramBase, Marker)) << "granted read-only";
+    EXPECT_TRUE(memory.Read32(Kernel::VramBase).has_value());
+    EXPECT_FALSE(memory.Read32(DspEnd).has_value()) << "only what was granted";
+    EXPECT_FALSE(memory.Read32(Registers).has_value()) << "registers are reached through services";
+}
+
 }  // namespace
 }  // namespace hexlith::domain::kernel

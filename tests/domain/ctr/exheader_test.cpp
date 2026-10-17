@@ -173,22 +173,35 @@ void Put32(std::vector<std::uint8_t>& region, std::size_t offset, std::uint32_t 
 // descriptors and flag0 replaced. The descriptors are laid out the way 3dbrew
 // gives them, the type being the run of ones at the top: kernel version 2.35, a
 // 512-entry handle table, memory type 1, and one allowed system call in each of
-// the first three mask tables. Flag0 says ideal processor 0, affinity 1, memory
-// mode 0.
+// the first three mask tables, and two mapped ranges: a read-only range of
+// I/O, then a read-write range of static memory. Flag0 says ideal processor 0,
+// affinity 1, memory mode 0.
 std::vector<std::uint8_t> RegionWithKernelCapabilities() {
     constexpr std::uint32_t KernelVersion = 0xFC000223;
     constexpr std::uint32_t HandleTable = 0xFE000200;
     constexpr std::uint32_t KernelFlags = 0xFF000101;
-    constexpr std::uint32_t MaskTable0 = 0xF0000002;  // call 0x01
-    constexpr std::uint32_t MaskTable1 = 0xF1000800;  // call 0x18 + 11 = 0x23
-    constexpr std::uint32_t MaskTable2 = 0xF2000004;  // call 0x30 + 2 = 0x32
+    constexpr std::uint32_t MaskTable0 = 0xF0000002;          // call 0x01
+    constexpr std::uint32_t MaskTable1 = 0xF1000800;          // call 0x18 + 11 = 0x23
+    constexpr std::uint32_t MaskTable2 = 0xF2000004;          // call 0x30 + 2 = 0x32
+    constexpr std::uint32_t ReadOnlyRangeStart = 0xFF91F000;  // page 0x1F000, read-only
+    constexpr std::uint32_t IoRangeEnd = 0xFF81F600;          // page 0x1F600, I/O
+    constexpr std::uint32_t RangeStart = 0xFF81FF50;          // page 0x1FF50
+    constexpr std::uint32_t StaticRangeEnd = 0xFF91FF58;      // page 0x1FF58, static
     constexpr std::uint8_t Flag0 = 0x04;
 
     const SyntheticImage image = BuildSyntheticImage(DefaultImageSpec());
     const core::ByteSpan original = Region(image);
     std::vector<std::uint8_t> region(original.begin(), original.end());
-    const std::vector<std::uint32_t> descriptors = {
-        MaskTable0, MaskTable1, MaskTable2, KernelFlags, HandleTable, KernelVersion};
+    const std::vector<std::uint32_t> descriptors = {MaskTable0,
+                                                    MaskTable1,
+                                                    MaskTable2,
+                                                    KernelFlags,
+                                                    HandleTable,
+                                                    KernelVersion,
+                                                    ReadOnlyRangeStart,
+                                                    IoRangeEnd,
+                                                    RangeStart,
+                                                    StaticRangeEnd};
     for (std::size_t index = 0; index < exheader::KernelDescriptorCount; ++index) {
         Put32(region,
               exheader::KernelCapabilitiesOffset + (index * 4),
@@ -216,6 +229,16 @@ TEST(ParseExHeader, ReadsWhichSystemCallsAreAllowed) {
     EXPECT_TRUE(kernel.AllowsSystemCall(0x32));
     EXPECT_FALSE(kernel.AllowsSystemCall(0x02));
     EXPECT_FALSE(kernel.AllowsSystemCall(0xFF)) << "past the last table";
+}
+
+TEST(ParseExHeader, ReadsTheMappedRangesInPairs) {
+    const core::Result<ExHeader> header = ParseExHeader(RegionWithKernelCapabilities());
+    ASSERT_TRUE(header.Ok()) << header.Failure().Message();
+    const std::vector<MappedRange> expected = {
+        {.start = 0x1F000000, .end = 0x1F600000, .read_only = true, .is_static = false},
+        {.start = 0x1FF50000, .end = 0x1FF58000, .read_only = false, .is_static = true},
+    };
+    EXPECT_EQ(header.Value().kernel.mapped_ranges, expected);
 }
 
 TEST(ParseExHeader, ReadsFlag0) {

@@ -408,27 +408,34 @@ void Kernel::ClearTimer(Thread& thread) {
     Answer(thread, result::Success);
 }
 
-std::uint32_t Kernel::AllocateBaseMemory(std::uint32_t size) {
-    // The BASE region follows the application and system regions in FCRAM, and
-    // a block taken from it sits at the linear address of its offset there.
-    // Source: KernelSystem::CreateSharedMemory and SharedMemory::Map in Azahar.
-    const std::optional<std::uint32_t> offset = base_region_.TakeLowest(size);
+std::uint32_t Kernel::AllocateRegionMemory(Region region, std::uint32_t size) {
+    // FCRAM holds the application, system and BASE regions in that order, and
+    // a block taken from one sits at the linear address of its offset in FCRAM,
+    // in the old linear range whatever the title's own linear heap. So the
+    // first block of the system region, which is the shared font, lands at
+    // 0x18000000. Source: KernelSystem::MemoryInit, CreateSharedMemory and
+    // SharedMemory::Map in Azahar.
+    RegionAllocator& allocator = region == Region::System ? system_region_ : base_region_;
+    const std::uint32_t region_start = region == Region::System
+                                           ? config_.regions.application
+                                           : config_.regions.application + config_.regions.system;
+    const std::optional<std::uint32_t> offset = allocator.TakeLowest(size);
     if (!offset.has_value()) {
         return 0;
     }
-    return layout::OldLinearHeapBase + config_.regions.application + config_.regions.system +
-           *offset;
+    return layout::OldLinearHeapBase + region_start + *offset;
 }
 
 std::shared_ptr<SharedMemory> Kernel::CreateSystemMemoryBlock(std::uint32_t size,
-                                                              std::uint32_t other_permissions) {
+                                                              std::uint32_t other_permissions,
+                                                              Region region) {
     auto block = std::make_shared<SharedMemory>();
     const std::shared_ptr<memory::Backing> backing = memory::Backing::Allocate(size);
     for (std::uint32_t offset = 0; offset < size; offset += layout::PageSize) {
         block->pages.push_back(memory::PageTarget{.backing = backing, .offset = offset});
     }
     block->size = size;
-    block->linear_address = AllocateBaseMemory(size);
+    block->linear_address = AllocateRegionMemory(region, size);
     block->permissions = PermissionReadWrite;
     block->other_permissions = other_permissions;
     return block;

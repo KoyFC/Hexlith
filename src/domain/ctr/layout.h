@@ -231,6 +231,13 @@ constexpr unsigned SystemCallMaskOnes = 4;
 constexpr unsigned KernelVersionOnes = 6;
 constexpr unsigned HandleTableSizeOnes = 7;
 constexpr unsigned KernelFlagsOnes = 8;
+constexpr unsigned MapRangeOnes = 9;
+
+// A mapped range takes two descriptors: the first page with bit 20 set for
+// read-only, then the page after the last with bit 20 set for static
+// (cacheable) memory rather than I/O.
+constexpr std::uint32_t MapPageMask = 0xFFFFF;
+constexpr unsigned MapFlagShift = 20;
 
 // A system call mask covers 24 calls, and bits 24 to 26 say which 24: table n
 // covers calls 24n to 24n + 23.

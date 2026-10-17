@@ -38,6 +38,7 @@ Kernel::Kernel(const KernelConfig& config)
       handles_(config.handle_capacity == 0 ? DefaultHandleCapacity : config.handle_capacity),
       pages_(MakeSystemPages(config.memory_mode, config.regions)),
       resource_limit_(std::make_shared<ResourceLimit>()),
+      system_region_(config.regions.system),
       base_region_(config.regions.base) {}
 
 void Kernel::Start(const MainThreadStart& start) {
@@ -329,6 +330,25 @@ std::shared_ptr<WaitObject> Kernel::ResolveWaitObject(Handle handle) const {
         return scheduler_.CurrentShared();
     }
     return std::dynamic_pointer_cast<WaitObject>(handles_.Get(handle));
+}
+
+void Kernel::MapDeviceMemory(std::span<const ctr::MappedRange> ranges) {
+    for (const ctr::MappedRange& range : ranges) {
+        const bool vram = range.start >= VramBase && range.end <= VramBase + VramSize;
+        const bool dsp = range.start >= DspMemoryBase && range.end <= DspMemoryBase + DspMemorySize;
+        if ((!vram && !dsp) || range.end <= range.start) {
+            continue;
+        }
+        const std::shared_ptr<memory::Backing>& backing = vram ? vram_ : dsp_memory_;
+        const std::uint32_t base = vram ? VramBase : DspMemoryBase;
+        static_cast<void>(
+            space_.MapBacking(range.start,
+                              range.end - range.start,
+                              backing,
+                              range.start - base,
+                              range.read_only ? memory::Access::Read : memory::Access::ReadWrite,
+                              range.is_static ? MemoryState::Static : MemoryState::Io));
+    }
 }
 
 void Kernel::RegisterPort(std::string name, std::shared_ptr<SessionHandler> handler) {

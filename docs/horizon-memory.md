@@ -62,6 +62,16 @@ UNMAP reverses either kind and gives the source the access the caller names. Sou
 
 This is why guest memory is a page table rather than one flat allocation: two addresses have to reach the same byte. [ADR 0012](adr/0012-guest-memory-is-a-page-table.md) records the decision.
 
+## Memory for services
+
+Services hand the game blocks of memory to map: the GPU's command and interrupt queues, the input page, the shared font. On the console they come from the system and BASE regions of FCRAM, which follow the application region in that order, and a block sits at the linear address of its offset in FCRAM, always in the old linear range whatever the title's own linear heap. So with the 64 MiB application region the first block of the system region, the shared font, lands at `0x18000000`. Source: `KernelSystem::MemoryInit`, `CreateSharedMemory` and `SharedMemory::Map` in Azahar. `Kernel::CreateSystemMemoryBlock` takes from either region the same way, lowest first.
+
+## Device memory
+
+An extended header can grant a process ranges of physical memory to map at fixed addresses, two descriptors a range. The reference title is granted VRAM, `0x1F000000` to `0x1F600000`, read-only, and two windows of DSP memory, `0x1FF50000` to `0x1FF58000` and `0x1FF70000` to `0x1FF78000`, through which the game and the DSP exchange audio state. Source: 3dbrew, Memory layout and NCCH/Extended Header; `VRAM_VADDR` and `DSP_RAM_VADDR` in Azahar.
+
+`Kernel::MapDeviceMemory` maps those ranges onto one backing for VRAM and one for DSP memory, which the services that stand for the hardware also reach. A range outside both is a register block and is left unmapped.
+
 ## Thread-local storage
 
 Each thread gets `0x200` bytes, eight to a page, the pages mapped upwards from `0x1FF82000` as threads need them. A freed slot is reused before a new page is mapped. The thread finds its own through CP15's read-only thread ID register, and the IPC command buffer starts `0x80` bytes into it. Source: `Process::AllocateThreadLocalStorage`; 3dbrew, Thread Local Storage.
@@ -74,4 +84,4 @@ The console takes these pages from the BASE region, which the application otherw
 
 **RESERVE, and the region flags of ControlMemory.** Azahar ignores both, and so does Hexlith for now.
 
-**Memory-mapped I/O, VRAM and DSP memory.** The game reaches hardware through services, which is what the HLE answers, and nothing maps these ranges until a service needs them.
+**Memory-mapped I/O.** The game reaches hardware registers through services, which is what the HLE answers, and the register ranges an extended header grants are not mapped.
