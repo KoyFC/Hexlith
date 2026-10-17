@@ -70,7 +70,7 @@ tools  ->  adapters  ->  ports  ->  application  ->  domain  ->  core
 - `src/application` holds use cases such as extract, validate and analyze.
 - `src/ports` holds the interfaces the outside world is reached through: `RomSource`, `BlobSink`, `GpuBackend`, `AudioSink`, `InputSource`.
 - `src/adapters` holds the implementations of those ports: the filesystem, Vulkan, SDL.
-- `tools` holds the command-line programs: `hexlith-extract`, `hexlith-analyze`, `hexlith-arm-dump`, which prints what the decoder makes of a run of words and exists to be compared with another disassembler, `hexlith-arm-run`, which does the same for the interpreter, `hexlith-cro-dump`, which prints what the CRO reader makes of each module so that it can be checked against Azahar's log, `hexlith-cro-link`, which prints what the linker writes so that it can be checked against Azahar's memory, and `hexlith-boot`, which runs the title from its entry point under the HLE kernel and services until something stops it, and can compare the memory it leaves with a capture from Azahar.
+- `tools` holds the command-line programs: `hexlith-extract`, `hexlith-analyze`, `hexlith-arm-dump`, which prints what the decoder makes of a run of words and exists to be compared with another disassembler, `hexlith-arm-run`, which does the same for the interpreter, `hexlith-cro-dump`, which prints what the CRO reader makes of each module so that it can be checked against Azahar's log, `hexlith-cro-link`, which prints what the linker writes so that it can be checked against Azahar's memory, and `hexlith-boot`, which runs the title from its entry point under the HLE kernel and services until something stops it, and can compare the memory it leaves with a capture from Azahar, take its input from a script, keep or ignore the save data, and write a golden trace and a recording of the GPU's work into the workspace.
 
 The abstraction belongs at system boundaries. Hot paths, meaning lifted code, memory access and GPU command processing, avoid per-instruction virtual dispatch and use static polymorphism with flat data structures instead. Every such exception is documented where it is made.
 
@@ -110,7 +110,7 @@ Nothing Ghidra or REA produces enters the repository: no decompiled code, no dis
 
 REA opens the main executable as `format: "raw-binary"`, `architecture: "arm"`, `entry_point: "0x00100000"`, with Ghidra as the provider, since the other providers refuse a headerless image. Its full auto-analysis takes longer than REA's default limit of 330 seconds, so the server needs `REA_GHIDRA_STARTUP_TIMEOUT_MS` raised in its environment, and a session should be opened once and reused. Annotations made in a session are lost when it closes.
 
-Golden-trace differential testing against Azahar, over whole scenes rather than single instructions, is planned for when the interpreter can run the game far enough to have scenes. It is not a substitute for unit tests.
+Golden-trace differential testing against Azahar compares the sequence of service requests and module loads of a whole boot with the same boot under a patched Azahar, by `scripts/compare_golden_trace.py`. `docs/golden-traces.md` has the procedure and what the first comparison found. It is not a substitute for unit tests.
 
 ## Commits
 
