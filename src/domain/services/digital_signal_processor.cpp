@@ -1,5 +1,7 @@
 #include "domain/services/digital_signal_processor.h"
 
+#include "core/byte_reader.h"
+
 #include <algorithm>
 
 namespace hexlith::domain::services {
@@ -150,7 +152,11 @@ void DigitalSignalProcessor::ConvertProcessAddressFromDspDram(kernel::IpcRequest
 void DigitalSignalProcessor::WriteProcessPipe(kernel::IpcRequest& request) {
     const std::uint32_t pipe = request.Pop();
     static_cast<void>(request.Pop());
-    const std::vector<std::uint8_t> message = request.PopStaticBuffer();
+    std::vector<std::uint8_t> message = request.PopStaticBuffer();
+    if (pipe == BinaryPipe && message.size() == BinaryMessageSize) {
+        Decode(request, std::move(message));
+        return;
+    }
     if (pipe != AudioPipe || message.size() != AudioMessageSize) {
         request.Decline("a message on DSP pipe " + std::to_string(pipe));
         return;
@@ -168,6 +174,63 @@ void DigitalSignalProcessor::WriteProcessPipe(kernel::IpcRequest& request) {
         request.Decline("an unknown audio pipe command");
         return;
     }
+    request.ReplyWith(kernel::result::Success);
+}
+
+void DigitalSignalProcessor::Decode(kernel::IpcRequest& request,
+                                    std::vector<std::uint8_t> message) {
+    // The header's fields, and the decoder's commands. Source: decoder.h in
+    // Azahar.
+    constexpr std::size_t CommandOffset = 2;
+    constexpr std::size_t ResultOffset = 4;
+    constexpr std::size_t DataOffset = 8;
+    constexpr std::uint16_t DecodeAac = 1;
+    constexpr std::uint16_t DecodeFrame = 1;
+    constexpr std::uint16_t LastCommand = 4;
+
+    // DecodeAACResponse, at the start of the data.
+    constexpr std::size_t ChannelsOffset = DataOffset + 4;
+    constexpr std::size_t SizeOffset = DataOffset + 8;
+    constexpr std::size_t SamplesOffset = DataOffset + 20;
+    constexpr std::size_t RequestSizeOffset = DataOffset + 4;
+    constexpr std::uint32_t Stereo = 2;
+    constexpr std::uint32_t SamplesPerFrame = 1024;
+
+    const auto halfword = [&message](std::size_t at) {
+        return static_cast<std::uint16_t>(message.at(at) | (message.at(at + 1) << 8U));
+    };
+    const auto word = [](const std::vector<std::uint8_t>& bytes, std::size_t at) {
+        return core::ReadU32At(bytes, at).ValueOr(0);
+    };
+    const auto set_word =
+        [](std::vector<std::uint8_t>& bytes, std::size_t at, std::uint32_t value) {
+            for (std::size_t byte = 0; byte < 4; ++byte) {
+                bytes.at(at + byte) = static_cast<std::uint8_t>(value >> (8U * byte));
+            }
+        };
+
+    const std::uint16_t codec = halfword(0);
+    const std::uint16_t command = halfword(CommandOffset);
+    if (codec != DecodeAac || command > LastCommand) {
+        request.Decline("a DSP binary request for codec " + std::to_string(codec) + ", command " +
+                        std::to_string(command));
+        return;
+    }
+
+    // Init and the state commands are echoed back with success; a frame is
+    // answered as decoded. The result field says success either way.
+    std::vector<std::uint8_t> response = message;
+    if (command == DecodeFrame) {
+        response.assign(BinaryMessageSize, 0);
+        std::copy_n(message.begin(), ResultOffset, response.begin());
+        set_word(response, ChannelsOffset, Stereo);
+        set_word(response, SizeOffset, word(message, RequestSizeOffset));
+        set_word(response, SamplesOffset, SamplesPerFrame);
+    }
+    set_word(response, ResultOffset, 0);
+
+    pipes_.at(BinaryPipe) = std::move(response);
+    Interrupt(MessageInterrupt, BinaryPipe);
     request.ReplyWith(kernel::result::Success);
 }
 

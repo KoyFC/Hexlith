@@ -1,3 +1,4 @@
+#include "core/byte_reader.h"
 #include "domain/services/digital_signal_processor.h"
 
 #include "service_harness.h"
@@ -52,6 +53,35 @@ struct Harness {
                              Message});
     }
 
+    // A request to the AAC decoder: codec 1, a command, and in a frame
+    // request the size of the data at word 3 of the message.
+    bool SendDecoderRequest(std::uint16_t command, std::uint32_t size) {
+        std::vector<std::uint8_t> message(DigitalSignalProcessor::BinaryMessageSize, 0);
+        message.at(0) = 1;
+        message.at(2) = static_cast<std::uint8_t>(command);
+        constexpr std::uint8_t Garbage = 0xEE;
+        constexpr std::size_t RequestSize = 12;
+        message.at(4) = Garbage;  // in the result field, as games leave it
+        message.at(RequestSize) = static_cast<std::uint8_t>(size);
+        message.at(RequestSize + 1) = static_cast<std::uint8_t>(size >> 8U);
+        harness.WriteBytes(Message, message);
+        return harness.Send(
+            service,
+            {WriteProcessPipe,
+             DigitalSignalProcessor::BinaryPipe,
+             DigitalSignalProcessor::BinaryMessageSize,
+             ipc::StaticBufferDescriptorFor(DigitalSignalProcessor::BinaryMessageSize, 1),
+             Message});
+    }
+
+    std::vector<std::uint8_t> ReadBinaryPipe() {
+        constexpr auto Size = static_cast<std::uint32_t>(DigitalSignalProcessor::BinaryMessageSize);
+        harness.ListReceiveBuffer(0, Received, Size);
+        EXPECT_TRUE(harness.Send(
+            service, {ReadPipeIfPossible, DigitalSignalProcessor::BinaryPipe, 0, Size}));
+        return harness.ReadBytes(Received, Size);
+    }
+
     ServiceHarness harness;
     DigitalSignalProcessor service;
 };
@@ -89,6 +119,25 @@ TEST(DigitalSignalProcessor, RaisesTheAudioInterruptEachFrameWhileOn) {
     event->signaled = false;
     dsp.harness.Kernel().Threads().Advance(DigitalSignalProcessor::FrameTicks);
     EXPECT_FALSE(event->signaled);
+}
+
+TEST(DigitalSignalProcessor, EchoesTheDecodersInitialisationWithSuccess) {
+    Harness dsp;
+    ASSERT_TRUE(dsp.SendDecoderRequest(0, 0));
+    const std::vector<std::uint8_t> reply = dsp.ReadBinaryPipe();
+    EXPECT_EQ(reply.at(0), 1U) << "the codec";
+    EXPECT_EQ(reply.at(4), 0U) << "success";
+}
+
+TEST(DigitalSignalProcessor, AnswersAFrameAsDecoded) {
+    constexpr std::uint32_t FrameBytes = 0x180;
+    Harness dsp;
+    ASSERT_TRUE(dsp.SendDecoderRequest(1, FrameBytes));
+    const std::vector<std::uint8_t> reply = dsp.ReadBinaryPipe();
+    EXPECT_EQ(reply.at(8), 0U) << "48 kHz";
+    EXPECT_EQ(reply.at(12), 2U) << "two channels";
+    EXPECT_EQ(core::ReadU32At(reply, 16).ValueOr(0), FrameBytes);
+    EXPECT_EQ(core::ReadU32At(reply, 28).ValueOr(0), 1024U) << "one frame of samples";
 }
 
 TEST(DigitalSignalProcessor, DeclinesAnUnknownAudioCommand) {

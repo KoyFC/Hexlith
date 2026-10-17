@@ -59,7 +59,7 @@ Each answers from 3dbrew's description of the command and the answer Azahar give
 | `cfg:u` | `Configuration` | The blocks of a new console's configuration, the region, the model, the transferable ID | Blocks outside the table are declined |
 | `hid:USER` | `HumanInterface` | The shared page and its five events, filled 234 times a second with the pad, the circle pad and the touch screen from an `InputSource` and signalled each time; the gyroscope's calibration, the volume | The accelerometer and the gyroscope are never filled |
 | `gsp::Gpu` | `Graphics` | The right to the GPU, registers that keep what is written, the command queue, interrupts and both vertical blanks every 4,481,136 ticks | Nothing is drawn; a command completes at once |
-| `dsp::DSP` | `DigitalSignalProcessor` | The firmware load, the interrupt events, the audio pipe's start-up reply with the structure addresses, an audio frame every 1,310,720 ticks | No firmware runs and no sound is mixed |
+| `dsp::DSP` | `DigitalSignalProcessor` | The firmware load, the interrupt events, the audio pipe's start-up reply with the structure addresses, an audio frame every 1,310,720 ticks; the AAC decoder's commands on the binary pipe, each frame answered as 1,024 stereo samples at 48 kHz, Azahar's fallback | No firmware runs, no sound is mixed and nothing is decoded |
 | `frd:u` | `Friends` | An offline console with a zero friend key and no friends | |
 | `boss:U` | `SpotPass` | A session, and storage accepted and forgotten | Nothing is ever downloaded |
 | `ptm:u` | `PowerManager` | A step history of zero steps an hour | |

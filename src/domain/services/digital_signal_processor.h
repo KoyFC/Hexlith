@@ -23,6 +23,10 @@ namespace hexlith::domain::services {
 // does, and while the DSP is on an audio frame passes every 1,310,720 ticks,
 // 160 samples at the DSP's rate, each raising the audio pipe's interrupt. No
 // sound is mixed: the structures stay as the game writes them.
+//
+// The binary pipe answers the AAC decoder's commands. Nothing is decoded: a
+// frame comes back as 1,024 stereo samples at 48 kHz, the values Azahar
+// reports when its own decoder fails, and nothing is written to the output.
 class DigitalSignalProcessor final : public CommandTable<DigitalSignalProcessor> {
 public:
     explicit DigitalSignalProcessor(kernel::Kernel& kernel);
@@ -39,6 +43,12 @@ public:
 
     static constexpr std::size_t PipeCount = 8;
     static constexpr std::uint32_t AudioPipe = 2;
+    static constexpr std::uint32_t BinaryPipe = 3;
+
+    // A message on the binary pipe, which carries requests to the AAC
+    // decoder: a codec, a command and a result as the header, then 24 bytes.
+    // Source: BinaryMessage in Azahar's src/audio_core/hle/decoder.h.
+    static constexpr std::size_t BinaryMessageSize = 32;
 
     [[nodiscard]] bool IsOn() const {
         return on_;
@@ -59,6 +69,7 @@ private:
     void SetSemaphore(kernel::IpcRequest& request);
     void ConvertProcessAddressFromDspDram(kernel::IpcRequest& request);
     void WriteProcessPipe(kernel::IpcRequest& request);
+    void Decode(kernel::IpcRequest& request, std::vector<std::uint8_t> message);
     void ReadPipeIfPossible(kernel::IpcRequest& request);
     void GetPipeReadableSize(kernel::IpcRequest& request);
     void LoadComponent(kernel::IpcRequest& request);
