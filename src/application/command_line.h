@@ -48,6 +48,12 @@ struct AnalyzeOptions {
     bool help = false;
 };
 
+// A module event to stop the run after, as --stop-after names it.
+struct BootStopPoint {
+    bool unload = false;
+    std::string module;
+};
+
 struct BootOptions {
     std::optional<std::string> rom_directory;
     std::optional<std::string> work_directory;
@@ -76,6 +82,10 @@ struct BootOptions {
     // A script of the player's input, in the format of
     // docs/formats/input-script.md. Without one nothing is ever pressed.
     std::optional<std::string> input;
+
+    // Stops the run once ldr:ro has loaded or unloaded a module, where a
+    // breakpoint after the game's request would stop Azahar.
+    std::optional<BootStopPoint> stop_after;
 
     bool help = false;
 };

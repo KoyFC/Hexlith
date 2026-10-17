@@ -566,6 +566,22 @@ TEST(Kernel, ShowsEveryObserverEachRequest) {
     EXPECT_EQ(second, std::vector<std::string>{"inc:u"});
 }
 
+TEST(Kernel, StopsWhereItIsAskedToOnceTheCallIsAnswered) {
+    Program program;
+    ConnectToIncrementer(program);
+    SendToIncrementer(program, ipc::MakeHeader(1, 1, 0), 0);
+    program.Call(ExitProcessCall);
+
+    Machine machine(program);
+    machine.Get().RegisterPort("inc:u", std::make_shared<Incrementer>());
+    machine.Get().OnServiceRequest(
+        [&machine](const ServiceRequestRecord&) { machine.Get().RequestStop(); });
+    const KernelStop stop = machine.Run();
+    EXPECT_EQ(stop.reason, KernelStopReason::Requested);
+    EXPECT_EQ(machine.MainThread().context.registers.at(arm::ProgramCounter), stop.address)
+        << "the thread is after its call, ready to carry on";
+}
+
 TEST(Kernel, StopsAtACommandTheServiceDoesNotImplement) {
     constexpr std::uint32_t Unknown = ipc::MakeHeader(2, 1, 0);
     Program program;

@@ -86,7 +86,9 @@ TEST(ParseBootCommandLine, TakesALimitAndADirectoryToCompareWith) {
                                                      "--golden",
                                                      "/tmp/g",
                                                      "--input",
-                                                     "/tmp/i"};
+                                                     "/tmp/i",
+                                                     "--stop-after",
+                                                     "cro-unload:DllA"};
     const core::Result<BootOptions> options = ParseBootCommandLine(arguments);
     ASSERT_TRUE(options.Ok()) << options.Failure().Message();
     EXPECT_EQ(options.Value().instruction_limit, 1000U);
@@ -95,12 +97,22 @@ TEST(ParseBootCommandLine, TakesALimitAndADirectoryToCompareWith) {
     EXPECT_TRUE(options.Value().new_game);
     EXPECT_EQ(options.Value().golden, "/tmp/g");
     EXPECT_EQ(options.Value().input, "/tmp/i");
+    ASSERT_TRUE(options.Value().stop_after.has_value());
+    EXPECT_TRUE(options.Value().stop_after.value_or(BootStopPoint{}).unload);
+    EXPECT_EQ(options.Value().stop_after.value_or(BootStopPoint{}).module, "DllA");
 }
 
 TEST(ParseBootCommandLine, RunsLongEnoughByDefault) {
     const core::Result<BootOptions> options = ParseBootCommandLine({});
     ASSERT_TRUE(options.Ok());
     EXPECT_EQ(options.Value().instruction_limit, DefaultBootInstructionLimit);
+}
+
+TEST(ParseBootCommandLine, RefusesAStopPointItDoesNotKnow) {
+    for (const std::string_view point : {"cro-load:", "frame:12", "DllA"}) {
+        const std::vector<std::string_view> arguments = {"--stop-after", point};
+        EXPECT_FALSE(ParseBootCommandLine(arguments).Ok()) << point;
+    }
 }
 
 TEST(ParseBootCommandLine, RefusesALimitThatIsNotANumber) {
@@ -119,6 +131,7 @@ TEST(BootUsage, NamesEveryOption) {
                                           "--new-game",
                                           "--golden",
                                           "--input",
+                                          "--stop-after",
                                           "--help"}) {
         EXPECT_NE(usage.find(option), std::string::npos) << option;
     }

@@ -410,5 +410,87 @@ TEST(RelocatedValue, WritesWhatApplyRelocationWrites) {
     EXPECT_FALSE(RelocatedValue(Nothing, false, Symbol, 4, Word).Ok());
 }
 
+// A module that takes a name both the static module and A export, and so
+// resolves it against the static module, which is searched first.
+SyntheticCroSpec ModuleCSpec() {
+    SyntheticCroSpec spec;
+    spec.name = "DllC";
+    spec.segments = FourSegments();
+    spec.named_imports = {NamedImport("SharedName", {Patch(Code, SharedWord)})};
+    return spec;
+}
+
+TEST(Linker, ResetsImportsFromAModuleItUnloads) {
+    const Fixture fixture;
+    Linker linker = StartOrFail(fixture.static_module);
+    LoadOrFail(linker, fixture.a, PlacementA);
+    LoadOrFail(linker, fixture.b, PlacementB);
+
+    const core::Result<LoadedModule> unloaded = linker.Unload(1);
+    ASSERT_TRUE(unloaded.Ok()) << unloaded.Failure().Message();
+    EXPECT_EQ(unloaded.Value().Name(), "DllA");
+    ASSERT_EQ(linker.Modules().size(), 2U);
+
+    const LoadedModule& b = linker.Modules().at(1);
+    EXPECT_EQ(b.Name(), "DllB");
+    EXPECT_EQ(ExternalAt(b, ImportFromAWord).value, 0U) << "B has no hook, so the addend alone";
+    EXPECT_FALSE(b.resolutions.at(0).resolved);
+    EXPECT_EQ(linker.Modules().at(0).resolutions.at(0).exporter, 1U)
+        << "the static module's import from B follows B down one place";
+}
+
+TEST(Linker, ResetsTheUnloadedModulesOwnImports) {
+    const Fixture fixture;
+    Linker linker = StartOrFail(fixture.static_module);
+    LoadOrFail(linker, fixture.a, PlacementA);
+    const core::Result<LoadedModule> unloaded = linker.Unload(1);
+    ASSERT_TRUE(unloaded.Ok());
+    for (const Resolution& resolution : unloaded.Value().resolutions) {
+        EXPECT_FALSE(resolution.resolved);
+    }
+    EXPECT_EQ(ExternalAt(unloaded.Value(), StaticImportWord).value, 0U);
+}
+
+TEST(Linker, PointsTheStaticModuleBackAtItsHookWhenItsExporterLeaves) {
+    const Fixture fixture;
+    Linker linker = StartOrFail(fixture.static_module);
+    LoadOrFail(linker, fixture.b, PlacementB);
+    ASSERT_TRUE(linker.Unload(1).Ok());
+    EXPECT_EQ(linker.Modules().at(0).external.at(0).value, StaticText + UnresolvedOffset);
+    EXPECT_FALSE(linker.Modules().at(0).resolutions.at(0).resolved);
+}
+
+TEST(Linker, ResetsANameTheUnloadedModuleExportsWhoeverSuppliedIt) {
+    const Fixture fixture;
+    const std::vector<std::uint8_t> c_file = BuildSyntheticCro(ModuleCSpec());
+    const CroModule c = Fixture::Read(c_file);
+    Linker linker = StartOrFail(fixture.static_module);
+    LoadOrFail(linker, fixture.a, PlacementA);
+    const std::size_t c_index = LoadOrFail(linker, c, PlacementB);
+    ASSERT_TRUE(linker.Modules().at(c_index).resolutions.at(0).resolved);
+    EXPECT_EQ(linker.Modules().at(c_index).resolutions.at(0).exporter, 0U);
+
+    ASSERT_TRUE(linker.Unload(1).Ok());
+    EXPECT_FALSE(linker.Modules().at(1).resolutions.at(0).resolved)
+        << "A exports the name, so Azahar resets it although the static module supplied it";
+}
+
+TEST(Linker, KeepsTheImportsAFixLevelEmptied) {
+    const Fixture fixture;
+    Linker linker = StartOrFail(fixture.static_module);
+    ASSERT_TRUE(linker.Load(fixture.a, PlacementA, {.auto_link = true, .fix_level = 2}).Ok());
+    const core::Result<LoadedModule> unloaded = linker.Unload(1);
+    ASSERT_TRUE(unloaded.Ok());
+    EXPECT_TRUE(unloaded.Value().resolutions.at(0).resolved)
+        << "at fix level 2 the import tables are gone, and nothing can be reset from them";
+}
+
+TEST(Linker, UnloadsOnlyALoadedModule) {
+    const Fixture fixture;
+    Linker linker = StartOrFail(fixture.static_module);
+    EXPECT_FALSE(linker.Unload(0).Ok()) << "the static module stays";
+    EXPECT_FALSE(linker.Unload(1).Ok());
+}
+
 }  // namespace
 }  // namespace hexlith::domain::linker

@@ -1,5 +1,6 @@
 #include "domain/services/relocatable_objects.h"
 
+#include "core/byte_reader.h"
 #include "domain/ctr/layout.h"
 
 #include <array>
@@ -48,7 +49,7 @@ std::span<const RelocatableObjects::Command> RelocatableObjects::Commands() {
         {.id = 0x0002, .name = "LoadCRR", .handler = &RelocatableObjects::LoadCrr},
         {.id = 0x0003, .name = "UnloadCRR"},
         {.id = 0x0004, .name = "LoadCRO", .handler = &RelocatableObjects::LoadCro},
-        {.id = 0x0005, .name = "UnloadCRO"},
+        {.id = 0x0005, .name = "UnloadCRO", .handler = &RelocatableObjects::UnloadCro},
         {.id = 0x0006, .name = "LinkCRO"},
         {.id = 0x0007, .name = "UnlinkCRO"},
         {.id = 0x0008, .name = "Shutdown"},
@@ -217,7 +218,8 @@ void RelocatableObjects::LoadCro(kernel::IpcRequest& request) {
     if (!cro.has_value()) {
         return;
     }
-    const core::Result<std::size_t> linked = linker_->Load(*cro->module, placement);
+    const core::Result<std::size_t> linked = linker_->Load(
+        *cro->module, placement, {.auto_link = load.auto_link, .fix_level = load.fix_level});
     if (!linked) {
         request.Decline("a module Hexlith cannot link: " + linked.Failure().Message());
         return;
@@ -260,15 +262,109 @@ void RelocatableObjects::LoadCro(kernel::IpcRequest& request) {
         }
     }
 
-    if (module_observer_) {
-        module_observer_(ModuleEvent{.kind = ModuleEvent::Kind::Loaded,
-                                     .name = residents_.back().module->header.name,
-                                     .address = load.address});
-    }
+    Announce(ModuleEvent{.kind = ModuleEvent::Kind::Loaded,
+                         .name = residents_.back().module->header.name,
+                         .address = load.address});
 
     request.Begin(2, 0);
     request.Push(kernel::result::Success);
     request.Push(fixed_size);
+}
+
+void RelocatableObjects::UnloadCro(kernel::IpcRequest& request) {
+    const std::uint32_t address = request.Pop();
+    const std::uint32_t zero = request.Pop();
+    static_cast<void>(request.Pop());  // the buffer, which the service already knows
+    static_cast<void>(request.PopHandles());
+
+    if (linker_ == nullptr) {
+        request.ReplyWith(NotInitialized);
+        return;
+    }
+    if ((address & PageMask) != 0) {
+        request.ReplyWith(MisalignedAddress);
+        return;
+    }
+    if (zero != 0) {
+        request.Decline("an UnloadCRO whose reserved word is not zero");
+        return;
+    }
+    std::size_t index = 1;
+    while (index < residents_.size() && residents_.at(index).address != address) {
+        ++index;
+    }
+    if (index >= residents_.size()) {
+        request.ReplyWith(NotLoaded);
+        return;
+    }
+
+    const std::uint32_t fixed_size = HeaderField(address, cro::FixedSizeField);
+    std::vector<std::uint8_t> header(cro::HeaderSize);
+    static_cast<void>(kernel_->Space().Memory().Copy(address, header));
+    const bool fixed =
+        core::MatchesAt(header, cro::FieldOffset(cro::MagicField), cro::FixedUpMagic);
+    Unregister(address);
+
+    core::Result<linker::LoadedModule> unloaded = linker_->Unload(index);
+    if (!unloaded) {
+        request.Decline("a module Hexlith cannot unlink: " + unloaded.Failure().Message());
+        return;
+    }
+    Resident resident = std::move(residents_.at(index));
+    residents_.erase(residents_.begin() + static_cast<std::ptrdiff_t>(index));
+    WriteUnlinked(resident, unloaded.Value());
+    WriteLinked(residents_.size());
+
+    // ClearRelocations, for a module that was never fixed: every word the
+    // loader wrote goes back to zero.
+    memory::ProcessMemory& memory = kernel_->Space().Memory();
+    if (!fixed) {
+        for (const std::vector<linker::LinkedWord>* words :
+             {&unloaded.Value().internal, &unloaded.Value().external}) {
+            for (const linker::LinkedWord& word : *words) {
+                if (word.value.has_value()) {
+                    static_cast<void>(memory.Load(word.address, LittleEndian(0)));
+                }
+            }
+        }
+    }
+
+    std::vector<std::uint8_t> image(fixed_size);
+    static_cast<void>(memory.Copy(address, image));
+    linker::UnrebaseModuleImage(image, address, false);
+    static_cast<void>(memory.Load(address, image));
+
+    static_cast<void>(kernel_->Space().UnmapAlias(
+        address, resident.buffer, fixed_size, memory::Access::ReadWrite, true));
+
+    Announce(ModuleEvent{.kind = ModuleEvent::Kind::Unloaded,
+                         .name = resident.module->header.name,
+                         .address = address});
+    request.ReplyWith(kernel::result::Success);
+}
+
+// The unloaded module's own words and batch flags as Unlink leaves them,
+// written while it is still mapped.
+void RelocatableObjects::WriteUnlinked(const Resident& resident,
+                                       const linker::LoadedModule& unloaded) {
+    memory::ProcessMemory& memory = kernel_->Space().Memory();
+    const std::vector<ctr::CroBatchRelocation>& entries =
+        resident.module->tables.external_relocations;
+    bool batch_begins = true;
+    for (std::size_t entry = 0; entry < unloaded.external.size(); ++entry) {
+        const linker::LinkedWord& word = unloaded.external.at(entry);
+        if (word.value.has_value() && resident.written.at(entry) != word.value) {
+            static_cast<void>(memory.Load(word.address, LittleEndian(word.value.value())));
+        }
+        if (batch_begins && resident.resolved.at(entry)) {
+            const std::uint32_t flag =
+                resident.external_table +
+                static_cast<std::uint32_t>(entry * cro::RelocationEntrySize) +
+                static_cast<std::uint32_t>(cro::RelocationBatchResolvedOffset);
+            static_cast<void>(memory.Load(flag, std::array<std::uint8_t, 1>{0}));
+        }
+        batch_begins = entries.at(entry).batch_end;
+    }
 }
 
 void RelocatableObjects::WriteInternal(const Resident& resident,
@@ -346,6 +442,46 @@ void RelocatableObjects::SetHeaderField(std::uint32_t base,
                                         std::uint32_t value) {
     static_cast<void>(kernel_->Space().Memory().Load(
         base + static_cast<std::uint32_t>(cro::FieldOffset(field)), LittleEndian(value)));
+}
+
+void RelocatableObjects::Announce(const ModuleEvent& event) const {
+    for (const auto& observer : module_observers_) {
+        observer(event);
+    }
+}
+
+// Takes a module out of whichever list holds it. Source: Unregister in
+// cro_helper.cpp, whose cases this follows.
+void RelocatableObjects::Unregister(std::uint32_t address) {
+    const std::uint32_t crs = residents_.front().address;
+    const std::uint32_t next_head = HeaderField(crs, cro::NextModuleField);
+    const std::uint32_t previous_head = HeaderField(crs, cro::PreviousModuleField);
+    const std::uint32_t next = HeaderField(address, cro::NextModuleField);
+    const std::uint32_t previous = HeaderField(address, cro::PreviousModuleField);
+
+    if (address == next_head || address == previous_head) {
+        // The head: the next module, if any, becomes it and points at the tail.
+        if (next != 0) {
+            SetHeaderField(next, cro::PreviousModuleField, previous);
+        }
+        SetHeaderField(
+            crs, address == previous_head ? cro::PreviousModuleField : cro::NextModuleField, next);
+    } else if (next != 0) {
+        SetHeaderField(previous, cro::NextModuleField, next);
+        SetHeaderField(next, cro::PreviousModuleField, previous);
+    } else {
+        // The tail: the one before it takes its place, and the head's
+        // previous field follows.
+        SetHeaderField(previous, cro::NextModuleField, 0);
+        if (next_head != 0 && HeaderField(next_head, cro::PreviousModuleField) == address) {
+            SetHeaderField(next_head, cro::PreviousModuleField, previous);
+        } else if (previous_head != 0 &&
+                   HeaderField(previous_head, cro::PreviousModuleField) == address) {
+            SetHeaderField(previous_head, cro::PreviousModuleField, previous);
+        }
+    }
+    SetHeaderField(address, cro::NextModuleField, 0);
+    SetHeaderField(address, cro::PreviousModuleField, 0);
 }
 
 void RelocatableObjects::Register(std::uint32_t address, bool auto_link) {

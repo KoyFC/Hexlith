@@ -356,7 +356,82 @@ std::uint32_t FixEnd(const Image& image, std::size_t barrier) {
     return end;
 }
 
+// Takes the module's address off an address held at a place in the image,
+// unless it is zero.
+void UnrebaseWord(Image& image, std::size_t offset) {
+    const std::uint32_t value = image.Word(offset);
+    if (value != 0) {
+        image.SetWord(offset, value - image.Base());
+    }
+}
+
+// Unrebases one word of every entry of a table the header still counts.
+void UnrebaseEntries(Image& image,
+                     std::size_t table_field,
+                     std::size_t entry_size,
+                     std::size_t word) {
+    const std::uint32_t count = image.Field(table_field + 1);
+    for (std::uint32_t index = 0; index < count; ++index) {
+        UnrebaseWord(image, image.Entry(table_field, entry_size, index) + word);
+    }
+}
+
+// UnrebaseSegmentTable.
+void UnrebaseSegments(Image& image) {
+    const std::uint32_t count = image.Field(cro::SegmentCountField);
+    for (std::uint32_t index = 0; index < count; ++index) {
+        const std::size_t entry =
+            image.Entry(cro::SegmentTableOffsetField, cro::SegmentEntrySize, index);
+        const auto type =
+            static_cast<ctr::CroSegmentType>(image.Word(entry + cro::SegmentTypeOffset));
+        if (type == ctr::CroSegmentType::Bss) {
+            image.SetWord(entry + cro::SegmentOffsetOffset, 0);
+        } else {
+            UnrebaseWord(image, entry + cro::SegmentOffsetOffset);
+        }
+    }
+}
+
 }  // namespace
+
+void UnrebaseModuleImage(std::span<std::uint8_t> bytes,
+                         std::uint32_t module_address,
+                         bool is_static) {
+    Image image(bytes, module_address);
+
+    // The tables first, while the header still holds where they are. The
+    // order is Unrebase's.
+    UnrebaseEntries(
+        image, cro::AnonymousImportTableOffsetField, cro::ImportEntrySize, cro::ImportBatchOffset);
+    UnrebaseEntries(
+        image, cro::IndexedImportTableOffsetField, cro::ImportEntrySize, cro::ImportBatchOffset);
+    UnrebaseEntries(
+        image, cro::NamedImportTableOffsetField, cro::ImportEntrySize, cro::ImportWhatOffset);
+    UnrebaseEntries(
+        image, cro::NamedImportTableOffsetField, cro::ImportEntrySize, cro::ImportBatchOffset);
+    for (const std::size_t word : {cro::ImportModuleNameOffsetOffset,
+                                   cro::ImportModuleIndexedTableOffset,
+                                   cro::ImportModuleAnonymousTableOffset}) {
+        UnrebaseEntries(image, cro::ImportModuleTableOffsetField, cro::ImportModuleEntrySize, word);
+    }
+    UnrebaseEntries(image,
+                    cro::NamedExportTableOffsetField,
+                    cro::NamedExportEntrySize,
+                    cro::NamedExportNameOffsetOffset);
+    if (!is_static) {
+        UnrebaseSegments(image);
+    }
+
+    image.SetField(cro::NextModuleField, 0);
+    image.SetField(cro::PreviousModuleField, 0);
+    image.SetField(cro::FixedSizeField, 0);
+
+    // UnrebaseHeader.
+    UnrebaseWord(image, cro::FieldOffset(cro::NameOffsetField));
+    for (std::size_t field = cro::CodeOffsetField; field < cro::FixLevel0BarrierField; field += 2) {
+        UnrebaseWord(image, cro::FieldOffset(field));
+    }
+}
 
 core::Status RebaseModuleImage(std::span<std::uint8_t> bytes,
                                std::uint32_t module_address,

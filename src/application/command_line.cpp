@@ -21,6 +21,22 @@ constexpr std::string_view TraceOption = "--trace";
 constexpr std::string_view NewGameOption = "--new-game";
 constexpr std::string_view GoldenOption = "--golden";
 constexpr std::string_view InputOption = "--input";
+constexpr std::string_view StopAfterOption = "--stop-after";
+
+constexpr std::string_view LoadEvent = "cro-load:";
+constexpr std::string_view UnloadEvent = "cro-unload:";
+
+core::Result<BootStopPoint> ParseStopPoint(std::string_view text) {
+    for (const auto& [prefix, unload] :
+         {std::pair{LoadEvent, false}, std::pair{UnloadEvent, true}}) {
+        if (text.starts_with(prefix) && text.size() > prefix.size()) {
+            return BootStopPoint{.unload = unload,
+                                 .module = std::string{text.substr(prefix.size())}};
+        }
+    }
+    return core::Error{std::format(
+        "{} takes cro-load:<module> or cro-unload:<module>, not '{}'", StopAfterOption, text)};
+}
 
 core::Status TakeValue(std::span<const std::string_view> arguments,
                        std::size_t& index,
@@ -40,6 +56,25 @@ core::Status TakeValue(std::span<const std::string_view> arguments,
 
     into = std::string{value};
     ++index;
+    return {};
+}
+
+core::Status TakeStopPoint(std::span<const std::string_view> arguments,
+                           std::size_t& index,
+                           std::optional<BootStopPoint>& into) {
+    std::optional<std::string> text;
+    core::Status taken = TakeValue(arguments, index, text);
+    if (!taken || !text.has_value()) {
+        return taken;
+    }
+    if (into.has_value()) {
+        return core::Error{std::format("{} was given twice", StopAfterOption)};
+    }
+    core::Result<BootStopPoint> parsed = ParseStopPoint(*text);
+    if (!parsed) {
+        return parsed.Failure();
+    }
+    into = std::move(parsed.Value());
     return {};
 }
 
@@ -226,6 +261,8 @@ core::Result<BootOptions> ParseBootCommandLine(std::span<const std::string_view>
             taken = TakeValue(arguments, index, options.golden);
         } else if (argument == InputOption) {
             taken = TakeValue(arguments, index, options.input);
+        } else if (argument == StopAfterOption) {
+            taken = TakeStopPoint(arguments, index, options.stop_after);
         } else if (argument.starts_with("-")) {
             return core::Error{std::format("{} is not an option this tool knows", argument)};
         } else {
@@ -264,6 +301,7 @@ std::string BootUsage() {
         "  {}           no save data at the start and none written, the same run every time\n"
         "  {} <path>       write the golden trace there, to compare with Azahar's\n"
         "  {} <path>        a script of the player's input, by frame\n"
+        "  {} <event>  stop once ldr:ro has done cro-load:<module> or cro-unload:<module>\n"
         "  {}               this text\n"
         "\n"
         "Without {} the save data under <work-dir>/<title>/save is read at the start and\n"
@@ -281,6 +319,7 @@ std::string BootUsage() {
         NewGameOption,
         GoldenOption,
         InputOption,
+        StopAfterOption,
         HelpOption,
         NewGameOption,
         RomDirectoryVariable,

@@ -53,6 +53,19 @@ core::Result<std::uint32_t> FixModuleImage(std::span<std::uint8_t> bytes,
                                            std::uint32_t module_address,
                                            std::uint32_t fix_level);
 
+// Unrebase, as UnloadCRO runs it on a module it is about to unmap: every
+// address Rebase wrote into the header and the tables becomes an offset again,
+// the module leaves its list and its fixed size goes back to zero. The magic
+// stays as Fix left it.
+//
+// Only the tables the header still counts are touched, which after Fix is
+// what the fix level kept. As in Azahar, a segment's address loses the
+// module's address whatever buffer it points into, and a BSS segment's offset
+// becomes zero.
+void UnrebaseModuleImage(std::span<std::uint8_t> bytes,
+                         std::uint32_t module_address,
+                         bool is_static);
+
 }  // namespace hexlith::domain::linker
 
 #endif  // HEXLITH_DOMAIN_LINKER_MODULE_IMAGE_H

@@ -118,6 +118,106 @@ bool BatchResolved(const LoadedModule& loaded, const ctr::CroBatch& batch) {
     return loaded.resolutions.at(batch.first).resolved;
 }
 
+std::uint32_t UnresolvedAddress(const LoadedModule& loaded) {
+    return TagAddress(loaded, loaded.module->tables.hooks.on_unresolved).value_or(0);
+}
+
+// The fix levels from which a module's import tables, and its export tables,
+// are emptied. Source: FIX_BARRIERS in cro_helper.cpp.
+constexpr std::uint32_t ImportsEmptiedFrom = 2;
+constexpr std::uint32_t ExportsEmptiedFrom = 3;
+
+bool KeepsImports(const LoadedModule& loaded) {
+    return loaded.options.fix_level < ImportsEmptiedFrom;
+}
+
+// ApplyRelocationBatch with reset set: every entry of the batch receives the
+// module's OnUnresolved address, and the batch is marked unresolved. Address
+// zero is allowed here.
+core::Status ResetBatch(LoadedModule& loaded, const ctr::CroBatch& batch) {
+    const std::uint32_t unresolved = UnresolvedAddress(loaded);
+    for (std::size_t index = batch.first; index < batch.first + batch.count; ++index) {
+        const core::Status written = WriteExternal(loaded, index, unresolved);
+        if (!written) {
+            return written;
+        }
+        loaded.resolutions.at(index) = Resolution{};
+    }
+    return {};
+}
+
+// Resets the batch of every entry, an import of any of the three kinds.
+template<typename Entries>
+core::Status ResetEach(LoadedModule& loaded, const Entries& entries) {
+    for (const auto& entry : entries) {
+        const core::Status reset = ResetBatch(loaded, entry.batch);
+        if (!reset) {
+            return reset;
+        }
+    }
+    return {};
+}
+
+// What a module imports by index and by position from one module it names.
+core::Status ResetImportsFrom(LoadedModule& loaded, const ctr::CroImportModule& imported) {
+    core::Status indexed = ResetEach(loaded, imported.indexed);
+    if (!indexed) {
+        return indexed;
+    }
+    return ResetEach(loaded, imported.anonymous);
+}
+
+// ResetImportNamedSymbol, ResetImportIndexedSymbol and
+// ResetImportAnonymousSymbol: every import batch of the module, resolved or
+// not.
+core::Status ResetOwnImports(LoadedModule& loaded) {
+    if (!KeepsImports(loaded)) {
+        return {};
+    }
+    core::Status named = ResetEach(loaded, loaded.module->tables.named_imports);
+    if (!named) {
+        return named;
+    }
+    for (const ctr::CroImportModule& imported : loaded.module->tables.import_modules) {
+        const core::Status reset = ResetImportsFrom(loaded, imported);
+        if (!reset) {
+            return reset;
+        }
+    }
+    return {};
+}
+
+// ResetExportNamedSymbol: a resolved named import of the target is reset if
+// the departing module exports the name.
+core::Status ResetNamesExportedBy(LoadedModule& target, const LoadedModule& departing) {
+    for (const ctr::CroNamedImport& entry : target.module->tables.named_imports) {
+        if (!BatchResolved(target, entry.batch) ||
+            !FindNamedExport(departing, entry.name).has_value()) {
+            continue;
+        }
+        const core::Status reset = ResetBatch(target, entry.batch);
+        if (!reset) {
+            return reset;
+        }
+    }
+    return {};
+}
+
+// ResetModuleExport: whatever the target imports from a module of the
+// departing module's name.
+core::Status ResetModuleImports(LoadedModule& target, const LoadedModule& departing) {
+    for (const ctr::CroImportModule& imported : target.module->tables.import_modules) {
+        if (imported.name != departing.Name()) {
+            continue;
+        }
+        const core::Status reset = ResetImportsFrom(target, imported);
+        if (!reset) {
+            return reset;
+        }
+    }
+    return {};
+}
+
 // ResetExternalRelocations: before anything is imported, every external
 // relocation is written as though it had resolved to the module's
 // OnUnresolved hook, which is address zero for a module without one.
@@ -413,7 +513,8 @@ core::Result<Linker> Linker::FromStaticModule(const CroModule& static_module) {
     return Linker{std::move(modules)};
 }
 
-core::Result<std::size_t> Linker::Load(const CroModule& module, const Placement& placement) {
+core::Result<std::size_t>
+Linker::Load(const CroModule& module, const Placement& placement, const LoadOptions& options) {
     if (module.header.IsStaticModule()) {
         return core::Error{"the static module is linked once, when the linker is made"};
     }
@@ -426,6 +527,7 @@ core::Result<std::size_t> Linker::Load(const CroModule& module, const Placement&
     LoadedModule loaded;
     loaded.module = &module;
     loaded.placement = placement;
+    loaded.options = options;
     loaded.segment_addresses = RebaseSegments(module.header, placement);
 
     // Rebase.
@@ -457,6 +559,53 @@ core::Result<std::size_t> Linker::Load(const CroModule& module, const Placement&
     // Register.
     modules_.push_back(std::move(loaded));
     return modules_.size() - 1;
+}
+
+core::Result<LoadedModule> Linker::Unload(std::size_t index) {
+    if (index == 0 || index >= modules_.size()) {
+        return core::Error{std::format("there is no loaded module {} to unload", index)};
+    }
+
+    // Unregister: the module leaves the list before anything is reset, so the
+    // walk below does not reach it.
+    LoadedModule unloaded = std::move(modules_.at(index));
+    modules_.erase(modules_.begin() + static_cast<std::ptrdiff_t>(index));
+
+    const core::Status own = ResetOwnImports(unloaded);
+    if (!own) {
+        return own.Failure();
+    }
+
+    // ResetExportNamedSymbol and ResetModuleExport, for the static module and
+    // every module linked automatically, which is what ForEachAutoLinkCRO
+    // walks.
+    for (std::size_t target_index = 0; target_index < modules_.size(); ++target_index) {
+        LoadedModule& target = modules_.at(target_index);
+        if ((target_index != 0 && !target.options.auto_link) || !KeepsImports(target)) {
+            continue;
+        }
+        if (unloaded.options.fix_level < ExportsEmptiedFrom) {
+            const core::Status named = ResetNamesExportedBy(target, unloaded);
+            if (!named) {
+                return named.Failure();
+            }
+        }
+        const core::Status imports = ResetModuleImports(target, unloaded);
+        if (!imports) {
+            return imports.Failure();
+        }
+    }
+
+    // What is still resolved against a module after it keeps its index, one
+    // place lower for the modules that came after the one unloaded.
+    for (LoadedModule& remaining : modules_) {
+        for (Resolution& resolution : remaining.resolutions) {
+            if (resolution.resolved && resolution.exporter > index) {
+                --resolution.exporter;
+            }
+        }
+    }
+    return unloaded;
 }
 
 core::Result<std::vector<std::uint8_t>> LinkedImage(const LoadedModule& loaded,

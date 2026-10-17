@@ -68,6 +68,10 @@ enum class KernelStopReason : std::uint8_t {
     // the command's header and the service is named. The calling thread is
     // left before its SendSyncRequest, as for a system call.
     UnimplementedServiceCommand,
+    // Something watching the run asked it to stop. It stops once the system
+    // call in progress is answered, with the thread after the call, which is
+    // where a debugger's breakpoint on the next instruction would leave it.
+    Requested,
 };
 
 struct KernelStop {
@@ -162,6 +166,11 @@ public:
     // Adds an observer of service requests, which sees each one once it is
     // answered. A trace for a person and a golden trace for a script can both
     // be watching.
+    // Asks the run to stop once the system call in progress is answered.
+    void RequestStop() {
+        stop_requested_ = true;
+    }
+
     void OnServiceRequest(std::function<void(const ServiceRequestRecord&)> observer) {
         service_request_observers_.push_back(std::move(observer));
     }
@@ -325,6 +334,7 @@ private:
     std::function<void(const SystemCallRecord&)> system_call_observer_;
     std::function<void(std::string_view)> debug_output_observer_;
     std::vector<std::function<void(const ServiceRequestRecord&)>> service_request_observers_;
+    bool stop_requested_ = false;
 };
 
 }  // namespace hexlith::domain::kernel

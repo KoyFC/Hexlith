@@ -26,7 +26,7 @@ The static module is linked first and once, the way `LoadCRS` does it: its segme
 
 **Static anonymous symbols**, a module handing positions to the static module, are refused. Azahar notes that no game is known to use them, and the reference title declares none, so nothing could check an implementation.
 
-**Unloading** is not implemented. An unload resets every import that pointed into the module, so linking just the resident modules in the order they were loaded reaches the state the console reached by loading and unloading. That is enough to reproduce a moment of a run. The service will need the real thing once a run reaches the first unload, which the boot to the first module does not.
+**Linking by hand**, `LinkCRO` and `UnlinkCRO`, and the second load command, `LoadCRO_New`, are not implemented. The reference title reaches none of them on the way to the title screen.
 
 **Named lookups** go through the export tree on the console, and a module with no tree finds nothing whatever its export table holds. Hexlith keeps that rule but searches the table itself, which gives the same answer whenever the tree indexes the table correctly.
 
@@ -40,6 +40,16 @@ The static module is linked first and once, the way `LoadCRS` does it: its segme
 - **Register.** The static module's header holds the head of two lists, the auto-linked modules and the rest, and each module's header holds its neighbours. The head's previous field points at the tail (`Register`).
 - **Fix.** At a fix level above zero the magic becomes `FIXD` and the tables past the level's barrier are emptied. The part of the buffer past the end of what is kept goes back to the game. The reference title asks for level 1 and its first module keeps all four of its pages (`Fix`).
 - **Make the code executable** (`GetExecutablePages`).
+
+An unload undoes it in the order `UnloadCRO` runs its steps:
+
+- **Unregister.** The module leaves its list, whichever of the four cases of head, middle, tail or only module it is (`Unregister`).
+- **Unlink**, in `linker::Linker::Unload`. Every import batch of the module is reset to its own OnUnresolved address and marked unresolved. Then, in the static module and every module linked automatically, a named import is reset if the module being unloaded exports that name, and every import by index or by position from a module of its name is reset to the importer's OnUnresolved address (`ResetImportNamedSymbol`, `ResetImportIndexedSymbol`, `ResetImportAnonymousSymbol`, `ResetExportNamedSymbol`, `ResetModuleExport`). The named case looks only at the name, so an import another module supplied is reset too; Azahar does this and so does Hexlith. A fix level of 2 or more emptied the import tables, and level 3 the exports, and an unload then resets nothing from them.
+- **Clear the relocations** of a module that was never fixed, every word back to zero (`ClearRelocations`). The reference title fixes every module it loads, at level 1, so this does not run.
+- **Unrebase**, in `linker::UnrebaseModuleImage`: every address in the header and tables is an offset again, the list fields and the fixed size go to zero, and the magic stays `FIXD`. A segment's address loses the module's address whatever it points into, so the data segment's entry ends up holding the data buffer's address minus the module's, and a BSS segment's becomes zero (`Unrebase`).
+- **Unmap** what is still mapped, which gives the buffer back to the game as it is (`Unmap`).
+
+The reference title unloads `DllLangSelect` at frame 225 of a new game and loads the title screen's three modules into the same place two frames later, reusing the buffer.
 
 ## The data segment
 

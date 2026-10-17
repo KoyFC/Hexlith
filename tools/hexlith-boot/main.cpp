@@ -80,6 +80,8 @@ std::string_view Describe(kernel::KernelStopReason reason) {
         return "called Break";
     case kernel::KernelStopReason::UnimplementedServiceCommand:
         return "sent a command nothing implements";
+    case kernel::KernelStopReason::Requested:
+        return "was stopped where it was asked to stop";
     }
     return "stopped for a reason this tool does not know";
 }
@@ -248,6 +250,16 @@ bool AttachGolden(const application::BootOptions& options,
     return true;
 }
 
+void StopAfter(const application::BootStopPoint& point, application::BootedTitle& title) {
+    using Event = hexlith::domain::services::RelocatableObjects::ModuleEvent;
+    const Event::Kind wanted = point.unload ? Event::Kind::Unloaded : Event::Kind::Loaded;
+    title.Loader().OnModuleEvent([point, wanted, &title](const Event& event) {
+        if (event.kind == wanted && event.name == point.module) {
+            title.Kernel().RequestStop();
+        }
+    });
+}
+
 // The save data outlives the run unless this is a new game.
 bool AttachSaves(const application::BootOptions& options,
                  application::BootedTitle& title,
@@ -311,6 +323,9 @@ int Run(const application::BootOptions& options) {
     if (!AttachInput(options, title, input) || !AttachGolden(options, title, golden) ||
         !AttachSaves(options, title, saves)) {
         return Failure;
+    }
+    if (options.stop_after.has_value()) {
+        StopAfter(*options.stop_after, title);
     }
 
     const auto began = std::chrono::steady_clock::now();

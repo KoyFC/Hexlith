@@ -30,9 +30,11 @@ namespace hexlith::domain::services {
 // module list in the headers, and give back the part of the buffer a fixed
 // module no longer needs.
 //
-// docs/cro-linking.md has the order of the steps. LoadCRO_New, unloading and
-// linking or unlinking by hand are not implemented yet: the reference title's
-// boot reaches none of them before its first module runs.
+// docs/cro-linking.md has the order of the steps. Unloading undoes all of it:
+// the linker resets every import into the module, the header and tables go
+// back to offsets, and the buffer is given back to the game holding what
+// Azahar's loader leaves there. LoadCRO_New and linking or unlinking by hand
+// are not implemented: the reference title's boot reaches none of them.
 class RelocatableObjects final : public CommandTable<RelocatableObjects> {
 public:
     explicit RelocatableObjects(kernel::Kernel& kernel);
@@ -51,6 +53,7 @@ public:
     static constexpr kernel::ResultCode MisalignedSize{0xD9012FF2};
     static constexpr kernel::ResultCode IllegalAddress{0xE1612C0F};
     static constexpr kernel::ResultCode InvalidMemoryState{0xD8A12C08};
+    static constexpr kernel::ResultCode NotLoaded{0xD8A12C0D};
 
     // A module the game has loaded or unloaded, where it was mapped.
     struct ModuleEvent {
@@ -60,9 +63,10 @@ public:
         std::uint32_t address = 0;
     };
 
-    // Called once a module is mapped and linked, before the reply.
+    // Adds an observer, called once a module is mapped and linked or once it
+    // is unmapped, before the reply.
     void OnModuleEvent(std::function<void(const ModuleEvent&)> observer) {
-        module_observer_ = std::move(observer);
+        module_observers_.push_back(std::move(observer));
     }
 
     // The modules linked so far, the static one first.
@@ -102,6 +106,11 @@ private:
     void Initialize(kernel::IpcRequest& request);
     void LoadCrr(kernel::IpcRequest& request);
     void LoadCro(kernel::IpcRequest& request);
+    void UnloadCro(kernel::IpcRequest& request);
+
+    // UnloadCRO's steps on memory, once the linker has unlinked the module.
+    void WriteUnlinked(const Resident& resident, const linker::LoadedModule& unloaded);
+    void Unregister(std::uint32_t address);
 
     // The checks Initialize and LoadCRO share on the buffer and the address
     // the module is to be mapped at.
@@ -135,7 +144,9 @@ private:
     // Null until Initialize has linked the static module.
     std::unique_ptr<linker::Linker> linker_;
     std::vector<Resident> residents_;
-    std::function<void(const ModuleEvent&)> module_observer_;
+    void Announce(const ModuleEvent& event) const;
+
+    std::vector<std::function<void(const ModuleEvent&)>> module_observers_;
 };
 
 }  // namespace hexlith::domain::services

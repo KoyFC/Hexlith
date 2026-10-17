@@ -141,6 +141,13 @@ std::optional<KernelStop> Kernel::AnswerSystemCall(Thread& thread, std::uint32_t
     if (outcome_ == Outcome::Break) {
         return StopFor(KernelStopReason::Break, break_reason_, &thread, call_address);
     }
+    if (stop_requested_) {
+        stop_requested_ = false;
+        return StopFor(KernelStopReason::Requested,
+                       0,
+                       &thread,
+                       thread.context.registers.at(arm::ProgramCounter));
+    }
     return std::nullopt;
 }
 

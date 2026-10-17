@@ -47,6 +47,19 @@ struct Placement {
     std::uint32_t bss_address = 0;
 };
 
+// How LoadCRO was asked to keep a module. Source: 3dbrew RO:LoadExeCRO,
+// request words 9 and 10.
+struct LoadOptions {
+    // Whether the module joins the list ForEachAutoLinkCRO walks, which is the
+    // list an unload resets imports in.
+    bool auto_link = true;
+
+    // How much of the module Fix discards once it is linked. From level 2 on
+    // the import tables are emptied and from level 3 the export tables, which
+    // an unload then cannot reset from. Source: FIX_BARRIERS in cro_helper.cpp.
+    std::uint32_t fix_level = 0;
+};
+
 // One word the loader has written.
 struct LinkedWord {
     // Which word: a position in the segments of the module that holds it.
@@ -82,6 +95,7 @@ struct Resolution {
 struct LoadedModule {
     const CroModule* module = nullptr;
     Placement placement;
+    LoadOptions options;
 
     // The address of each segment, indexed like the segment table. A segment
     // with no size and no offset is left at zero, as RebaseSegmentTable leaves
@@ -109,11 +123,10 @@ struct LoadedModule {
 //
 // Every module given to the linker must outlive it.
 //
-// Unloading is not here. An unload resets the imports that pointed into the
-// module, so linking only the modules that are resident, in the order they were
-// loaded, reaches the same state that loading and unloading reached; that is
-// all the analysis and the memory comparison need. The ldr:ro service will need
-// the real thing.
+// Unloading takes a module out of the list and resets every import that
+// pointed into it, which is how the ldr:ro service leaves memory. An offline
+// tool that only needs the resident modules can also link those in the order
+// they were loaded, and reaches the same words.
 class Linker {
 public:
     // Starts from the static module, as LoadCRS does: its relocations are
@@ -127,7 +140,19 @@ public:
     // Refused: a module with static anonymous symbols, which no title is known
     // to use and nothing here could be checked against, and a relocation of a
     // type Azahar does not implement. The reference title has neither.
-    core::Result<std::size_t> Load(const CroModule& module, const Placement& placement);
+    core::Result<std::size_t>
+    Load(const CroModule& module, const Placement& placement, const LoadOptions& options = {});
+
+    // Takes a loaded module out, as UnloadCRO does: Unregister, then Unlink.
+    // Its own imports are reset to its OnUnresolved address, and so is every
+    // import that named it in the static module and the modules linked
+    // automatically. Answers the module as Unlink leaves it, so that its words
+    // can be written before it is unmapped. The modules after it move down one
+    // place.
+    //
+    // As in Azahar, a named import elsewhere is reset whenever the unloaded
+    // module exports that name, even if another module supplied it.
+    core::Result<LoadedModule> Unload(std::size_t index);
 
     [[nodiscard]] const std::vector<LoadedModule>& Modules() const {
         return modules_;

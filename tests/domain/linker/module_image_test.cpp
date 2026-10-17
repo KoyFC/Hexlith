@@ -244,5 +244,57 @@ TEST(FixModuleImage, KeepsEverythingAtLevelZero) {
     EXPECT_EQ(Field(image, cro::InternalRelocationTableOffsetField), internal);
 }
 
+// A module rebased, listed and fixed at level 1, then unrebased.
+std::vector<std::uint8_t> LoadedAndUnrebased(const std::vector<std::uint8_t>& file) {
+    std::vector<std::uint8_t> image = Rebased(file);
+    SetField(image, cro::NextModuleField, ModuleAddress);
+    SetField(image, cro::PreviousModuleField, ModuleAddress);
+    EXPECT_TRUE(FixModuleImage(image, ModuleAddress, 1).Ok());
+    UnrebaseModuleImage(image, ModuleAddress, false);
+    return image;
+}
+
+TEST(UnrebaseModuleImage, PutsTheHeaderBackToOffsets) {
+    const std::vector<std::uint8_t> file = BuildSyntheticCro(ModuleSpec());
+    const std::vector<std::uint8_t> image = LoadedAndUnrebased(file);
+    for (const std::size_t field : {cro::NameOffsetField,
+                                    cro::CodeOffsetField,
+                                    cro::ModuleNameOffsetField,
+                                    cro::SegmentTableOffsetField,
+                                    cro::NamedImportTableOffsetField,
+                                    cro::ImportModuleTableOffsetField}) {
+        EXPECT_EQ(Field(image, field), Field(file, field)) << "field " << field;
+    }
+}
+
+TEST(UnrebaseModuleImage, TakesTheModuleOutOfItsListAndKeepsItFixed) {
+    const std::vector<std::uint8_t> image = LoadedAndUnrebased(BuildSyntheticCro(ModuleSpec()));
+    EXPECT_EQ(Field(image, cro::NextModuleField), 0U);
+    EXPECT_EQ(Field(image, cro::PreviousModuleField), 0U);
+    EXPECT_EQ(Field(image, cro::FixedSizeField), 0U);
+    EXPECT_TRUE(core::MatchesAt(image, cro::FieldOffset(cro::MagicField), cro::FixedUpMagic))
+        << "the magic stays as Fix left it";
+}
+
+TEST(UnrebaseModuleImage, PutsTheTablesPointersBackToOffsets) {
+    const std::vector<std::uint8_t> file = BuildSyntheticCro(ModuleSpec());
+    const std::vector<std::uint8_t> image = LoadedAndUnrebased(file);
+    const std::uint32_t names = Field(image, cro::NamedImportTableOffsetField);
+    EXPECT_EQ(core::ReadU32At(image, names + cro::ImportWhatOffset).ValueOr(0),
+              core::ReadU32At(file, names + cro::ImportWhatOffset).ValueOr(0));
+}
+
+TEST(UnrebaseModuleImage, LeavesSegmentsAsAzaharDoes) {
+    std::vector<std::uint8_t> image = Rebased(BuildSyntheticCro(ModuleSpec()));
+    UnrebaseModuleImage(image, ModuleAddress, false);
+    const std::uint32_t table = Field(image, cro::SegmentTableOffsetField);
+    auto segment = [&](std::size_t index) {
+        return core::ReadU32At(image, table + (index * cro::SegmentEntrySize)).ValueOr(0);
+    };
+    EXPECT_EQ(segment(Bss), 0U);
+    EXPECT_EQ(segment(Data), Buffers.data_address - ModuleAddress)
+        << "the module's address comes off the buffer's address";
+}
+
 }  // namespace
 }  // namespace hexlith::domain::linker

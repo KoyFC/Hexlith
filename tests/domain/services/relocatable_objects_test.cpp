@@ -29,6 +29,7 @@ using testing::ServiceHarness;
 // ldr:ro command headers. Source: 3dbrew, RO Services.
 constexpr std::uint32_t Initialize = 0x000100C2;
 constexpr std::uint32_t LoadCro = 0x000402C2;
+constexpr std::uint32_t UnloadCro = 0x000500C2;
 constexpr std::uint32_t CurrentProcess = 0xFFFF8001;
 
 constexpr std::uint32_t Page = kernel::layout::PageSize;
@@ -179,6 +180,12 @@ struct Harness {
                              CurrentProcess});
     }
 
+    bool Unload(std::uint32_t address, std::uint32_t buffer) {
+        return harness.Send(
+            service,
+            {UnloadCro, address, 0, buffer, ipc::CopyHandlesDescriptor(1), CurrentProcess});
+    }
+
     std::uint32_t HeaderField(std::uint32_t base, std::size_t field) {
         return harness.Read32(base + static_cast<std::uint32_t>(cro::FieldOffset(field)));
     }
@@ -299,6 +306,53 @@ TEST(RelocatableObjects, RefusesAMisalignedAddress) {
     ASSERT_TRUE(ro.InitializeWith(ro.crs, CrsAddress));
     ASSERT_TRUE(ro.Load(ro.a, ModuleA + 4));
     EXPECT_EQ(ro.harness.Reply(1), RelocatableObjects::MisalignedAddress.raw);
+}
+
+TEST(RelocatableObjects, UnloadsAModuleAndGivesBackItsBuffer) {
+    Harness ro;
+    ASSERT_TRUE(ro.InitializeWith(ro.crs, CrsAddress));
+    const std::uint32_t buffer = ro.next_buffer;
+    ASSERT_TRUE(ro.Load(ro.a, ModuleA));
+    ASSERT_TRUE(ro.Unload(ModuleA, buffer));
+    EXPECT_EQ(ro.harness.Reply(1), kernel::result::Success.raw);
+    EXPECT_EQ(ro.harness.Kernel().Space().Memory().AccessAt(buffer), memory::Access::ReadWrite);
+    const std::size_t code_field = cro::FieldOffset(cro::CodeOffsetField);
+    EXPECT_EQ(ro.harness.Read32(buffer + static_cast<std::uint32_t>(code_field)),
+              core::ReadU32At(ro.a, code_field).ValueOr(0))
+        << "the buffer holds the module with offsets, not addresses";
+}
+
+TEST(RelocatableObjects, TakesAnUnloadedModuleOutOfTheList) {
+    Harness ro;
+    std::vector<std::string> events;
+    ro.service.OnModuleEvent([&events](const RelocatableObjects::ModuleEvent& event) {
+        events.emplace_back(event.name);
+    });
+    ASSERT_TRUE(ro.InitializeWith(ro.crs, CrsAddress));
+    const std::uint32_t buffer = ro.next_buffer;
+    ASSERT_TRUE(ro.Load(ro.a, ModuleA));
+    ASSERT_EQ(ro.HeaderField(CrsAddress, cro::NextModuleField), ModuleA);
+    ASSERT_TRUE(ro.Unload(ModuleA, buffer));
+    EXPECT_EQ(ro.HeaderField(CrsAddress, cro::NextModuleField), 0U) << "the list is empty again";
+    EXPECT_EQ(events, (std::vector<std::string>{"DllA", "DllA"}));
+}
+
+TEST(RelocatableObjects, PointsTheStaticModuleBackAtItsHookWhenItsExporterLeaves) {
+    Harness ro;
+    ASSERT_TRUE(ro.InitializeWith(ro.crs, CrsAddress));
+    const std::uint32_t buffer = ro.next_buffer;
+    ASSERT_TRUE(ro.Load(ro.b, ModuleB));
+    ASSERT_NE(ro.harness.Read32(StaticText + StaticPatchedWord), StaticText + UnresolvedOffset);
+    ASSERT_TRUE(ro.Unload(ModuleB, buffer));
+    EXPECT_EQ(ro.harness.Reply(1), kernel::result::Success.raw);
+    EXPECT_EQ(ro.harness.Read32(StaticText + StaticPatchedWord), StaticText + UnresolvedOffset);
+}
+
+TEST(RelocatableObjects, RefusesToUnloadWhatItDidNotLoad) {
+    Harness ro;
+    ASSERT_TRUE(ro.InitializeWith(ro.crs, CrsAddress));
+    ASSERT_TRUE(ro.Unload(ModuleA, HeapBuffers));
+    EXPECT_EQ(ro.harness.Reply(1), RelocatableObjects::NotLoaded.raw);
 }
 
 }  // namespace

@@ -63,7 +63,7 @@ Each answers from 3dbrew's description of the command and the answer Azahar give
 | `frd:u` | `Friends` | An offline console with a zero friend key and no friends | |
 | `boss:U` | `SpotPass` | A session, and storage accepted and forgotten | Nothing is ever downloaded |
 | `ptm:u` | `PowerManager` | A step history of zero steps an hour | |
-| `ldr:ro` | `RelocatableObjects` | The CRS, the CRR, and CRO modules loaded, linked and fixed as the console's loader leaves them | Unloading, LoadCRO_New, linking by hand. [`cro-linking.md`](cro-linking.md) has the rest |
+| `ldr:ro` | `RelocatableObjects` | The CRS, the CRR, and CRO modules loaded, linked, fixed and unloaded as the console's loader leaves them | LoadCRO_New, linking by hand. [`cro-linking.md`](cro-linking.md) has the rest |
 
 Save data and extra data are trees held in memory with the console's rules for each, and fs:USER hands every commit to whoever owns the archive. [ADR 0015](adr/0015-save-data-lives-in-memory-and-is-written-on-commit.md) records why they are not written through to the disk. `hexlith-boot` reads them from `<work-dir>/<title>/save/` when it starts and writes them back on each commit and when it stops; with `--new-game` it does neither, which is how a run is made to start from a first boot every time.
 
