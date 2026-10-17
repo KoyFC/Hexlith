@@ -51,6 +51,8 @@ Presets are the local path. CI configures explicitly with `-DCMAKE_CXX_COMPILER`
 
 Two directories turn off `readability-magic-numbers` in a `.clang-tidy` of their own, with the reason in the file. A decoder is written in bit positions and its tests in instruction encodings, and naming those would hide what the line says.
 
+`src/domain/services` turns off the two checks that would make a command handler static or const. Handlers sit in one table of pointers to member functions, so they all keep the same signature whether or not they touch the service's state.
+
 GoogleTest comes from the system (`gtest-devel` on Fedora). Configure with `-DHEXLITH_FETCH_GOOGLETEST=ON` to download it instead. A plain build never touches the network.
 
 OpenSSL's development package (`openssl-devel` on Fedora) is required, not optional. CMake fails at configure time without it.

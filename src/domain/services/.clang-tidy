@@ -1,0 +1,7 @@
+# A service's commands are entries in a table of pointers to member
+# functions, one signature for all of them, so that the service answers a
+# request by looking its command up rather than through a switch. A handler
+# that happens not to read or change the service's state still has to be a
+# non-const member to fit the table. Every other check stays on.
+InheritParentConfig: true
+Checks: "-readability-convert-member-functions-to-static,-readability-make-member-function-const"
