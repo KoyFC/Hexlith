@@ -14,6 +14,8 @@ add_library(
     extract.h
     golden_trace.cpp
     golden_trace.h
+    input_script.cpp
+    input_script.h
     manifest.cpp
     manifest.h
     save_storage.cpp

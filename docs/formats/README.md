@@ -22,5 +22,6 @@ Where a note says `observed`, the measurement is reproducible from the reference
 | [`exefs.md`](exefs.md) | ExeFS and the backwards-LZSS compression of `.code` |
 | [`romfs.md`](romfs.md) | RomFS and its IVFC wrapper |
 | [`cro0.md`](cro0.md) | CRO dynamic modules, CRS and CRR |
+| [`input-script.md`](input-script.md) | Hexlith's own scripts of the player's input, by frame |
 
 Hexlith's own analysis tables are not a container format and are documented in [`../analysis-tables.md`](../analysis-tables.md).

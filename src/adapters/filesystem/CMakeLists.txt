@@ -8,6 +8,8 @@ target_sources(
             directory_tree_store.h
             file_rom_source.cpp
             file_rom_source.h
+            scripted_input.cpp
+            scripted_input.h
             workspace_locator.cpp
             workspace_locator.h
 )

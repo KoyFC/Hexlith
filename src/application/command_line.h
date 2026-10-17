@@ -73,6 +73,10 @@ struct BootOptions {
     // Where to write the golden trace of docs/golden-traces.md, if anywhere.
     std::optional<std::string> golden;
 
+    // A script of the player's input, in the format of
+    // docs/formats/input-script.md. Without one nothing is ever pressed.
+    std::optional<std::string> input;
+
     bool help = false;
 };
 

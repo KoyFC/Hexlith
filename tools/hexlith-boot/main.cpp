@@ -1,6 +1,7 @@
 #include "adapters/filesystem/cartridge_image.h"
 #include "adapters/filesystem/directory_tree_store.h"
 #include "adapters/filesystem/file_rom_source.h"
+#include "adapters/filesystem/scripted_input.h"
 #include "adapters/filesystem/workspace_locator.h"
 #include "application/boot.h"
 #include "application/command_line.h"
@@ -203,6 +204,69 @@ core::Result<std::filesystem::path> ChooseImage(const application::BootOptions& 
     return adapters::FindCartridgeImage(workspace.rom_directory.path);
 }
 
+// A save that cannot be written stops nothing: it is reported, and the run
+// goes on with the archive in memory.
+void StoreSaves(adapters::DirectoryTreeStore& saves, application::BootedTitle& title) {
+    const core::Status stored = application::StoreSaves(saves, title.Save(), title.Extra());
+    if (!stored) {
+        Report(stored.Failure().Message());
+    }
+}
+
+bool AttachInput(const application::BootOptions& options,
+                 application::BootedTitle& title,
+                 std::unique_ptr<adapters::ScriptedInput>& input) {
+    if (!options.input.has_value()) {
+        return true;
+    }
+    core::Result<std::unique_ptr<adapters::ScriptedInput>> loaded =
+        adapters::ScriptedInput::Load(*options.input);
+    if (!loaded) {
+        Report(loaded.Failure().Message());
+        return false;
+    }
+    input = std::move(loaded.Value());
+    title.UseInput(*input);
+    std::cout << std::format(
+        "input   {}, to frame {}\n", input->Describe(), input->Script().LastFrame());
+    return true;
+}
+
+bool AttachGolden(const application::BootOptions& options,
+                  application::BootedTitle& title,
+                  std::ofstream& golden) {
+    if (!options.golden.has_value()) {
+        return true;
+    }
+    golden.open(*options.golden, std::ios::trunc);
+    if (!golden) {
+        Report(std::format("'{}' could not be opened for writing", *options.golden));
+        return false;
+    }
+    application::RecordGoldenTrace(title,
+                                   [&golden](std::string_view line) { golden << line << '\n'; });
+    return true;
+}
+
+// The save data outlives the run unless this is a new game.
+bool AttachSaves(const application::BootOptions& options,
+                 application::BootedTitle& title,
+                 adapters::DirectoryTreeStore& saves) {
+    if (options.new_game) {
+        std::cout << "saves   none, a new game\n";
+        return true;
+    }
+    const core::Status restored = application::RestoreSaves(saves, title.Save(), title.Extra());
+    if (!restored) {
+        Report(restored.Failure().Message());
+        return false;
+    }
+    std::cout << std::format(
+        "saves   {}{}\n", saves.Describe(), title.Save().IsFormatted() ? "" : ", none yet");
+    title.Save().OnCommit([&saves, &title](const auto&) { StoreSaves(saves, title); });
+    return true;
+}
+
 int Run(const application::BootOptions& options) {
     const profile::GameProfile* target = OnlyProfile();
     if (target == nullptr) {
@@ -240,40 +304,13 @@ int Run(const application::BootOptions& options) {
     if (options.trace) {
         Trace(running);
     }
+    std::unique_ptr<adapters::ScriptedInput> input;
     std::ofstream golden;
-    if (options.golden.has_value()) {
-        golden.open(*options.golden, std::ios::trunc);
-        if (!golden) {
-            Report(std::format("'{}' could not be opened for writing", *options.golden));
-            return Failure;
-        }
-        application::RecordGoldenTrace(
-            title, [&golden](std::string_view line) { golden << line << '\n'; });
-    }
-
-    // The save data outlives the run unless this is a new game, and a commit
-    // that cannot be written stops nothing: it is reported, and the run goes
-    // on with the archive in memory.
-    const std::filesystem::path save_root = workspace.Value().work_directory.path /
-                                            profile::WorkspaceDirectoryName(*target) /
-                                            SaveDirectory;
-    adapters::DirectoryTreeStore saves{save_root};
-    if (!options.new_game) {
-        const core::Status restored = application::RestoreSaves(saves, title.Save(), title.Extra());
-        if (!restored) {
-            Report(restored.Failure().Message());
-            return Failure;
-        }
-        std::cout << std::format(
-            "saves   {}{}\n", saves.Describe(), title.Save().IsFormatted() ? "" : ", none yet");
-        title.Save().OnCommit([&saves, &title](const auto&) {
-            const core::Status stored = application::StoreSaves(saves, title.Save(), title.Extra());
-            if (!stored) {
-                Report(stored.Failure().Message());
-            }
-        });
-    } else {
-        std::cout << "saves   none, a new game\n";
+    adapters::DirectoryTreeStore saves{workspace.Value().work_directory.path /
+                                       profile::WorkspaceDirectoryName(*target) / SaveDirectory};
+    if (!AttachInput(options, title, input) || !AttachGolden(options, title, golden) ||
+        !AttachSaves(options, title, saves)) {
+        return Failure;
     }
 
     const auto began = std::chrono::steady_clock::now();
@@ -284,10 +321,7 @@ int Run(const application::BootOptions& options) {
     PrintStop(stop);
     PrintModules(title);
     if (!options.new_game) {
-        const core::Status stored = application::StoreSaves(saves, title.Save(), title.Extra());
-        if (!stored) {
-            Report(stored.Failure().Message());
-        }
+        StoreSaves(saves, title);
     }
     std::cout << std::format("{} instructions, {} ticks, in {:.2f} s: {:.1f} million a second\n",
                              running.Executed(),
