@@ -17,6 +17,7 @@
 #include "domain/services/power_manager.h"
 #include "domain/services/service_manager.h"
 #include "domain/services/spot_pass.h"
+#include "domain/services/yuv_to_rgb.h"
 
 #include <string>
 
@@ -173,6 +174,7 @@ core::Status BootedTitle::Start(core::ByteSpan code) {
     registry_.Provide(std::make_shared<services::Friends>());
     registry_.Provide(std::make_shared<services::SpotPass>());
     registry_.Provide(std::make_shared<services::PowerManager>());
+    registry_.Provide(std::make_shared<services::YuvToRgb>(kernel_));
     registry_.Provide(loader_);
     kernel_.RegisterPort("srv:", std::make_shared<services::ServiceManager>(registry_));
     return {};

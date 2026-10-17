@@ -146,6 +146,7 @@ private:
     void Close(kernel::IpcRequest& request);
     void SetPriority(kernel::IpcRequest& request);
     void GetPriority(kernel::IpcRequest& request);
+    void OpenLinkFile(kernel::IpcRequest& request);
 
     core::ByteSpan contents_;
     std::uint32_t priority_ = 0;
@@ -199,6 +200,7 @@ private:
     void Flush(kernel::IpcRequest& request);
     void SetPriority(kernel::IpcRequest& request);
     void GetPriority(kernel::IpcRequest& request);
+    void OpenLinkFile(kernel::IpcRequest& request);
 
     std::shared_ptr<SaveData> save_;
     std::string path_;

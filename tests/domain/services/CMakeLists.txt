@@ -15,6 +15,7 @@ hexlith_add_test(
     service_harness.h
     service_manager_test.cpp
     stand_in_font_test.cpp
+    yuv_to_rgb_test.cpp
 )
 
 target_link_libraries(hexlith_domain_services_test PRIVATE Hexlith::Domain Hexlith::TestSupport)

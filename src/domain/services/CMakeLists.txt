@@ -31,4 +31,6 @@ target_sources(
             spot_pass.h
             stand_in_font.cpp
             stand_in_font.h
+            yuv_to_rgb.cpp
+            yuv_to_rgb.h
 )

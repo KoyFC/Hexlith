@@ -55,7 +55,7 @@ Each answers from 3dbrew's description of the command and the answer Azahar give
 | --- | --- | --- | --- |
 | `APT:U` | `AppletManager` | The lock, the notification and parameter events, the Wakeup parameter the first applet gets, the applet utility, the shared font | No other applet runs, so no parameter is ever sent but the first |
 | `ndm:u` | `NetworkDaemonManager` | Which daemons may run, and a count of suspensions for each | No daemon runs |
-| `fs:USER` | `FileSystem`, `OpenFileSession`, `SaveFileSession`, `DirectorySession` | The title's RomFS, read from level 3 of its IVFC tree; its save data and extra data, formatted, filled, listed and committed, held in memory; every other archive not found | No renames, no deletion of directories or archives, no secure values |
+| `fs:USER` | `FileSystem`, `OpenFileSession`, `SaveFileSession`, `DirectorySession` | The title's RomFS, read from level 3 of its IVFC tree; its save data and extra data, formatted, filled, listed and committed, held in memory; a second session on an open file; every other archive not found | No renames, no deletion of directories or archives, no secure values |
 | `cfg:u` | `Configuration` | The blocks of a new console's configuration, the region, the model, the transferable ID | Blocks outside the table are declined |
 | `hid:USER` | `HumanInterface` | The shared page and its five events, filled 234 times a second with the pad, the circle pad and the touch screen from an `InputSource` and signalled each time; the gyroscope's calibration, the volume | The accelerometer and the gyroscope are never filled |
 | `gsp::Gpu` | `Graphics` | The right to the GPU, registers that keep what is written, the command queue, interrupts and both vertical blanks every 4,481,136 ticks | Nothing is drawn; a command completes at once |
@@ -63,6 +63,7 @@ Each answers from 3dbrew's description of the command and the answer Azahar give
 | `frd:u` | `Friends` | An offline console with a zero friend key and no friends | |
 | `boss:U` | `SpotPass` | A session, and storage accepted and forgotten | Nothing is ever downloaded |
 | `ptm:u` | `PowerManager` | A step history of zero steps an hour | |
+| `y2r:u` | `YuvToRgb` | Every setting kept and answered back with Azahar's checks, the four standard coefficient sets, a conversion that ends 50,000 ticks after it starts and signals its event | No pixel is converted |
 | `ldr:ro` | `RelocatableObjects` | The CRS, the CRR, and CRO modules loaded, linked, fixed and unloaded as the console's loader leaves them | LoadCRO_New, linking by hand. [`cro-linking.md`](cro-linking.md) has the rest |
 
 Save data and extra data are trees held in memory with the console's rules for each, and fs:USER hands every commit to whoever owns the archive. [ADR 0015](adr/0015-save-data-lives-in-memory-and-is-written-on-commit.md) records why they are not written through to the disk. `hexlith-boot` reads them from `<work-dir>/<title>/save/` when it starts and writes them back on each commit and when it stops; with `--new-game` it does neither, which is how a run is made to start from a first boot every time.

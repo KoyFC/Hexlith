@@ -31,6 +31,7 @@ constexpr std::uint32_t ControlArchive = 0x080D0144;
 constexpr std::uint32_t FormatSaveData = 0x084C0242;
 constexpr std::uint32_t CreateExtSaveData = 0x08510242;
 constexpr std::uint32_t ReadDirectory = 0x08010042;
+constexpr std::uint32_t OpenLinkFile = 0x080C0000;
 
 // Path types and the binary RomFS path of SelfNCCH. Source: 3dbrew,
 // Filesystem services, Paths.
@@ -457,6 +458,20 @@ TEST(FileSystem, RefusesToWriteToTheRomFs) {
     Harness fs;
     ASSERT_EQ(fs.OpenArchiveWith(FileSystem::SelfNcchArchive), kernel::result::Success.raw);
     EXPECT_EQ(fs.CreateFileIn(fs.harness.Reply(2), "/file", 4), FileSystem::Unsupported);
+}
+
+TEST(FileSystem, OpensASecondSessionOnTheSameFile) {
+    Harness fs;
+    const auto file = fs.OpenRomFs();
+    ASSERT_NE(file, nullptr);
+    ASSERT_TRUE(fs.harness.Send(*file->handler, {OpenLinkFile}));
+    EXPECT_EQ(fs.harness.Reply(1), kernel::result::Success.raw);
+    const auto link =
+        fs.harness.ReplyObject<kernel::ClientSession>(3, kernel::ObjectType::ClientSession);
+    ASSERT_NE(link, nullptr);
+    EXPECT_NE(link->handler, file->handler);
+    ASSERT_TRUE(fs.harness.Send(*link->handler, {GetSize}));
+    EXPECT_EQ(fs.harness.Reply(2), fs.romfs.size());
 }
 
 }  // namespace

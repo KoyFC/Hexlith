@@ -32,6 +32,16 @@ std::shared_ptr<kernel::Object> AsObject(const std::shared_ptr<kernel::SessionHa
     return std::make_shared<kernel::ClientSession>(file);
 }
 
+// A new session moved to the caller, as every command that opens something
+// answers.
+void AnswerWithSession(kernel::IpcRequest& request,
+                       const std::shared_ptr<kernel::SessionHandler>& session) {
+    request.Begin(1, 2);
+    request.Push(kernel::result::Success);
+    const std::array<std::shared_ptr<kernel::Object>, 1> objects = {AsObject(session)};
+    request.PushMoveObjects(objects);
+}
+
 }  // namespace
 
 FileSystem::FileSystem(core::ByteSpan romfs,
@@ -427,7 +437,7 @@ void FileSystem::CreateExtSaveData(kernel::IpcRequest& request) {
 OpenFileSession::OpenFileSession(core::ByteSpan contents) : contents_(contents) {}
 
 std::span<const OpenFileSession::Command> OpenFileSession::Commands() {
-    static constexpr std::array<Command, 9> Table = {{
+    static constexpr std::array<Command, 10> Table = {{
         {.id = 0x0801, .name = "OpenSubFile"},
         {.id = 0x0802, .name = "Read", .handler = &OpenFileSession::Read},
         {.id = 0x0803, .name = "Write"},
@@ -437,6 +447,7 @@ std::span<const OpenFileSession::Command> OpenFileSession::Commands() {
         {.id = 0x0809, .name = "Flush"},
         {.id = 0x080A, .name = "SetPriority", .handler = &OpenFileSession::SetPriority},
         {.id = 0x080B, .name = "GetPriority", .handler = &OpenFileSession::GetPriority},
+        {.id = 0x080C, .name = "OpenLinkFile", .handler = &OpenFileSession::OpenLinkFile},
     }};
     return Table;
 }
@@ -481,6 +492,14 @@ void OpenFileSession::GetPriority(kernel::IpcRequest& request) {
     request.Begin(2, 0);
     request.Push(kernel::result::Success);
     request.Push(priority_);
+}
+
+// A second session on the same file, with the priority of this one. Source:
+// File::OpenLinkFile in Azahar.
+void OpenFileSession::OpenLinkFile(kernel::IpcRequest& request) {
+    auto link = std::make_shared<OpenFileSession>(contents_);
+    link->priority_ = priority_;
+    AnswerWithSession(request, link);
 }
 
 DirectorySession::DirectorySession(std::vector<SaveData::Entry> entries)
@@ -593,7 +612,7 @@ SaveFileSession::SaveFileSession(std::shared_ptr<SaveData> save, std::string pat
 }
 
 std::span<const SaveFileSession::Command> SaveFileSession::Commands() {
-    static constexpr std::array<Command, 9> Table = {{
+    static constexpr std::array<Command, 10> Table = {{
         {.id = 0x0801, .name = "OpenSubFile"},
         {.id = 0x0802, .name = "Read", .handler = &SaveFileSession::Read},
         {.id = 0x0803, .name = "Write", .handler = &SaveFileSession::Write},
@@ -603,6 +622,7 @@ std::span<const SaveFileSession::Command> SaveFileSession::Commands() {
         {.id = 0x0809, .name = "Flush", .handler = &SaveFileSession::Flush},
         {.id = 0x080A, .name = "SetPriority", .handler = &SaveFileSession::SetPriority},
         {.id = 0x080B, .name = "GetPriority", .handler = &SaveFileSession::GetPriority},
+        {.id = 0x080C, .name = "OpenLinkFile", .handler = &SaveFileSession::OpenLinkFile},
     }};
     return Table;
 }
@@ -687,6 +707,12 @@ void SaveFileSession::GetPriority(kernel::IpcRequest& request) {
     request.Begin(2, 0);
     request.Push(kernel::result::Success);
     request.Push(priority_);
+}
+
+void SaveFileSession::OpenLinkFile(kernel::IpcRequest& request) {
+    auto link = std::make_shared<SaveFileSession>(save_, path_, mode_);
+    link->priority_ = priority_;
+    AnswerWithSession(request, link);
 }
 
 }  // namespace hexlith::domain::services
