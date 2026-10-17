@@ -931,9 +931,9 @@ void Kernel::SendSyncRequest(Thread& thread) {
         }
         unimplemented_header_ = request.Header();
     }
-    if (service_request_observer_) {
+    if (!service_request_observers_.empty()) {
         constexpr std::uint32_t ResultWordOffset = ipc::CommandBufferOffset + WordBytes;
-        service_request_observer_(ServiceRequestRecord{
+        const ServiceRequestRecord record{
             .tick = scheduler_.Ticks(),
             .thread_id = thread.id,
             .service = session->handler->Name(),
@@ -942,7 +942,10 @@ void Kernel::SendSyncRequest(Thread& thread) {
                                         .Read32(thread.thread_local_storage + ResultWordOffset)
                                         .value_or(0)
                                   : 0,
-            .implemented = implemented});
+            .implemented = implemented};
+        for (const auto& observer : service_request_observers_) {
+            observer(record);
+        }
     }
 }
 

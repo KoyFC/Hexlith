@@ -547,6 +547,25 @@ TEST(Kernel, CarriesARequestToAServiceAndItsReplyBack) {
     EXPECT_EQ(machine.Data(SecondSlot), Argument + 1);
 }
 
+TEST(Kernel, ShowsEveryObserverEachRequest) {
+    Program program;
+    ConnectToIncrementer(program);
+    SendToIncrementer(program, ipc::MakeHeader(1, 1, 0), 0);
+    program.Call(ExitProcessCall);
+
+    Machine machine(program);
+    machine.Get().RegisterPort("inc:u", std::make_shared<Incrementer>());
+    std::vector<std::uint32_t> first;
+    std::vector<std::string> second;
+    machine.Get().OnServiceRequest(
+        [&first](const ServiceRequestRecord& record) { first.push_back(record.header); });
+    machine.Get().OnServiceRequest(
+        [&second](const ServiceRequestRecord& record) { second.emplace_back(record.service); });
+    EXPECT_EQ(machine.Run().reason, KernelStopReason::ProcessExited);
+    EXPECT_EQ(first, std::vector<std::uint32_t>{ipc::MakeHeader(1, 1, 0)});
+    EXPECT_EQ(second, std::vector<std::string>{"inc:u"});
+}
+
 TEST(Kernel, StopsAtACommandTheServiceDoesNotImplement) {
     constexpr std::uint32_t Unknown = ipc::MakeHeader(2, 1, 0);
     Program program;

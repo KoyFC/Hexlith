@@ -260,6 +260,12 @@ void RelocatableObjects::LoadCro(kernel::IpcRequest& request) {
         }
     }
 
+    if (module_observer_) {
+        module_observer_(ModuleEvent{.kind = ModuleEvent::Kind::Loaded,
+                                     .name = residents_.back().module->header.name,
+                                     .address = load.address});
+    }
+
     request.Begin(2, 0);
     request.Push(kernel::result::Success);
     request.Push(fixed_size);

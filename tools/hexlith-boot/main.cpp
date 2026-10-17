@@ -4,6 +4,7 @@
 #include "adapters/filesystem/workspace_locator.h"
 #include "application/boot.h"
 #include "application/command_line.h"
+#include "application/golden_trace.h"
 #include "application/save_storage.h"
 #include "application/workspace.h"
 #include "domain/profile/game_profile.h"
@@ -238,6 +239,16 @@ int Run(const application::BootOptions& options) {
     kernel::Kernel& running = title.Kernel();
     if (options.trace) {
         Trace(running);
+    }
+    std::ofstream golden;
+    if (options.golden.has_value()) {
+        golden.open(*options.golden, std::ios::trunc);
+        if (!golden) {
+            Report(std::format("'{}' could not be opened for writing", *options.golden));
+            return Failure;
+        }
+        application::RecordGoldenTrace(
+            title, [&golden](std::string_view line) { golden << line << '\n'; });
     }
 
     // The save data outlives the run unless this is a new game, and a commit

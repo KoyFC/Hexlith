@@ -114,6 +114,7 @@ void Graphics::SetWord(std::uint32_t offset, std::uint32_t value) {
 void Graphics::ScheduleVerticalBlank() {
     kernel::Scheduler& scheduler = kernel_->Threads();
     scheduler.ScheduleAt(scheduler.Ticks() + FrameTicks, [this] {
+        ++frames_;
         Raise(Interrupt::Pdc0);
         Raise(Interrupt::Pdc1);
         ScheduleVerticalBlank();

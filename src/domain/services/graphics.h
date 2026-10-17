@@ -52,6 +52,12 @@ public:
     // to set the GPU up. A success code: bit 31 is clear.
     static constexpr kernel::ResultCode FirstInitialization{0x00002A07};
 
+    // Vertical blanks of the top screen since the process started, which is
+    // what a frame is counted in.
+    [[nodiscard]] std::uint64_t Frames() const {
+        return frames_;
+    }
+
     [[nodiscard]] const std::shared_ptr<kernel::SharedMemory>& SharedBlock() const {
         return shared_;
     }
@@ -86,6 +92,7 @@ private:
     std::uint32_t next_thread_id_ = 0;
     bool has_right_ = false;
     std::map<std::uint32_t, std::uint32_t> registers_;
+    std::uint64_t frames_ = 0;
 };
 
 }  // namespace hexlith::domain::services

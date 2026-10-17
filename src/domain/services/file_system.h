@@ -135,7 +135,7 @@ public:
     explicit OpenFileSession(core::ByteSpan contents);
 
     [[nodiscard]] std::string_view Name() const override {
-        return "fs:USER file";
+        return "fs:file";
     }
 
     static std::span<const Command> Commands();
@@ -160,7 +160,7 @@ public:
     explicit DirectorySession(std::vector<SaveData::Entry> entries);
 
     [[nodiscard]] std::string_view Name() const override {
-        return "fs:USER directory";
+        return "fs:directory";
     }
 
     static std::span<const Command> Commands();
@@ -185,7 +185,7 @@ public:
     SaveFileSession(std::shared_ptr<SaveData> save, std::string path, OpenMode mode);
 
     [[nodiscard]] std::string_view Name() const override {
-        return "fs:USER save file";
+        return "fs:file";
     }
 
     static std::span<const Command> Commands();

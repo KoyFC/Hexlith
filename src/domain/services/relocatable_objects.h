@@ -7,6 +7,7 @@
 #include "domain/services/command_table.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -50,6 +51,19 @@ public:
     static constexpr kernel::ResultCode MisalignedSize{0xD9012FF2};
     static constexpr kernel::ResultCode IllegalAddress{0xE1612C0F};
     static constexpr kernel::ResultCode InvalidMemoryState{0xD8A12C08};
+
+    // A module the game has loaded or unloaded, where it was mapped.
+    struct ModuleEvent {
+        enum class Kind : std::uint8_t { Loaded, Unloaded };
+        Kind kind = Kind::Loaded;
+        std::string_view name;
+        std::uint32_t address = 0;
+    };
+
+    // Called once a module is mapped and linked, before the reply.
+    void OnModuleEvent(std::function<void(const ModuleEvent&)> observer) {
+        module_observer_ = std::move(observer);
+    }
 
     // The modules linked so far, the static one first.
     [[nodiscard]] const linker::Linker* Linked() const {
@@ -121,6 +135,7 @@ private:
     // Null until Initialize has linked the static module.
     std::unique_ptr<linker::Linker> linker_;
     std::vector<Resident> residents_;
+    std::function<void(const ModuleEvent&)> module_observer_;
 };
 
 }  // namespace hexlith::domain::services

@@ -7,7 +7,9 @@
 #include "support/synthetic_cro.h"
 
 #include <cstdint>
+#include <format>
 #include <gtest/gtest.h>
+#include <string>
 #include <vector>
 
 namespace hexlith::domain::services {
@@ -225,6 +227,20 @@ TEST(RelocatableObjects, LoadsAModuleLinkedToTheStaticOne) {
     EXPECT_TRUE(core::MatchesAt(ro.harness.ReadBytes(ModuleA, cro::HeaderSize),
                                 cro::FieldOffset(cro::MagicField),
                                 cro::FixedUpMagic));
+}
+
+TEST(RelocatableObjects, SaysWhichModuleItLoadedAndWhere) {
+    Harness ro;
+    std::vector<std::string> events;
+    ro.service.OnModuleEvent([&events](const RelocatableObjects::ModuleEvent& event) {
+        const bool loaded = event.kind == RelocatableObjects::ModuleEvent::Kind::Loaded;
+        events.push_back(
+            std::format("{} {} {:08X}", loaded ? "load" : "unload", event.name, event.address));
+    });
+    ASSERT_TRUE(ro.InitializeWith(ro.crs, CrsAddress));
+    ASSERT_TRUE(ro.Load(ro.a, ModuleA));
+    EXPECT_EQ(events, std::vector<std::string>{std::format("load DllA {:08X}", ModuleA)})
+        << "the static module is not loaded by LoadCRO";
 }
 
 TEST(RelocatableObjects, PatchesDataInTheFileBeforeTheGameCopiesIt) {

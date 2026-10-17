@@ -19,6 +19,7 @@ constexpr std::string_view LimitOption = "--limit";
 constexpr std::string_view CompareOption = "--compare";
 constexpr std::string_view TraceOption = "--trace";
 constexpr std::string_view NewGameOption = "--new-game";
+constexpr std::string_view GoldenOption = "--golden";
 
 core::Status TakeValue(std::span<const std::string_view> arguments,
                        std::size_t& index,
@@ -220,6 +221,8 @@ core::Result<BootOptions> ParseBootCommandLine(std::span<const std::string_view>
             taken = TakeValue(arguments, index, limit);
         } else if (argument == CompareOption) {
             taken = TakeValue(arguments, index, options.compare);
+        } else if (argument == GoldenOption) {
+            taken = TakeValue(arguments, index, options.golden);
         } else if (argument.starts_with("-")) {
             return core::Error{std::format("{} is not an option this tool knows", argument)};
         } else {
@@ -256,6 +259,7 @@ std::string BootUsage() {
         "                       one file per range named by its address, to compare with\n"
         "  {}              every service request and system call as it happens\n"
         "  {}           no save data at the start and none written, the same run every time\n"
+        "  {} <path>       write the golden trace there, to compare with Azahar's\n"
         "  {}               this text\n"
         "\n"
         "Without {} the save data under <work-dir>/<title>/save is read at the start and\n"
@@ -271,6 +275,7 @@ std::string BootUsage() {
         CompareOption,
         TraceOption,
         NewGameOption,
+        GoldenOption,
         HelpOption,
         NewGameOption,
         RomDirectoryVariable,

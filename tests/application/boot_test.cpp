@@ -78,13 +78,14 @@ TEST(CompareMemory, SaysWhenTheRangeIsNotMapped) {
 
 TEST(ParseBootCommandLine, TakesALimitAndADirectoryToCompareWith) {
     const std::vector<std::string_view> arguments = {
-        "--limit", "1000", "--compare", "/tmp/dump", "--trace", "--new-game"};
+        "--limit", "1000", "--compare", "/tmp/dump", "--trace", "--new-game", "--golden", "/tmp/g"};
     const core::Result<BootOptions> options = ParseBootCommandLine(arguments);
     ASSERT_TRUE(options.Ok()) << options.Failure().Message();
     EXPECT_EQ(options.Value().instruction_limit, 1000U);
     EXPECT_EQ(options.Value().compare, "/tmp/dump");
     EXPECT_TRUE(options.Value().trace);
     EXPECT_TRUE(options.Value().new_game);
+    EXPECT_EQ(options.Value().golden, "/tmp/g");
 }
 
 TEST(ParseBootCommandLine, RunsLongEnoughByDefault) {
@@ -107,6 +108,7 @@ TEST(BootUsage, NamesEveryOption) {
                                           "--compare",
                                           "--trace",
                                           "--new-game",
+                                          "--golden",
                                           "--help"}) {
         EXPECT_NE(usage.find(option), std::string::npos) << option;
     }

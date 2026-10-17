@@ -70,6 +70,9 @@ struct BootOptions {
     // at the start and written on every commit and at the end.
     bool new_game = false;
 
+    // Where to write the golden trace of docs/golden-traces.md, if anywhere.
+    std::optional<std::string> golden;
+
     bool help = false;
 };
 

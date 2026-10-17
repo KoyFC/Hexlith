@@ -166,7 +166,8 @@ core::Status BootedTitle::Start(core::ByteSpan code) {
     registry_.Provide(std::make_shared<services::FileSystem>(romfs_, save_, extra_));
     registry_.Provide(std::make_shared<services::Configuration>());
     registry_.Provide(std::make_shared<services::HumanInterface>(kernel_));
-    registry_.Provide(std::make_shared<services::Graphics>(kernel_));
+    graphics_ = std::make_shared<services::Graphics>(kernel_);
+    registry_.Provide(graphics_);
     registry_.Provide(std::make_shared<services::DigitalSignalProcessor>(kernel_));
     registry_.Provide(std::make_shared<services::Friends>());
     registry_.Provide(std::make_shared<services::SpotPass>());

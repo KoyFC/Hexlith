@@ -12,6 +12,8 @@ add_library(
     command_line.h
     extract.cpp
     extract.h
+    golden_trace.cpp
+    golden_trace.h
     manifest.cpp
     manifest.h
     save_storage.cpp

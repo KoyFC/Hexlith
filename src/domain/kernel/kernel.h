@@ -23,6 +23,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace hexlith::domain::kernel {
 
@@ -158,8 +159,11 @@ public:
         debug_output_observer_ = std::move(observer);
     }
 
+    // Adds an observer of service requests, which sees each one once it is
+    // answered. A trace for a person and a golden trace for a script can both
+    // be watching.
     void OnServiceRequest(std::function<void(const ServiceRequestRecord&)> observer) {
-        service_request_observer_ = std::move(observer);
+        service_request_observers_.push_back(std::move(observer));
     }
 
     // Makes a service reachable by ConnectToPort under a port name. srv: is
@@ -320,7 +324,7 @@ private:
 
     std::function<void(const SystemCallRecord&)> system_call_observer_;
     std::function<void(std::string_view)> debug_output_observer_;
-    std::function<void(const ServiceRequestRecord&)> service_request_observer_;
+    std::vector<std::function<void(const ServiceRequestRecord&)>> service_request_observers_;
 };
 
 }  // namespace hexlith::domain::kernel

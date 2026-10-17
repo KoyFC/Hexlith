@@ -5,6 +5,7 @@
 #include "core/result.h"
 #include "domain/ctr/exheader.h"
 #include "domain/kernel/kernel.h"
+#include "domain/services/graphics.h"
 #include "domain/services/registry.h"
 #include "domain/services/relocatable_objects.h"
 #include "domain/services/save_data.h"
@@ -62,6 +63,15 @@ public:
         return *loader_;
     }
 
+    domain::services::RelocatableObjects& Loader() {
+        return *loader_;
+    }
+
+    // gsp::Gpu, which keeps the count of frames.
+    [[nodiscard]] const domain::services::Graphics& Gpu() const {
+        return *graphics_;
+    }
+
 private:
     BootedTitle(domain::ctr::ExHeader header, core::ByteSpan romfs);
 
@@ -74,6 +84,7 @@ private:
     std::shared_ptr<domain::services::SaveData> save_;
     std::shared_ptr<domain::services::ExtraData> extra_;
     std::shared_ptr<domain::services::RelocatableObjects> loader_;
+    std::shared_ptr<domain::services::Graphics> graphics_;
 };
 
 // How a range of the process's memory compares with bytes captured elsewhere,

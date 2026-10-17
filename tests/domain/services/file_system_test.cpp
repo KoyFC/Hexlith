@@ -201,7 +201,7 @@ TEST(FileSystem, OpensTheRomFsDirectlyAndReadsIt) {
     Harness fs;
     const auto file = fs.OpenRomFs();
     ASSERT_NE(file, nullptr);
-    EXPECT_EQ(file->handler->Name(), "fs:USER file");
+    EXPECT_EQ(file->handler->Name(), "fs:file");
 
     constexpr std::uint32_t Offset = 0x10;
     constexpr std::uint32_t Length = 8;
@@ -335,7 +335,7 @@ TEST(FileSystem, WritesAndReadsBackAFileOfTheSaveData) {
     ASSERT_EQ(fs.CreateFileIn(archive, "/data", 4), kernel::result::Success);
     const auto file = fs.OpenIn(archive, "/data", ReadWriteMode);
     ASSERT_NE(file, nullptr);
-    EXPECT_EQ(file->handler->Name(), "fs:USER save file");
+    EXPECT_EQ(file->handler->Name(), "fs:file");
 
     const std::vector<std::uint8_t> data = {1, 2, 3, 4, 5, 6};
     fs.harness.WriteBytes(DataAddress, data);
