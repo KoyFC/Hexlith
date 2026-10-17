@@ -19,5 +19,6 @@ The format is deliberately short: context, the options that were actually consid
 | [0011](0011-only-underivable-records-in-the-repository.md) | Only records nothing can derive are committed | Accepted |
 | [0012](0012-guest-memory-is-a-page-table.md) | Guest memory is a page table | Accepted |
 | [0013](0013-one-host-thread-and-a-virtual-clock.md) | The game's threads share one host thread and a virtual clock | Accepted |
+| [0014](0014-a-stand-in-for-the-shared-font.md) | The shared font is a stand-in built from the format | Accepted |
 
 A record marked provisional has a named condition that will settle it. It is written down because work has to proceed in the meantime, not because the question is closed.

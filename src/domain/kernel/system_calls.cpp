@@ -926,6 +926,9 @@ void Kernel::SendSyncRequest(Thread& thread) {
     } else {
         outcome_ = Outcome::UnimplementedCommand;
         unimplemented_service_ = std::string(session->handler->Name());
+        if (request.Declined().has_value()) {
+            unimplemented_service_ += " (" + *request.Declined() + ")";
+        }
         unimplemented_header_ = request.Header();
     }
     if (service_request_observer_) {

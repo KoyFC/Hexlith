@@ -31,7 +31,7 @@ public:
                     return false;
                 }
                 (static_cast<Derived&>(*this).*command.handler)(request);
-                return true;
+                return !request.Declined().has_value();
             }
         }
         return false;

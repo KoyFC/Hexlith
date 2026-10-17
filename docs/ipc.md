@@ -43,6 +43,28 @@ A request is answered within the SendSyncRequest that made it, on the calling th
 
 GetServiceHandle refuses a name longer than eight characters with `0xD9006405`. Its flags say whether to wait for a service that is not registered yet; every service here is registered from the start, so nothing waits. Nothing publishes notifications yet, and ReceiveNotification is not implemented.
 
+## Declining a request
+
+Some commands are implemented for the requests the game is known to send and not for every request they can carry: cfg:u holds the configuration blocks Azahar creates a new console with, and the console holds more. A block outside the table is not answered as missing, since a game told something is missing may take a path it never takes on a console. The service declines the request instead, `kernel::IpcRequest::Decline` with the reason, and the run stops as it does at a command with no implementation, with the reason after the service's name.
+
+## The services the boot reaches
+
+Each answers from 3dbrew's description of the command and the answer Azahar gives, cited in the service's header. What none of them does yet is noted.
+
+| Service | Class | What it answers | What it does not do |
+| --- | --- | --- | --- |
+| `APT:U` | `AppletManager` | The lock, the notification and parameter events, the Wakeup parameter the first applet gets, the applet utility, the shared font | No other applet runs, so no parameter is ever sent but the first |
+| `ndm:u` | `NetworkDaemonManager` | Which daemons may run, and a count of suspensions for each | No daemon runs |
+| `fs:USER` | `FileSystem`, `OpenFileSession` | The title's RomFS, read from level 3 of its IVFC tree; save data that is not formatted; every other archive not found | No writes, no directories, no save data that persists |
+| `cfg:u` | `Configuration` | The blocks of a new console's configuration, the region, the model, the transferable ID | Blocks outside the table are declined |
+| `hid:USER` | `HumanInterface` | The shared page and its five events, the gyroscope's calibration, the volume | Nothing fills the page: no button is ever held |
+| `gsp::Gpu` | `Graphics` | The right to the GPU, registers that keep what is written, the command queue, interrupts and both vertical blanks every 4,481,136 ticks | Nothing is drawn; a command completes at once |
+| `dsp::DSP` | `DigitalSignalProcessor` | The firmware load, the interrupt events, the audio pipe's start-up reply with the structure addresses, an audio frame every 1,310,720 ticks | No firmware runs and no sound is mixed |
+| `frd:u` | `Friends` | An offline console with a zero friend key and no friends | |
+| `boss:U` | `SpotPass` | A session, and storage accepted and forgotten | Nothing is ever downloaded |
+
+The shared font is a stand-in built in code from the format, since the console's is not on the cartridge and the game stops without one. [ADR 0014](adr/0014-a-stand-in-for-the-shared-font.md) records why.
+
 ## What the reference title sends first
 
-Run from its entry point, the game's first requests are srv:'s RegisterClient and EnableNotification. It then starts a thread at priority `0x18` that waits on the notification semaphore, opens `APT:U`, and sends it command `0x00010040`, GetLockHandle, which is where the run stops until APT is implemented.
+Run from its entry point, the game's first requests are srv:'s RegisterClient and EnableNotification. It then opens `APT:U`, takes its lock, registers, waits for the Wakeup parameter and enables itself, and suspends the daemons it does not want running. It initialises `fs:USER` and opens its RomFS, reads its configuration and its input page, maps the shared font, takes the GPU and sets up its interrupt queue, loads the DSP firmware and starts the audio pipe, and asks `frd:u` and `boss:U` about the network. After 456 requests and about 8.95 million ticks it opens `ldr:ro` and sends Initialize, `0x000100C2`, with the CRS.

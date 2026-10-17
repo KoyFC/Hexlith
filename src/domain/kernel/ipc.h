@@ -8,7 +8,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -146,6 +148,18 @@ public:
         return malformed_;
     }
 
+    // Says the command is implemented but not for what this request asks,
+    // such as a configuration block nothing here holds. The request is then
+    // left unanswered, as a command with no implementation is, and the reason
+    // goes into the report.
+    void Decline(std::string reason) {
+        declined_ = std::move(reason);
+    }
+
+    [[nodiscard]] const std::optional<std::string>& Declined() const {
+        return declined_;
+    }
+
     // Building the reply. Begin starts it with the same command ID; the first
     // normal word is always the result.
     void Begin(std::uint32_t normal_words, std::uint32_t translate_words);
@@ -183,6 +197,7 @@ private:
     std::size_t read_ = 1;
     std::size_t written_ = 0;
     bool malformed_ = false;
+    std::optional<std::string> declined_;
 };
 
 // What answers the requests sent on a session: a service, or an object a

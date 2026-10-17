@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <gtest/gtest.h>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -570,6 +571,34 @@ TEST(Kernel, RefusesAPortThatDoesNotExist) {
     Machine machine(program);
     EXPECT_EQ(machine.Run().reason, KernelStopReason::ProcessExited);
     EXPECT_EQ(machine.Data(FirstSlot), result::NotFound.raw);
+}
+
+// A service that implements command 1 but not for the request it is sent,
+// and says why.
+class Decliner final : public SessionHandler {
+public:
+    [[nodiscard]] std::string_view Name() const override {
+        return "inc:u";
+    }
+
+    bool Handle(IpcRequest& request) override {
+        request.Decline("argument " + std::to_string(request.Pop()));
+        return false;
+    }
+};
+
+TEST(Kernel, StopsWithTheReasonAServiceDeclined) {
+    constexpr std::uint32_t Argument = 7;
+    Program program;
+    ConnectToIncrementer(program);
+    SendToIncrementer(program, ipc::MakeHeader(1, 1, 0), Argument);
+    program.Call(ExitProcessCall);
+
+    Machine machine(program);
+    machine.Get().RegisterPort("inc:u", std::make_shared<Decliner>());
+    const KernelStop stop = machine.Run();
+    EXPECT_EQ(stop.reason, KernelStopReason::UnimplementedServiceCommand);
+    EXPECT_EQ(stop.service, "inc:u (argument 7)");
 }
 
 // A kernel with nothing running, for what services ask of it directly.

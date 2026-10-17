@@ -1,10 +1,28 @@
 target_sources(
     hexlith_domain
-    PRIVATE command_table.h
+    PRIVATE apt.cpp
+            apt.h
+            command_table.h
+            configuration.cpp
+            configuration.h
+            digital_signal_processor.cpp
+            digital_signal_processor.h
             file_system.cpp
             file_system.h
+            friends.cpp
+            friends.h
+            graphics.cpp
+            graphics.h
+            human_interface.cpp
+            human_interface.h
+            network_daemons.cpp
+            network_daemons.h
             registry.cpp
             registry.h
             service_manager.cpp
             service_manager.h
+            spot_pass.cpp
+            spot_pass.h
+            stand_in_font.cpp
+            stand_in_font.h
 )
