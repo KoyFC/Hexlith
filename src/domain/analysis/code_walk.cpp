@@ -4,6 +4,8 @@
 #include "domain/arm/decode_thumb.h"
 
 #include <algorithm>
+#include <array>
+#include <optional>
 #include <unordered_set>
 
 namespace hexlith::domain::analysis {
@@ -51,6 +53,32 @@ arm::Instruction DecodeAt(const WalkImage& image, std::uint32_t address, arm::In
     return arm::DecodeThumb(first.Value(), second.ValueOr(0));
 }
 
+// How much a place to walk from is worth, which decides when it is walked.
+//
+// The first path to reach a byte claims it in its instruction set, and a later
+// path that disagrees stops there as a conflict. So the order is not neutral: if
+// a guess is walked before a fact, the guess wins. A module that imports
+// 0x00100184 as ARM lost to a Thumb path the data sweep had started, and the
+// function record took the instruction set of the region the guess had left.
+//
+// Every stated place, each a fact the image or a loader acts on, is walked
+// before anything found by following one, and everything followed from a fact
+// before any guess.
+enum class Confidence : std::uint8_t { Stated, Followed, Guessed };
+
+constexpr std::size_t ConfidenceLevels = 3;
+
+constexpr Confidence ConfidenceOf(Provenance source) {
+    return source == Provenance::Heuristic ? Confidence::Guessed : Confidence::Stated;
+}
+
+// A branch is as good as the path it was found on. A path from a fact may still
+// be followed into data by a branch the decoder took wrongly, so it ranks below
+// the fact itself, but above anything a guess started.
+constexpr Confidence FollowedFrom(Confidence path) {
+    return path == Confidence::Guessed ? Confidence::Guessed : Confidence::Followed;
+}
+
 // The walk itself, as a class only because it carries five pieces of state that
 // every step reads and writes.
 class Walk {
@@ -59,7 +87,7 @@ public:
         : image_(image), options_(options), marks_(image.bytes.size(), 0) {}
 
     void Seed(const WalkSeed& seed) {
-        pending_.push_back(seed);
+        Push(seed, ConfidenceOf(seed.source));
         ++result_.report.seeds;
     }
 
@@ -105,10 +133,8 @@ public:
     void Run() {
         SweepForEntryPoints();
 
-        while (!pending_.empty()) {
-            const WalkSeed seed = pending_.back();
-            pending_.pop_back();
-            Follow(seed);
+        for (std::optional<Pending> next = Pop(); next.has_value(); next = Pop()) {
+            Follow(next->seed, next->confidence);
         }
         result_.regions = BuildRegions();
     }
@@ -118,7 +144,29 @@ public:
     }
 
 private:
-    void Follow(const WalkSeed& seed) {
+    struct Pending {
+        WalkSeed seed;
+        Confidence confidence = Confidence::Guessed;
+    };
+
+    void Push(const WalkSeed& seed, Confidence confidence) {
+        pending_.at(static_cast<std::size_t>(confidence)).push_back(seed);
+    }
+
+    // The most recent seed at the most confident level that has one.
+    std::optional<Pending> Pop() {
+        for (std::size_t level = 0; level < ConfidenceLevels; ++level) {
+            std::vector<WalkSeed>& stack = pending_.at(level);
+            if (!stack.empty()) {
+                const WalkSeed seed = stack.back();
+                stack.pop_back();
+                return Pending{.seed = seed, .confidence = static_cast<Confidence>(level)};
+            }
+        }
+        return std::nullopt;
+    }
+
+    void Follow(const WalkSeed& seed, Confidence confidence) {
         if (!image_.Contains(seed.address)) {
             ++result_.report.seeds_outside_the_image;
             return;
@@ -131,14 +179,14 @@ private:
         ++result_.report.seeds_followed;
 
         std::uint32_t address = seed.address;
-        while (Step(address, seed)) {
+        while (Step(address, seed, confidence)) {
             // Step advances the address, or returns false when the walk stops.
         }
     }
 
     // Decodes one instruction and acts on it. Returns whether the walk carries on
     // to the instruction after it.
-    bool Step(std::uint32_t& address, const WalkSeed& seed) {
+    bool Step(std::uint32_t& address, const WalkSeed& seed, Confidence confidence) {
         if (!image_.Contains(address)) {
             return false;
         }
@@ -173,7 +221,7 @@ private:
             }
         }
 
-        FollowBranch(decoded, address, seed);
+        FollowBranch(decoded, address, seed, confidence);
         FollowLiteral(decoded, address, seed);
 
         if (!arm::ContinuesToTheNextInstruction(decoded)) {
@@ -188,8 +236,10 @@ private:
         return DecodeAt(image_, address, set);
     }
 
-    void
-    FollowBranch(const arm::Instruction& decoded, std::uint32_t address, const WalkSeed& seed) {
+    void FollowBranch(const arm::Instruction& decoded,
+                      std::uint32_t address,
+                      const WalkSeed& seed,
+                      Confidence confidence) {
         if (!arm::HasKnownTarget(decoded)) {
             return;
         }
@@ -211,8 +261,8 @@ private:
         if (arm::IsCall(decoded)) {
             RecordFunction(target, set, Provenance::Heuristic);
         }
-        pending_.push_back(
-            WalkSeed{.address = target, .instruction_set = set, .source = Provenance::Heuristic});
+        Push(WalkSeed{.address = target, .instruction_set = set, .source = Provenance::Heuristic},
+             FollowedFrom(confidence));
     }
 
     // A read from a literal pool is two facts at once: those four bytes are data
@@ -260,8 +310,8 @@ private:
         result_.pointers.push_back(
             CodePointer{.address = at.value(), .target = pointed, .source = Provenance::Heuristic});
         RecordFunction(pointed, set, Provenance::Heuristic);
-        pending_.push_back(
-            WalkSeed{.address = pointed, .instruction_set = set, .source = Provenance::Heuristic});
+        Push(WalkSeed{.address = pointed, .instruction_set = set, .source = Provenance::Heuristic},
+             Confidence::Guessed);
 
         // seed.source is not used here on purpose: a function found through a
         // pointer is a guess however trustworthy the path that led to it was.
@@ -333,7 +383,7 @@ private:
     WalkImage image_;
     WalkOptions options_;
     std::vector<std::uint8_t> marks_;
-    std::vector<WalkSeed> pending_;
+    std::array<std::vector<WalkSeed>, ConfidenceLevels> pending_;
     std::unordered_set<std::uint32_t> known_functions_;
     WalkResult result_;
 };

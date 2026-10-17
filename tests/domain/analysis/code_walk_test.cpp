@@ -217,6 +217,30 @@ TEST(WalkCode, ReportsAnAddressReachedInBothInstructionSets) {
         << "one of the two paths is wrong and the walk has to say where";
 }
 
+TEST(WalkCode, WalksAStatedSeedBeforeAGuessAtTheSameAddress) {
+    ImageBuilder image;
+    image.Arm(ArmPush);  // 0x00100000, decodes in Thumb too, as ands r0, r2
+    image.Arm(ArmPop);
+
+    // The guess comes last, which is the order that once let it claim the bytes
+    // first and leave the stated seed to stop at a conflict.
+    const std::vector<WalkSeed> seeds = {
+        ArmSeed(Base),
+        WalkSeed{.address = Base,
+                 .instruction_set = arm::InstructionSet::Thumb,
+                 .source = Provenance::Heuristic},
+    };
+    const WalkResult result =
+        WalkCode(WalkImage{.bytes = image.Bytes(), .base = Base}, seeds, Options(image));
+
+    const Region* region = RegionAt(result, Base);
+    ASSERT_NE(region, nullptr);
+    EXPECT_EQ(region->instruction_set, arm::InstructionSet::Arm);
+    EXPECT_EQ(region->size, 8U);
+    EXPECT_EQ(result.report.instruction_set_conflicts, std::vector<std::uint32_t>{Base})
+        << "the guess is the path that stops";
+}
+
 TEST(WalkCode, MarksALiteralPoolWordAsDataAndFollowsWhatItPointsAt) {
     ImageBuilder image;
     image.Arm(ArmLoadLiteral);  // 0x00100000, reads 0x00100008

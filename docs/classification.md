@@ -102,6 +102,22 @@ The CRO modules import 4,955 distinct positions in the main executable's code, 2
 
 The conflicts rose, and they were read rather than counted. The 25 reports are 14 addresses, one of them reported eleven times. 24 of the 25 come from a path seeded by the heuristics: a call target or a literal pointer followed for its value. The one that comes from an import is at `0x00100184`, which a module imports as ARM and which a heuristic path had already walked as Thumb, so it is the heuristic path that is wrong. No position is imported both as ARM and as Thumb, and none imported as ARM is misaligned.
 
+### Facts before guesses
+
+That one conflict was the walk's fault and not the image's. The first path to reach a byte claims it, and a later path that disagrees stops there. The places to walk from were kept on one stack, and the sweep of data pushed its guesses after every stated seed, so they were walked first. At `0x00100184` a Thumb path from a guess got there before the import, and the function record, which takes its instruction set from the region the walk leaves, came out Thumb with `source=relocation`.
+
+The walk now keeps three stacks and always takes from the most trusted one that has anything left: the stated seeds, then whatever is followed by branching from them, then guesses and everything followed from those. On the reference image:
+
+| | Before | After |
+| --- | --- | --- |
+| Text segment reached | 80.4 percent | 80.3 percent |
+| Functions | 17,308 | 17,309 |
+| Instruction set conflicts | 25 at 14 addresses | 33 at 20 addresses |
+| Conflicts on a path from a fact | 1 | 0 |
+| Stops at a word that is not an instruction | 14 | 12 |
+
+`0x00100184` is now an ARM function of 48 bytes ending in a `bx`. The conflicts rose because guesses that used to claim bytes first and stop a stated path now arrive second and stop themselves, and each of the 33 is a guess that was wrong or a fact that disagrees with one. None of them stops a path that started at a fact.
+
 Without the sweep of data, the imports and the exports together reach 43.4 percent, against 10.5 for the exports alone.
 
 ## Where each function ends
@@ -174,7 +190,7 @@ The walk sees the code segment and nothing else, so a path that runs off its end
 | `DllBox` | 128,340 | 95.8 percent | 984 |
 | `DllZukan` | 121,716 | 95.7 percent | 1,161 |
 
-Against the main executable's 80.4 percent, with 25 conflict reports, the difference is what the relocation tables are worth: every function a module reaches only through a table of pointers is a seed here, where in the main executable it has to be guessed at. The 5.4 percent not reached includes the literal pools inside functions, which are data and not counted as code, and whatever padding sits between functions. How it splits between those and code that nothing reaches has not been measured.
+Against the main executable's 80.3 percent, with 33 conflict reports, the difference is what the relocation tables are worth: every function a module reaches only through a table of pointers is a seed here, where in the main executable it has to be guessed at. The 5.4 percent not reached includes the literal pools inside functions, which are data and not counted as code, and whatever padding sits between functions. How it splits between those and code that nothing reaches has not been measured.
 
 20 modules carry at most 172 bytes of code each and reach about two thirds of it. Most are the developer stubs [`formats/cro0.md`](formats/cro0.md) describes, one exported function each.
 
@@ -214,41 +230,41 @@ scripts/compare_ghidra_analysis.py --ghidra $W/rea/export --tables $W/analysis \
     --text-start 0x00100000 --text-size 0x43BEDC --summary analyze.txt
 ```
 
-The analysis takes several minutes, against half a second for `hexlith-analyze`. Measured on 2026-10-16, over the text segment only:
+The analysis takes several minutes, against half a second for `hexlith-analyze`. Measured on 2026-10-16 and again on 2026-10-17 after the walk put facts before guesses, over the text segment only:
 
 | | Hexlith | Ghidra |
 | --- | --- | --- |
-| Functions | 17,308 | 14,860 |
-| Code bytes | 3,567,824, 80.4 percent | 3,749,360, 84.4 percent |
+| Functions | 17,309 | 14,860 |
+| Code bytes | 3,566,426, 80.3 percent | 3,749,360, 84.4 percent |
 
 | | |
 | --- | --- |
-| Entries both found | 13,289 |
+| Entries both found | 13,288 |
 | Shared entries in different instruction sets | 0 |
-| Entries only Hexlith found | 4,019, of which Ghidra has 828 as code |
-| Entries only Ghidra found | 1,571, of which Hexlith has 501 as code |
-| Code to both, same instruction set | 3,203,476 bytes |
-| Code to both, different instruction set | 44 bytes |
-| Code to Hexlith only | 364,304 bytes |
-| Code to Ghidra only | 545,840 bytes |
+| Entries only Hexlith found | 4,021, of which Ghidra has 830 as code |
+| Entries only Ghidra found | 1,572, of which Hexlith has 501 as code |
+| Code to both, same instruction set | 3,202,106 bytes |
+| Code to both, different instruction set | 80 bytes |
+| Code to Hexlith only | 364,240 bytes |
+| Code to Ghidra only | 547,174 bytes |
 
-Between them the two call 92.7 percent of the text code, so most of what each misses the other has reached. Where both call a byte code they agree on its encoding everywhere except 44 bytes, and those are the conflicts below.
+Between them the two call 92.7 percent of the text code, so most of what each misses the other has reached. Where both call a byte code they agree on its encoding everywhere except 80 bytes. 48 of them are the function at `0x00100184`, which Ghidra has as Thumb and the import shows is ARM; before the walk was reordered Hexlith agreed with Ghidra there and the difference was 44 bytes.
 
 **Jump tables.** Ghidra resolved 450 computed jumps with more than one target, 3,227 distinct targets in all. 371 of those jumps sit in code Hexlith already walks, and 3,019 of the targets are bytes Hexlith has not reached. That is the gap the walk leaves at every `ldr pc` through a table and every `add pc`, measured for the first time, and it is the largest one.
 
-**The conflicts.** `hexlith-analyze` now names each address it was told was both ARM and Thumb. Against Ghidra:
+**The conflicts.** `hexlith-analyze` names each address it was told was both ARM and Thumb, and since the walk puts facts first, every report is a guessed path stopping. Against Ghidra, as of 2026-10-17:
 
 | Address | Reports | Ghidra |
 | --- | --- | --- |
 | `0x00100048` | 1 | Thumb, a function entry |
 | `0x00100184` | 1 | Thumb, inside the function at `0x00100134` |
-| `0x00101C90` | 11 | Thumb, inside the function at `0x00101928` |
-| `0x001FBDF0` to `0x00209FF8` | 8 addresses, one report each | ARM, each inside a function |
-| `0x0020C49A` | 2 | not code |
-| `0x0040049C` | 1 | ARM |
+| `0x00101C90`, `0x00101CB8` | 11 and 2 | Thumb and not code, both inside the function at `0x00101928` |
+| `0x001FBFBC` to `0x0020BE5C` | 11 addresses, 12 reports | ARM at ten, not code at one, each inside a function |
+| `0x0040049C`, `0x004004D8` | 2 and 1 | ARM, inside the functions at `0x004003B0` and `0x004004B8` |
+| `0x004009BC`, `0x004009E8` | 1 each | not code, inside the function at `0x004008BC` |
 | `0x00470048` | 1 | ARM |
 
-Ghidra agreeing with one side does not settle a conflict, and `0x00100184` shows why. A module imports that position as ARM. Decoded as ARM, the bytes there are a complete function, a push of r4 and lr, three moves, a load, an add and the matching pop. Decoded as Thumb, the second halfword is undefined. So the import is right, and Hexlith's heuristic path and Ghidra are both wrong in the same way. It also shows a fault in the table: `functions.txt` records the address with `isa=thumb` and `source=relocation`, so the function record took its instruction set from the heuristic path that reached the byte first rather than from the relocation that named it. The other thirteen have not been read yet.
+Ghidra agreeing with one side does not settle a conflict, and `0x00100184` shows why. A module imports that position as ARM. Decoded as ARM, the bytes there are a complete function, a push of r4 and lr, moves, a load, an add and the matching pop, then a short tail ending in a `bx`. Decoded as Thumb, the second halfword is undefined. So the import is right, and the guessed path and Ghidra are both wrong in the same way. The table used to record the address with `isa=thumb` and `source=relocation`, which is how the order of the walk came to light. The other nineteen have not been read yet.
 
 ## What is not done yet
 
@@ -256,6 +272,5 @@ Ghidra agreeing with one side does not settle a conflict, and `0x00100184` shows
 
 **Jump tables.** A computed branch through a table ends a path. The tables are not found, the entries are not followed, and no region is marked as one. Ghidra's 450, with 3,019 targets Hexlith does not reach, put a number on it. This is the largest single gap and the hardest case, which is why [ADR 0006](adr/0006-analysis-layer-format.md) gave `jump-table` a region kind of its own before anything could produce one.
 
-**The conflicts, overlaps and stops of the main executable.** 25 conflict reports at 14 addresses, of which one has been read, and 14 stops. Each is a place where two paths disagree, about an encoding or about which function owns a byte, and each is worth reading rather than counting. The modules have no conflicts and no stops.
+**The conflicts, overlaps and stops of the main executable.** 33 conflict reports at 20 addresses, of which one has been read, and 12 stops. Each is a place where two paths disagree, about an encoding or about which function owns a byte, and each is worth reading rather than counting. The modules have no conflicts and no stops.
 
-**The instruction set of a seeded function record.** At `0x00100184` a record seeded by a relocation carries the instruction set of the heuristic path that got there first. The relocation should win.
