@@ -51,6 +51,7 @@ private:
     void GetConfig(kernel::IpcRequest& request);
     void GetRegion(kernel::IpcRequest& request);
     void GetTransferableId(kernel::IpcRequest& request);
+    void IsCoppacsSupported(kernel::IpcRequest& request);
     void GetSystemModel(kernel::IpcRequest& request);
     void GetModelNintendo2DS(kernel::IpcRequest& request);
 

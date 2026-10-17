@@ -17,6 +17,8 @@ target_sources(
             human_interface.h
             network_daemons.cpp
             network_daemons.h
+            power_manager.cpp
+            power_manager.h
             registry.cpp
             registry.h
             service_manager.cpp

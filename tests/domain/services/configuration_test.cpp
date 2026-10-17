@@ -17,6 +17,7 @@ namespace ipc = kernel::ipc;
 constexpr std::uint32_t GetConfig = 0x00010082;
 constexpr std::uint32_t GetRegion = 0x00020000;
 constexpr std::uint32_t GetTransferableId = 0x00030040;
+constexpr std::uint32_t IsCoppacsSupported = 0x00040000;
 constexpr std::uint32_t GetSystemModel = 0x00050000;
 constexpr std::uint32_t GetModelNintendo2DS = 0x00060000;
 
@@ -61,6 +62,12 @@ TEST(Configuration, AnswersTheRegionAndTheModel) {
     EXPECT_EQ(cfg.harness.Reply(2), Configuration::Model);
     ASSERT_TRUE(cfg.harness.Send(cfg.service, {GetModelNintendo2DS}));
     EXPECT_EQ(cfg.harness.Reply(2), 1U) << "not a 2DS";
+}
+
+TEST(Configuration, SupportsCoppacsInTheAmericas) {
+    Harness cfg;
+    ASSERT_TRUE(cfg.harness.Send(cfg.service, {IsCoppacsSupported}));
+    EXPECT_EQ(cfg.harness.Reply(2), 1U);
 }
 
 TEST(Configuration, DerivesTheTransferableIdFromTheUniqueIdAndTheSalt) {

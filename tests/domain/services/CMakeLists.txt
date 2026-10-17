@@ -8,6 +8,7 @@ hexlith_add_test(
     graphics_test.cpp
     human_interface_test.cpp
     network_daemons_test.cpp
+    power_manager_test.cpp
     service_harness.cpp
     service_harness.h
     service_manager_test.cpp

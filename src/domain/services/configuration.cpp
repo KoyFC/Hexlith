@@ -144,7 +144,7 @@ std::span<const Configuration::Command> Configuration::Commands() {
         {.id = 0x0001, .name = "GetConfig", .handler = &Configuration::GetConfig},
         {.id = 0x0002, .name = "GetRegion", .handler = &Configuration::GetRegion},
         {.id = 0x0003, .name = "GetTransferableId", .handler = &Configuration::GetTransferableId},
-        {.id = 0x0004, .name = "IsCoppacsSupported"},
+        {.id = 0x0004, .name = "IsCoppacsSupported", .handler = &Configuration::IsCoppacsSupported},
         {.id = 0x0005, .name = "GetSystemModel", .handler = &Configuration::GetSystemModel},
         {.id = 0x0006,
          .name = "GetModelNintendo2DS",
@@ -206,6 +206,15 @@ void Configuration::GetTransferableId(kernel::IpcRequest& request) {
     request.Begin(3, 0);
     request.Push(kernel::result::Success);
     request.Push64(value);
+}
+
+void Configuration::IsCoppacsSupported(kernel::IpcRequest& request) {
+    // COPPACS, the parental controls of Canada and the United States, exists
+    // only in the region that covers them.
+    constexpr std::uint8_t Americas = 1;
+    request.Begin(2, 0);
+    request.Push(kernel::result::Success);
+    request.Push(Region == Americas ? 1U : 0U);
 }
 
 void Configuration::GetSystemModel(kernel::IpcRequest& request) {
