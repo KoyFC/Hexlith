@@ -57,7 +57,7 @@ Each answers from 3dbrew's description of the command and the answer Azahar give
 | `ndm:u` | `NetworkDaemonManager` | Which daemons may run, and a count of suspensions for each | No daemon runs |
 | `fs:USER` | `FileSystem`, `OpenFileSession`, `SaveFileSession`, `DirectorySession` | The title's RomFS, read from level 3 of its IVFC tree; its save data and extra data, formatted, filled, listed and committed, held in memory; every other archive not found | No renames, no deletion of directories or archives, no secure values |
 | `cfg:u` | `Configuration` | The blocks of a new console's configuration, the region, the model, the transferable ID | Blocks outside the table are declined |
-| `hid:USER` | `HumanInterface` | The shared page and its five events, the gyroscope's calibration, the volume | Nothing fills the page: no button is ever held |
+| `hid:USER` | `HumanInterface` | The shared page and its five events, filled 234 times a second with the pad, the circle pad and the touch screen from an `InputSource` and signalled each time; the gyroscope's calibration, the volume | The accelerometer and the gyroscope are never filled |
 | `gsp::Gpu` | `Graphics` | The right to the GPU, registers that keep what is written, the command queue, interrupts and both vertical blanks every 4,481,136 ticks | Nothing is drawn; a command completes at once |
 | `dsp::DSP` | `DigitalSignalProcessor` | The firmware load, the interrupt events, the audio pipe's start-up reply with the structure addresses, an audio frame every 1,310,720 ticks | No firmware runs and no sound is mixed |
 | `frd:u` | `Friends` | An offline console with a zero friend key and no friends | |

@@ -6,9 +6,11 @@
 #include "domain/ctr/exheader.h"
 #include "domain/kernel/kernel.h"
 #include "domain/services/graphics.h"
+#include "domain/services/human_interface.h"
 #include "domain/services/registry.h"
 #include "domain/services/relocatable_objects.h"
 #include "domain/services/save_data.h"
+#include "ports/input_source.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -67,6 +69,10 @@ public:
         return *loader_;
     }
 
+    // Hands the player's input to hid:USER, which asks for it by the frame
+    // it is in. The source must outlive the title.
+    void UseInput(ports::InputSource& source);
+
     // gsp::Gpu, which keeps the count of frames.
     [[nodiscard]] const domain::services::Graphics& Gpu() const {
         return *graphics_;
@@ -85,6 +91,7 @@ private:
     std::shared_ptr<domain::services::ExtraData> extra_;
     std::shared_ptr<domain::services::RelocatableObjects> loader_;
     std::shared_ptr<domain::services::Graphics> graphics_;
+    std::shared_ptr<domain::services::HumanInterface> human_interface_;
 };
 
 // How a range of the process's memory compares with bytes captured elsewhere,

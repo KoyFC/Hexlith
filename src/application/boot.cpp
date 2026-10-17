@@ -165,7 +165,8 @@ core::Status BootedTitle::Start(core::ByteSpan code) {
     registry_.Provide(std::make_shared<services::NetworkDaemonManager>());
     registry_.Provide(std::make_shared<services::FileSystem>(romfs_, save_, extra_));
     registry_.Provide(std::make_shared<services::Configuration>());
-    registry_.Provide(std::make_shared<services::HumanInterface>(kernel_));
+    human_interface_ = std::make_shared<services::HumanInterface>(kernel_);
+    registry_.Provide(human_interface_);
     graphics_ = std::make_shared<services::Graphics>(kernel_);
     registry_.Provide(graphics_);
     registry_.Provide(std::make_shared<services::DigitalSignalProcessor>(kernel_));
@@ -175,6 +176,11 @@ core::Status BootedTitle::Start(core::ByteSpan code) {
     registry_.Provide(loader_);
     kernel_.RegisterPort("srv:", std::make_shared<services::ServiceManager>(registry_));
     return {};
+}
+
+void BootedTitle::UseInput(ports::InputSource& source) {
+    const services::Graphics* gpu = graphics_.get();
+    human_interface_->SetInput([&source, gpu] { return source.StateAt(gpu->Frames()); });
 }
 
 MemoryComparison CompareMemory(const domain::memory::ProcessMemory& memory,
