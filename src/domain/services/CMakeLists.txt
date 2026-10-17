@@ -19,6 +19,8 @@ target_sources(
             network_daemons.h
             power_manager.cpp
             power_manager.h
+            relocatable_objects.cpp
+            relocatable_objects.h
             registry.cpp
             registry.h
             service_manager.cpp

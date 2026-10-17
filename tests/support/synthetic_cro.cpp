@@ -308,7 +308,9 @@ void WriteHeader(const SyntheticCroSpec& spec, const Plan& plan, Writer& write) 
     write.Field(cro::NameOffsetField, static_cast<std::uint32_t>(plan.name_at.at));
     write.Field(cro::FileSizeField, static_cast<std::uint32_t>(plan.file_size));
     write.Field(cro::BssSizeField, 0);
-    write.Field(cro::FixedSizeField, static_cast<std::uint32_t>(cro::HeaderSize));
+    // The loader writes the fixed size; a module that has not been through
+    // one reads zero, as every module in the reference RomFS does.
+    write.Field(cro::FixedSizeField, 0);
     write.Field(cro::UnknownSegmentTagField, spec.unknown_hook);
     write.Field(cro::OnLoadSegmentTagField, spec.on_load_hook);
     write.Field(cro::OnExitSegmentTagField, spec.on_exit_hook);

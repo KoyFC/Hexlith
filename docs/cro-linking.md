@@ -2,7 +2,7 @@
 
 The console's `ldr:ro` service maps a CRO module where the game asks, then patches every relocated word in it and in the modules already loaded. `src/domain/linker` does the same computation without a console: given the modules and the addresses chosen for them, it works out the value each relocated word ends up holding and which module supplied it.
 
-It writes nothing. The answer is a list of words per module, and putting them into an image or into guest memory is a separate step. The analysis wants the list, a comparison with a memory dump wants an image, and the `ldr:ro` reimplementation will want guest memory, so the computation is kept apart from all three.
+It writes nothing. The answer is a list of words per module, and putting them into an image or into guest memory is a separate step. The analysis wants the list, a comparison with a memory dump wants an image, and the `ldr:ro` service wants guest memory, so the computation is kept apart from all three.
 
 The source for every step is `azahar/src/core/hle/service/ldr_ro/cro_helper.cpp`. The table layouts it reads are in [`formats/cro0.md`](formats/cro0.md).
 
@@ -26,9 +26,20 @@ The static module is linked first and once, the way `LoadCRS` does it: its segme
 
 **Static anonymous symbols**, a module handing positions to the static module, are refused. Azahar notes that no game is known to use them, and the reference title declares none, so nothing could check an implementation.
 
-**Unloading** is not implemented. An unload resets every import that pointed into the module, so linking just the resident modules in the order they were loaded reaches the state the console reached by loading and unloading. That is enough to reproduce a moment of a run. The service will need the real thing.
+**Unloading** is not implemented. An unload resets every import that pointed into the module, so linking just the resident modules in the order they were loaded reaches the state the console reached by loading and unloading. That is enough to reproduce a moment of a run. The service will need the real thing once a run reaches the first unload, which the boot to the first module does not.
 
 **Named lookups** go through the export tree on the console, and a module with no tree finds nothing whatever its export table holds. Hexlith keeps that rule but searches the table itself, which gives the same answer whenever the tree indexes the table correctly.
+
+## The service
+
+`services::RelocatableObjects` is `ldr:ro` for the game. The words it writes are the linker's. The rest of what the console's loader does to a module is in `linker::RebaseModuleImage` and `linker::FixModuleImage`, which work on a copy of the module's bytes, and in the service, which works on the address space:
+
+- **Map.** The game's buffer is mapped at the address it asked for, read-only and marked as code, and the buffer itself is closed to the game while the module lives there.
+- **Rebase the header and the tables.** Every offset in the header becomes an address. So do the offsets inside the tables that point into other tables: the names of exports and imported modules, the slices of the import tables that belong to each imported module, and the batch each import resolves. The segment table gets the segment addresses. The first entry of each batch of external relocations is marked unresolved (`RebaseHeader`, `RebaseSegmentTable`, `RebaseExportNamedSymbolTable`, `RebaseImportModuleTable`, the three `RebaseImport...SymbolTable`s, `ResetExternalRelocations`).
+- **Relocate and link**, writing the linker's words and marking every batch an import resolved, in the new module and in every module it exports to. After a later load only the words that load changed are written again, so a word the game has since copied elsewhere is not touched twice.
+- **Register.** The static module's header holds the head of two lists, the auto-linked modules and the rest, and each module's header holds its neighbours. The head's previous field points at the tail (`Register`).
+- **Fix.** At a fix level above zero the magic becomes `FIXD` and the tables past the level's barrier are emptied. The part of the buffer past the end of what is kept goes back to the game. The reference title asks for level 1 and its first module keeps all four of its pages (`Fix`).
+- **Make the code executable** (`GetExecutablePages`).
 
 ## The data segment
 
@@ -86,3 +97,15 @@ The 2,880 words cover every path through the loader that this title uses. 136 ar
 The first words of the chunk are a run of `ldr pc, [pc, #-4]` each followed by an address in the main executable: the module's calls into the static image go through these, and the loader has patched every one.
 
 That is 2,880 of the 14,561 words the two modules and the static module have between them, about a fifth. The rest of `DllField`, its data buffer, `DllUSMirror` and the main executable's 331 patched words are not dumped yet.
+
+### What the service left in memory
+
+Run from its entry point on 2026-10-17, the reference title called Initialize with the CRS and LoadCRO with `DllLangSelect` at `0x006A5000`, its data at `0x080480F0` and its BSS at `0x0804810C`, the same addresses Azahar logged on a fresh boot. The game went on to run code in the module. Once it had stopped, at the first request nothing answers yet, Hexlith's memory was compared with Azahar's dump of the same moment, `traces/dump-2026-10-16-lang-select` in the workspace:
+
+| Range | Bytes | Differing |
+| --- | --- | --- |
+| The whole module, `0x006A5000` to `0x006A9000`, header and tables included | 16,384 | 0 |
+| The main executable from `0x00190000`, which the static module patches | 65,536 | 0 |
+| The module's data buffer | 28 | 0 |
+
+That covers every word the linker writes into the module and the 315 words of the main executable the dump holds, as `compare_cro_link.py` found against Azahar, and beyond them every header field, table entry, batch flag and list pointer the service writes.

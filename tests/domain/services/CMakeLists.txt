@@ -9,10 +9,11 @@ hexlith_add_test(
     human_interface_test.cpp
     network_daemons_test.cpp
     power_manager_test.cpp
+    relocatable_objects_test.cpp
     service_harness.cpp
     service_harness.h
     service_manager_test.cpp
     stand_in_font_test.cpp
 )
 
-target_link_libraries(hexlith_domain_services_test PRIVATE Hexlith::Domain)
+target_link_libraries(hexlith_domain_services_test PRIVATE Hexlith::Domain Hexlith::TestSupport)
