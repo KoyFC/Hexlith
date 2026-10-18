@@ -50,6 +50,48 @@ Every write stores its value under its mask first. These then do something besid
 
 While `VSH_COM_MODE` (0244h) bit 0 is clear and `GEOSTAGE_CONFIG` (0229h) says no geometry shader is in use, every write to the vertex shader's uniforms, code, descriptors and output mask reaches the geometry shader's as well. GBATEK names the register and gives no description; Azahar's command processor is the source.
 
+## Registers a draw reads
+
+What the reference renderer of [`docs/pica-rasterizer.md`](../pica-rasterizer.md) takes from the registers when it draws. Names and IDs are GBATEK's, by the chapter of 3DS GPU Internal Registers given; a field whose position GBATEK does not give, or gives differently, says where it came from.
+
+| ID | Name | Fields | Source |
+| --- | --- | --- | --- |
+| 0040h | `FACECULLING_CONFIG` | bits 0 and 1: 0 and 3 keep both windings, 1 clockwise, 2 counter-clockwise | Rasterizer registers |
+| 0041h, 0043h | `VIEWPORT_WIDTH`, `VIEWPORT_HEIGHT` | half the size, float24 in bits 0 to 23 | the same |
+| 0047h, 0048h to 004Bh | `FRAGOP_CLIPPING`, `CLIP_COEF` | bit 0 enables the plane; four float24 coefficients | the same |
+| 004Dh, 004Eh | `DEPTHMAP_SCALE`, `DEPTHMAP_OFFSET` | float24 | the same |
+| 004Fh, 0050h to 0056h | `SH_OUTMAP_TOTAL`, `SH_OUTMAP_O0` to `O6` | the count in bits 0 to 2; a semantic in bits 0 to 4 of each byte, 1Fh none | Shader registers, Shader Output |
+| 0065h to 0067h | `SCISSORTEST_MODE`, `_POS`, `_DIM` | mode 0 off, 1 outside the box, 3 inside it; x in bits 0 to 9, y in 16 to 25, the second corner inclusive | Rasterizer registers |
+| 0068h | `VIEWPORT_XY` | signed x in bits 0 to 9, y in 16 to 25 | the same |
+| 006Dh | `DEPTHMAP_ENABLE` | bit 0 clear: a W-buffer | the same |
+| 0080h | `TEXUNIT_CONFIG` | bits 0 to 2 enable units 0 to 2; bit 10 the procedural texture; bit 13 gives unit 2 unit 1's coordinates | Texturing registers |
+| 0081h to 0085h, 008Eh; 0091h to 0096h; 0099h to 009Eh | `TEXUNITi_BORDER_COLOR`, `_DIM`, `_PARAM`, `_LOD`, `_ADDR1`, `_TYPE` | border RGBA; height in bits 0 to 10, width in 16 to 26; magnification filter bit 1, minification bit 2, wrap t bits 8 to 10, wrap s 12 to 14, mipmap filter bit 24, unit 0's type 28 to 30; LOD bias fixed1.4.8 in bits 0 to 12, greatest level 16 to 19, least 24 to 27; address in eight-byte units; format in bits 0 to 3 | the same; Azahar for wrap modes 4 to 7 |
+| 00C0h to 00C4h, 00C8h, 00D0h, 00D8h, 00F0h, 00F8h | `TEXENVi_SOURCE`, `_OPERAND`, `_COMBINER`, `_COLOR`, `_SCALE` | sources in nibbles 0 to 2 and 4 to 6; colour modifiers in nibbles 0 to 2, alpha modifiers in bits 12 to 14, 16 to 18, 20 to 22; colour and alpha operations in bits 0 to 3 and 16 to 19; the constant RGBA; scales in bits 0 and 1, 16 and 17 | Environment |
+| 00E0h | `TEXENV_UPDATE_BUFFER` | fog mode in bits 0 to 2, 5 fog; which of stages 0 to 3 write the buffer's colour in bits 8 to 11 and alpha in 12 to 15; the fog's depth flipped by bit 16 | the same |
+| 00E1h, 00FDh | `FOG_COLOR`, `TEXENV_BUFFER_COLOR` | RGB, RGBA | the same |
+| 0100h | `COLOR_OPERATION` | fragment operation mode in bits 0 and 1, 0 the usual one; bit 8 blends rather than applying the logic operation | Framebuffer registers |
+| 0101h | `BLEND_FUNC` | colour and alpha equations in bits 0 to 2 and 8 to 10; source and destination factors for colour in 16 to 19 and 20 to 23, for alpha 24 to 27 and 28 to 31 | the same |
+| 0102h, 0103h | `LOGIC_OP`, `BLEND_COLOR` | operation in bits 0 to 3; the constant RGBA | the same |
+| 0104h | `FRAGOP_ALPHA_TEST` | enable bit 0, function 4 to 6, reference 8 to 15 | the same |
+| 0105h, 0106h | `STENCIL_TEST`, `STENCIL_OP` | enable bit 0, function 4 to 6, write mask 8 to 15, reference 16 to 23, input mask 24 to 31; the actions on failing the stencil test, failing the depth test and passing, in bits 0 to 2, 4 to 6 and 8 to 10 | the same |
+| 0107h | `DEPTH_COLOR_MASK` | depth test enable bit 0, function 4 to 6, red to alpha written by bits 8 to 11, depth written by bit 12 | the same |
+| 0113h, 0115h | `COLORBUFFER_WRITE`, `DEPTHBUFFER_WRITE` | colour written when bits 0 to 3 are not all clear; depth and stencil when bits 0 and 1 are not | the same; Azahar for which bits count |
+| 0116h, 0117h | `DEPTHBUFFER_FORMAT`, `COLORBUFFER_FORMAT` | depth format in bits 0 and 1; colour format in bits 16 to 18 | the same, and [`pica-pixels.md`](pica-pixels.md) |
+| 011Ch to 011Eh | `DEPTHBUFFER_LOC`, `COLORBUFFER_LOC`, `FRAMEBUFFER_DIM` | addresses in eight-byte units; width in bits 0 to 10, height less one in 12 to 21 | the same |
+| 0140h to 01BFh | `LIGHTi_*` | per light, 10h words apart: specular 0 and 1, diffuse and ambient, each blue, green and red in ten bits with 255 one; x and y float16 at +4, z at +5; the spot direction as signed fixed1.1.11 at +6 and +7; directional bit 0, two-sided bit 1 and geometric factors bits 2 and 3 at +9; distance attenuation bias and scale, float20, at +Ah and +Bh | Fragment Lighting registers |
+| 01C0h, 01C2h | `LIGHTING_AMBIENT`, `LIGHTING_NUM_LIGHTS` | global ambient as a light colour; the count less one in bits 0 to 2 | the same |
+| 01C3h | `LIGHTING_CONFIG0` | shadow enable bit 0, Fresnel to the primary and secondary alphas bits 2 and 3, the configuration 4 to 7, shadow on primary and secondary 16 and 17, shadow inverted 18, shadow alpha 19, bump texture 22 and 23, shadow texture 24 and 25, clamp highlights 27, bump mode 28 and 29, bump renormalisation disabled 30 | the same |
+| 01C4h | `LIGHTING_CONFIG1` | per light, shadow disabled in bits 0 to 7, spot attenuation 8 to 15, distance attenuation 24 to 31; tables D0, D1, FR, RB, RG and RR disabled by bits 16, 17, 19, 20, 21 and 22 | the same; Azahar swaps RB and RR (ADR 0019) |
+| 01C6h | `LIGHTING_DISABLE` | bit 0: no lighting | the same; ADR 0019 for why `LIGHTING_ENABLE` is not read |
+| 01D0h to 01D2h | `LIGHTING_LUTINPUT_ABS`, `_SELECT`, `_SCALE` | a nibble per table, D0, D1, SP, FR, RB, RG, RR in turn: the absolute value off in its bit 1; the input in bits 0 to 2; the scale in bits 0 to 2, 0 to 3 for one to eight, 6 a quarter, 7 a half | the same |
+| 01D9h | `LIGHTING_LIGHT_PERMUTATION` | the light in each of eight slots, three bits a nibble | the same |
+| 0200h to 0226h | `ATTR_BUF_*` | the base in eight-byte units; each attribute's type and size and the fixed ones in the format words; each array's offset, components, stride and count | Geometry Pipeline registers |
+| 0227h, 0228h, 022Ah | `ATTR_BUF_INDEX_LIST`, `ATTR_BUF_NUMVERTICES`, `ATTR_BUF_FIRST_INDEX` | the index buffer's offset in bits 0 to 27, halfword indices when bit 31 is set; the count; the first index of a draw that has no index buffer | the same |
+| 0229h | `GEOSTAGE_CONFIG` | 2 in bits 0 and 1 when a geometry shader runs | the same |
+| 024Ah, 0252h | `VSH_OUTMAP_TOTAL1`, `GSH_MISC0` | the vertex shader's outputs less one in bits 0 to 3; the geometry shader's mode in bits 0 to 7, 0 taking a fixed number of outputs at a time | the same; Azahar for the mode's name and meaning |
+| 025Eh | `PRIMITIVE_CONFIG` | topology in bits 8 and 9: list, strip, fan, geometry shader | the same |
+| 0289h to 028Dh, 02B9h to 02BDh | `xSH_INPUTBUFFER_CONFIG`, `_ENTRYPOINT`, `_ATTRIBUTES_PERMUTATION`, `_OUTMAP_MASK` | inputs less one in bits 0 to 3; the entry in bits 0 to 15; a register for each input, a nibble each; the outputs written | Shader registers |
+
 ## Where Azahar reads a list differently
 
 None of these differences shows in a list the reference title writes. They are recorded because the comparison with Azahar over random lists would otherwise report them as mistakes.

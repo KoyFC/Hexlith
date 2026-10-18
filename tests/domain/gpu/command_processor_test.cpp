@@ -44,15 +44,15 @@ private:
 
 // Remembers what it was handed.
 struct RecordingExecutor {
-    void Draw(const PicaState& state, bool indexed) {
+    void Draw(PicaState& state, bool indexed) {
         draws.push_back({.vertices = state.Register(reg::VertexCount), .indexed = indexed});
     }
 
-    void ImmediateVertex(const PicaState& state) {
+    void ImmediateVertex(PicaState& state) {
         immediate.push_back(state.ImmediateVertex());
     }
 
-    void RestartPrimitive(const PicaState& /*state*/) {
+    void RestartPrimitive(PicaState& /*state*/) {
         ++restarts;
     }
 

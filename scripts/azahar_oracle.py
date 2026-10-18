@@ -33,4 +33,5 @@ def clear(work, names):
 
 
 # Every case file the oracle knows, so that each script can leave only its own.
-CASE_FILES = ("y2r-cases.bin", "pica-cases.bin", "shader-cases.bin", "texture-cases.bin")
+CASE_FILES = ("y2r-cases.bin", "pica-cases.bin", "shader-cases.bin", "texture-cases.bin",
+              "raster-cases.bin")

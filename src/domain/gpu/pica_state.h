@@ -109,6 +109,15 @@ public:
         return geometry_shader_;
     }
 
+    // The geometry shader sets its bool uniform b15 every time it has run,
+    // which a list's next write of the bool uniforms replaces. Source:
+    // GBATEK, GPUREG_xSH_BOOLUNIFORM, "Bit15 seems to be automatically set
+    // after executing shader code"; Azahar's GeometryPipeline::SubmitVertex.
+    void MarkGeometryShaderRun() {
+        constexpr std::uint16_t RunFlag = 1U << 15U;
+        geometry_shader_.bool_uniforms |= RunFlag;
+    }
+
     // The values the shader takes for inputs no attribute array supplies.
     [[nodiscard]] const std::array<Vec4, FixedAttributes>& FixedAttributeValues() const {
         return fixed_attributes_;

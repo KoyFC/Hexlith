@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace hexlith::domain::gpu {
@@ -57,6 +58,17 @@ public:
 
     [[nodiscard]] const std::vector<Primitive>& Primitives() const {
         return primitives_;
+    }
+
+    // The primitives emitted so far, leaving none. The vertex buffer and
+    // what SETEMIT last configured stay for the next run.
+    std::vector<Primitive> TakePrimitives() {
+        return std::exchange(primitives_, {});
+    }
+
+    // GPUREG_GSH_OUTMAP_MASK, which the next draw may have changed.
+    void SetOutputMask(std::uint32_t output_mask) {
+        output_mask_ = output_mask;
     }
 
 private:

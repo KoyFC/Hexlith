@@ -2,16 +2,24 @@ target_sources(
     hexlith_domain
     PRIVATE command_processor.h
             float24.h
+            fragment_stage.cpp
+            fragment_stage.h
             gpu_memory.cpp
             gpu_memory.h
             pica_registers.h
             pica_state.cpp
             pica_state.h
+            rasterizer.cpp
+            rasterizer.h
             recording_index.cpp
             recording_index.h
+            reference_renderer.cpp
+            reference_renderer.h
             shader_arithmetic.h
             shader_interpreter.cpp
             shader_interpreter.h
+            vertex_stage.cpp
+            vertex_stage.h
             pixel_formats.cpp
             pixel_formats.h
 )

@@ -4,6 +4,7 @@
 #include "domain/gpu/gpu_memory.h"
 #include "domain/gpu/pica_state.h"
 #include "domain/gpu/pixel_formats.h"
+#include "domain/gpu/reference_renderer.h"
 #include "domain/gpu/shader_interpreter.h"
 #include "domain/video/yuv_conversion.h"
 
@@ -57,6 +58,7 @@ constexpr std::string_view UsageText =
     "  pica-cases.bin  ->  pica-results.hexlith.bin\n"
     "  shader-cases.bin  ->  shader-results.hexlith.bin\n"
     "  texture-cases.bin  ->  texture-results.hexlith.bin\n"
+    "  raster-cases.bin  ->  raster-results.hexlith.bin, raster-vram-<step>.hexlith.bin\n"
     "\n"
     "The case formats are described in third_party/azahar/README.md.\n"
     "\n"
@@ -251,19 +253,19 @@ struct OracleExecutor {
         std::uint64_t extra = 0;
     };
 
-    void Draw(const gpu::PicaState& state, bool indexed) {
+    void Draw(gpu::PicaState& state, bool indexed) {
         events.push_back({.kind = indexed ? EventKind::DrawElements : EventKind::DrawArrays,
                           .registers = HashEventRegisters(state),
                           .extra = 0});
     }
 
-    void ImmediateVertex(const gpu::PicaState& state) {
+    void ImmediateVertex(gpu::PicaState& state) {
         events.push_back({.kind = EventKind::ImmediateVertex,
                           .registers = HashEventRegisters(state),
                           .extra = HashVectors(state.ImmediateVertex())});
     }
 
-    void RestartPrimitive(const gpu::PicaState& state) {
+    void RestartPrimitive(gpu::PicaState& state) {
         events.push_back({.kind = EventKind::PrimitiveRestart,
                           .registers = HashEventRegisters(state),
                           .extra = 0});
@@ -331,6 +333,60 @@ bool RunPica(const fs::path& directory) {
                       static_cast<std::streamsize>(ComparedRegisters * sizeof(std::uint32_t)));
         }
     }
+    return static_cast<bool>(in) && static_cast<bool>(out);
+}
+
+// Where the Azahar oracle puts each list before it runs it, in VRAM. The
+// reference renderer's side puts it there too, so that VRAM compares whole.
+constexpr std::uint32_t ListScratch = 0x185C0000;
+
+// raster-cases.bin and its results: every step's list drawn by the reference
+// renderer, sampling as Azahar's software renderer does, from memory all
+// zero, and VRAM hashed after each.
+bool RunRaster(const fs::path& directory) {
+    std::ifstream in(directory / "raster-cases.bin", std::ios::binary);
+    if (!in) {
+        return true;
+    }
+    std::ofstream out(directory / "raster-results.hexlith.bin", std::ios::binary);
+    auto memory = std::make_unique<gpu::GpuMemory>();
+    std::set<std::uint32_t> wanted;
+    const auto dumps = Take<std::uint32_t>(in);
+    for (std::uint32_t dump = 0; dump < dumps; ++dump) {
+        wanted.insert(Take<std::uint32_t>(in));
+    }
+    gpu::PicaState state;
+    SetUpInterrupts(state);
+    gpu::ReferenceRenderer renderer{*memory, gpu::Sampling::AzaharSoftware};
+    gpu::CommandProcessor processor{state, *memory, renderer};
+    const auto steps = Take<std::uint32_t>(in);
+    for (std::uint32_t step = 0; step < steps && in; ++step) {
+        const auto blocks = Take<std::uint32_t>(in);
+        for (std::uint32_t block = 0; block < blocks; ++block) {
+            const auto address = Take<std::uint32_t>(in);
+            static_cast<void>(memory->Write(address, TakeBytes(in)));
+        }
+        const std::vector<std::uint8_t> list = TakeBytes(in);
+        static_cast<void>(memory->Write(ListScratch, list));
+        static_cast<void>(processor.Run(list));
+        const std::span<const std::uint8_t> vram =
+            memory->Bytes(gpu::GpuMemory::VramBase, gpu::GpuMemory::VramSize);
+        Put(out, Hash(vram));
+        if (wanted.contains(step)) {
+            std::ofstream(directory / std::format("raster-vram-{}.hexlith.bin", step),
+                          std::ios::binary)
+                .write(reinterpret_cast<const char*>(vram.data()),
+                       static_cast<std::streamsize>(vram.size()));
+        }
+    }
+    const gpu::ReferenceRendererStatistics& statistics = renderer.Statistics();
+    const gpu::RasterizerStatistics& rasterization = renderer.Rasterization();
+    std::cout << std::format("{} draws, {} triangles, {} fragments{}{}\n",
+                             statistics.draws,
+                             rasterization.triangles,
+                             rasterization.fragments,
+                             statistics.unsupported_shader ? ", a shader not supported" : "",
+                             rasterization.unsupported ? ", a fragment setting not supported" : "");
     return static_cast<bool>(in) && static_cast<bool>(out);
 }
 
@@ -448,15 +504,15 @@ public:
         Put(*out_, std::uint32_t{0});
     }
 
-    void Draw(const gpu::PicaState& state, bool /*indexed*/) {
+    void Draw(gpu::PicaState& state, bool /*indexed*/) {
         Take(state);
     }
 
-    void ImmediateVertex(const gpu::PicaState& state) {
+    void ImmediateVertex(gpu::PicaState& state) {
         Take(state);
     }
 
-    void RestartPrimitive(const gpu::PicaState& /*state*/) {}
+    void RestartPrimitive(gpu::PicaState& /*state*/) {}
 
     void Finalize() {}
 
@@ -665,15 +721,15 @@ public:
         Put(*out_, std::uint32_t{0});
     }
 
-    void Draw(const gpu::PicaState& state, bool /*indexed*/) {
+    void Draw(gpu::PicaState& state, bool /*indexed*/) {
         Take(state);
     }
 
-    void ImmediateVertex(const gpu::PicaState& state) {
+    void ImmediateVertex(gpu::PicaState& state) {
         Take(state);
     }
 
-    void RestartPrimitive(const gpu::PicaState& /*state*/) {}
+    void RestartPrimitive(gpu::PicaState& /*state*/) {}
 
     void Finalize() {}
 
@@ -819,6 +875,10 @@ int Main(std::span<char* const> arguments) {
     }
     if (!RunTextures(directory)) {
         std::cerr << "hexlith-oracle-run: the texture cases could not be read or answered\n";
+        return Failure;
+    }
+    if (!RunRaster(directory)) {
+        std::cerr << "hexlith-oracle-run: the raster cases could not be read or answered\n";
         return Failure;
     }
     return Success;

@@ -46,6 +46,17 @@ inline std::int32_t ShaderTruncate(float value) {
     return static_cast<std::int32_t>(value);
 }
 
+// The same for a conversion to an unsigned integer, which the x86 build makes
+// through a 64-bit signed one: a NaN or a value out of that range leaves
+// zero in the low 32 bits.
+inline std::uint32_t TruncateToUnsigned(float value) {
+    constexpr float Limit = 9223372036854775808.0F;
+    if (std::isnan(value) || value >= Limit || value < -Limit) {
+        return 0;
+    }
+    return static_cast<std::uint32_t>(static_cast<std::int64_t>(value));
+}
+
 // The nearest float24 to a float32, for ShaderPrecision::Float24: sixteen
 // bits of mantissa rounded to nearest even, the exponent range of a bias of
 // 63, denormals flushed to a zero of the same sign, and a value too large

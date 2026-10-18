@@ -13,10 +13,10 @@ index 37eee4fc3..29a44b338 100644
      loader/3dsx.cpp
 diff --git a/src/core/hexlith_oracle.cpp b/src/core/hexlith_oracle.cpp
 new file mode 100644
-index 000000000..ec437f804
+index 000000000..c25b8a61c
 --- /dev/null
 +++ b/src/core/hexlith_oracle.cpp
-@@ -0,0 +1,629 @@
+@@ -0,0 +1,688 @@
 +// Hexlith oracle hooks. Licensed as the rest of Azahar, GPLv2 or any later
 +// version.
 +//
@@ -30,7 +30,9 @@ index 000000000..ec437f804
 +//                              quits after the last.
 +//   HEXLITH_ORACLE_DIR=<dir>   at the first vertical blank, runs the cases in
 +//                              the directory through Azahar's own code, writes
-+//                              the results beside them, and quits.
++//                              the results beside them, and quits. Raster
++//                              cases need the software renderer and the
++//                              shader interpreter configured.
 +
 +#include "core/hexlith_oracle.h"
 +
@@ -585,11 +587,68 @@ index 000000000..ec437f804
 +    }
 +}
 +
++// Rasterization -----------------------------------------------------------------
++
++constexpr u32 VramBase = 0x18000000;
++constexpr u32 VramSize = 0x00600000;
++constexpr u32 FcramBase = 0x20000000;
++constexpr u32 FcramSize = 0x08000000;
++
++// raster-cases.bin: a word with the count of steps whose VRAM is wanted and
++// their indices, then a word with the count of steps and each step as a step
++// of pica-cases.bin has it. Unlike there, the PICA core draws: the software
++// renderer rasterizes every triangle into memory, which starts all zero.
++// raster-results.bin answers each step with the FNV-1a hash of VRAM after it;
++// raster-vram-<step>.bin holds VRAM after each step asked for.
++void RunRaster(Core::System& system, const std::string& directory) {
++    std::ifstream in(directory + "/raster-cases.bin", std::ios::binary);
++    if (!in) {
++        return;
++    }
++    std::ofstream out(directory + "/raster-results.bin", std::ios::binary);
++    Pica::PicaCore& pica = system.GPU().PicaCore();
++    Memory::MemorySystem& memory = system.Memory();
++    u8* vram = memory.GetPhysicalPointer(VramBase);
++    std::memset(vram, 0, VramSize);
++    std::memset(memory.GetPhysicalPointer(FcramBase), 0, FcramSize);
++    ResetPica(pica);
++
++    std::set<u32> wanted;
++    const u32 dumps = Take<u32>(in);
++    for (u32 d = 0; d < dumps; ++d) {
++        wanted.insert(Take<u32>(in));
++    }
++    const u32 steps = Take<u32>(in);
++    for (u32 s = 0; s < steps; ++s) {
++        const u32 blocks = Take<u32>(in);
++        for (u32 b = 0; b < blocks; ++b) {
++            const u32 address = Take<u32>(in);
++            const std::vector<u8> bytes = TakeBytes(in);
++            u8* target = memory.GetPhysicalPointer(address);
++            if (target != nullptr) {
++                std::memcpy(target, bytes.data(), bytes.size());
++            }
++        }
++        const std::vector<u8> list = TakeBytes(in);
++        std::memcpy(memory.GetPhysicalPointer(ListScratch), list.data(), list.size());
++        pica.ProcessCmdList(ListScratch, static_cast<u32>(list.size()), false);
++
++        const u64 hash = Hash(vram, VramSize);
++        out.write(reinterpret_cast<const char*>(&hash), sizeof(hash));
++        if (wanted.count(s) != 0) {
++            std::ofstream(directory + "/raster-vram-" + std::to_string(s) + ".bin",
++                          std::ios::binary)
++                .write(reinterpret_cast<const char*>(vram), VramSize);
++        }
++    }
++}
++
 +void RunOracle(Core::System& system, const std::string& directory) {
 +    RunY2r(system, directory);
 +    RunPica(system, directory);
 +    RunShaders(directory);
 +    RunTextures(directory);
++    RunRaster(system, directory);
 +    std::ofstream(directory + "/done.txt") << "done\n";
 +}
 +

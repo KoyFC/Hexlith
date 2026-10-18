@@ -18,7 +18,7 @@ namespace hexlith::domain::gpu {
 // so that nothing between a command word and a draw is a virtual call (ADR
 // 0017).
 template<typename T>
-concept PicaExecutor = requires(T executor, const PicaState& state, bool indexed) {
+concept PicaExecutor = requires(T executor, PicaState& state, bool indexed) {
     // GPUREG_ATTR_BUF_DRAWARRAYS, or DRAWELEMENTS when indexed.
     executor.Draw(state, indexed);
     // A vertex given whole in immediate mode, in state.ImmediateVertex().

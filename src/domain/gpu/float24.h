@@ -7,23 +7,24 @@
 
 namespace hexlith::domain::gpu {
 
-// The PICA200's 24-bit float, float1.7.16: a sign bit, seven bits of
-// exponent with a bias of 63, and sixteen of mantissa (GBATEK, 3DS GPU
-// Internal Register Overview, Data Types). Every float24 value has an exact
-// float32, so the conversion loses nothing: a denormal stays a denormal's
-// value, and an exponent of all ones is an infinity or a NaN with the
-// mantissa kept. What the hardware does with denormals in arithmetic is the
-// shader interpreter's business, not the conversion's.
-constexpr float Float24ToFloat32(std::uint32_t bits) {
-    constexpr unsigned MantissaBits = 16;
+// The PICA200's narrow floats: a sign bit, an exponent of `ExponentBits`
+// with a bias of half its range, and `MantissaBits` of mantissa. GBATEK,
+// 3DS GPU Internal Register Overview, Data Types, names float1.5.10,
+// float1.7.12 and float1.7.16. Every value of each has an exact float32, so
+// the conversion loses nothing: a denormal keeps its value, and an exponent
+// of all ones is an infinity or a NaN with its mantissa kept. What the
+// hardware does with denormals in arithmetic is the shader interpreter's
+// business, not the conversion's.
+template<unsigned MantissaBits, unsigned ExponentBits>
+constexpr float NarrowFloatToFloat32(std::uint32_t bits) {
     constexpr std::uint32_t MantissaMask = (1U << MantissaBits) - 1;
-    constexpr std::uint32_t ExponentMask = 0x7F;
-    constexpr std::int32_t Float24Bias = 63;
+    constexpr std::uint32_t ExponentMask = (1U << ExponentBits) - 1;
+    constexpr auto Bias = static_cast<std::int32_t>((1U << (ExponentBits - 1)) - 1);
     constexpr std::int32_t Float32Bias = 127;
     constexpr unsigned Float32MantissaBits = 23;
     constexpr std::uint32_t Float32ExponentAllOnes = 0xFF;
 
-    const std::uint32_t sign = ((bits >> 23) & 1U) << 31;
+    const std::uint32_t sign = ((bits >> (MantissaBits + ExponentBits)) & 1U) << 31;
     std::uint32_t mantissa = bits & MantissaMask;
     auto exponent = static_cast<std::int32_t>((bits >> MantissaBits) & ExponentMask);
 
@@ -44,9 +45,24 @@ constexpr float Float24ToFloat32(std::uint32_t bits) {
         }
         mantissa &= MantissaMask;
     }
-    const auto biased = static_cast<std::uint32_t>(exponent - Float24Bias + Float32Bias);
+    const auto biased = static_cast<std::uint32_t>(exponent - Bias + Float32Bias);
     return std::bit_cast<float>(sign | (biased << Float32MantissaBits) |
                                 (mantissa << (Float32MantissaBits - MantissaBits)));
+}
+
+// float1.7.16: vertex attributes, uniforms, viewport and depth registers.
+constexpr float Float24ToFloat32(std::uint32_t bits) {
+    return NarrowFloatToFloat32<16, 7>(bits);
+}
+
+// float1.7.12: a light's distance attenuation bias and scale.
+constexpr float Float20ToFloat32(std::uint32_t bits) {
+    return NarrowFloatToFloat32<12, 7>(bits);
+}
+
+// float1.5.10: a light's position or direction.
+constexpr float Float16ToFloat32(std::uint32_t bits) {
+    return NarrowFloatToFloat32<10, 5>(bits);
 }
 
 }  // namespace hexlith::domain::gpu
