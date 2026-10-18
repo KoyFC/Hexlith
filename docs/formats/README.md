@@ -25,5 +25,6 @@ Where a note says `observed`, the measurement is reproducible from the reference
 | [`input-script.md`](input-script.md) | Hexlith's own scripts of the player's input, by frame |
 | [`gpu-recording.md`](gpu-recording.md) | Hexlith's own recordings of the GPU's work, for drawing without the game |
 | [`pica-registers.md`](pica-registers.md) | PICA200 command lists, and the registers whose writes do more than store |
+| [`pica-pixels.md`](pica-pixels.md) | PICA200 textures, colour and depth buffers: formats and tiling |
 
 Hexlith's own analysis tables are not a container format and are documented in [`../analysis-tables.md`](../analysis-tables.md).

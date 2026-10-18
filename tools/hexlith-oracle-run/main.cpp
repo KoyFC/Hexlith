@@ -3,6 +3,7 @@
 #include "domain/gpu/command_processor.h"
 #include "domain/gpu/gpu_memory.h"
 #include "domain/gpu/pica_state.h"
+#include "domain/gpu/pixel_formats.h"
 #include "domain/gpu/shader_interpreter.h"
 #include "domain/video/yuv_conversion.h"
 
@@ -47,6 +48,7 @@ constexpr std::string_view UsageText =
     "usage: hexlith-oracle-run <directory>\n"
     "       hexlith-oracle-run --shader-cases-from <recording> <directory>\n"
     "       hexlith-oracle-run --precision <directory>\n"
+    "       hexlith-oracle-run --texture-cases-from <recording> <directory>\n"
     "\n"
     "Runs every case file the directory holds and writes its results there, named\n"
     "as the Azahar oracle names them with .hexlith before the extension:\n"
@@ -54,6 +56,7 @@ constexpr std::string_view UsageText =
     "  y2r-cases.bin   ->  y2r-results.hexlith.bin\n"
     "  pica-cases.bin  ->  pica-results.hexlith.bin\n"
     "  shader-cases.bin  ->  shader-results.hexlith.bin\n"
+    "  texture-cases.bin  ->  texture-results.hexlith.bin\n"
     "\n"
     "The case formats are described in third_party/azahar/README.md.\n"
     "\n"
@@ -64,7 +67,10 @@ constexpr std::string_view UsageText =
     "\n"
     "With --precision, it runs the vertex shader cases of shader-cases.bin in float32\n"
     "and again rounded to float24 (ADR 0018), and prints how far o0, the position in\n"
-    "every program of the reference title, moves on a screen 400 pixels wide.\n";
+    "every program of the reference title, moves on a screen 400 pixels wide.\n"
+    "\n"
+    "With --texture-cases-from, it writes texture-cases.bin from a GPU recording: each\n"
+    "distinct texture a draw samples, every mipmap level of it, as memory held it.\n";
 
 template<typename T>
 T Take(std::istream& in) {
@@ -628,9 +634,168 @@ int MeasurePrecision(const fs::path& directory) {
     return Success;
 }
 
+// texture-cases.bin and its results.
+bool RunTextures(const fs::path& directory) {
+    std::ifstream in(directory / "texture-cases.bin", std::ios::binary);
+    if (!in) {
+        return true;
+    }
+    std::ofstream out(directory / "texture-results.hexlith.bin", std::ios::binary);
+    const auto cases = Take<std::uint32_t>(in);
+    for (std::uint32_t index = 0; index < cases && in; ++index) {
+        const auto format = static_cast<gpu::TextureFormat>(Take<std::uint32_t>(in));
+        const auto width = Take<std::uint32_t>(in);
+        const auto height = Take<std::uint32_t>(in);
+        const std::vector<std::uint8_t> bytes = TakeBytes(in);
+        for (const gpu::Color& texel : gpu::DecodeTexture(bytes, format, width, height)) {
+            const std::array<std::uint8_t, 4> rgba = {
+                texel.red, texel.green, texel.blue, texel.alpha};
+            out.write(reinterpret_cast<const char*>(rgba.data()), rgba.size());
+        }
+    }
+    return static_cast<bool>(in) && static_cast<bool>(out);
+}
+
+// Writes a case for every level of each distinct texture the recording's
+// draws sample with unit 0, 1 or 2.
+class TextureCaseWriter {
+public:
+    TextureCaseWriter(std::ostream& out, const gpu::GpuMemory& memory)
+        : out_(&out), memory_(&memory) {
+        Put(*out_, std::uint32_t{0});
+    }
+
+    void Draw(const gpu::PicaState& state, bool /*indexed*/) {
+        Take(state);
+    }
+
+    void ImmediateVertex(const gpu::PicaState& state) {
+        Take(state);
+    }
+
+    void RestartPrimitive(const gpu::PicaState& /*state*/) {}
+
+    void Finalize() {}
+
+    void Close() {
+        out_->seekp(0);
+        Put(*out_, cases_);
+    }
+
+    [[nodiscard]] std::uint32_t Cases() const {
+        return cases_;
+    }
+
+private:
+    // Each unit's dimensions, sampling, level and address registers, and its
+    // format register. Source: GBATEK, Texturing registers (Generic
+    // Textures); Azahar's TextureConfig for the field positions.
+    struct Unit {
+        std::uint16_t dimensions;
+        std::uint16_t levels;
+        std::uint16_t address;
+        std::uint16_t format;
+    };
+
+    static constexpr std::array<Unit, 3> Units = {{
+        {.dimensions = 0x082, .levels = 0x084, .address = 0x085, .format = 0x08E},
+        {.dimensions = 0x092, .levels = 0x094, .address = 0x095, .format = 0x096},
+        {.dimensions = 0x09A, .levels = 0x09C, .address = 0x09D, .format = 0x09E},
+    }};
+
+    void Take(const gpu::PicaState& state) {
+        constexpr std::uint16_t TextureConfig = 0x080;
+        for (std::size_t unit = 0; unit < Units.size(); ++unit) {
+            if (((state.Register(TextureConfig) >> unit) & 1U) != 0) {
+                TakeUnit(state, Units.at(unit));
+            }
+        }
+    }
+
+    void TakeUnit(const gpu::PicaState& state, const Unit& unit) {
+        constexpr std::uint32_t SideMask = 0x7FF;
+        constexpr unsigned WidthShift = 16;
+        constexpr unsigned MaximumLevelShift = 16;
+        constexpr std::uint32_t LevelMask = 0xF;
+        constexpr std::uint32_t AddressMask = 0x0FFFFFFF;
+        constexpr unsigned AddressShift = 3;
+        constexpr std::uint32_t FormatMask = 0xF;
+        constexpr std::uint32_t SmallestSide = 8;
+        const std::uint32_t dimensions = state.Register(unit.dimensions);
+        std::uint32_t width = (dimensions >> WidthShift) & SideMask;
+        std::uint32_t height = dimensions & SideMask;
+        const std::uint32_t levels =
+            ((state.Register(unit.levels) >> MaximumLevelShift) & LevelMask) + 1;
+        std::uint32_t address = (state.Register(unit.address) & AddressMask) << AddressShift;
+        const std::uint32_t format = state.Register(unit.format) & FormatMask;
+        if (format >= gpu::TextureFormatCount) {
+            return;
+        }
+        for (std::uint32_t level = 0;
+             level < levels && width >= SmallestSide && height >= SmallestSide;
+             ++level) {
+            const std::size_t size =
+                gpu::TextureBytes(static_cast<gpu::TextureFormat>(format), width, height);
+            const std::span<const std::uint8_t> bytes =
+                memory_->Bytes(address, static_cast<std::uint32_t>(size));
+            if (bytes.size() != size) {
+                return;
+            }
+            const std::uint64_t key = Hash(bytes,
+                                           HashStart ^ (std::uint64_t{format} << 48U) ^
+                                               (std::uint64_t{width} << 24U) ^ height);
+            if (seen_.insert(key).second) {
+                ++cases_;
+                Put(*out_, format);
+                Put(*out_, width);
+                Put(*out_, height);
+                Put(*out_, static_cast<std::uint32_t>(size));
+                out_->write(reinterpret_cast<const char*>(bytes.data()),
+                            static_cast<std::streamsize>(size));
+            }
+            address += static_cast<std::uint32_t>(size);
+            width /= 2;
+            height /= 2;
+        }
+    }
+
+    std::ostream* out_;
+    const gpu::GpuMemory* memory_;
+    std::uint32_t cases_ = 0;
+    std::set<std::uint64_t> seen_;
+};
+
+int WriteTextureCases(const fs::path& recording, const fs::path& directory) {
+    fs::create_directories(directory);
+    std::ofstream out(directory / "texture-cases.bin", std::ios::binary);
+    hexlith::adapters::filesystem::GpuRecordingFiles source{recording};
+    auto memory = std::make_unique<gpu::GpuMemory>();
+    gpu::PicaState state;
+    TextureCaseWriter writer{out, *memory};
+    gpu::CommandProcessor processor{state, *memory, writer};
+    hexlith::application::GpuReplayVisitor visitor;
+    visitor.list = [&processor](const gpu::RecordedList& /*list*/,
+                                std::span<const std::uint8_t> bytes) {
+        const hexlith::core::Result<gpu::CommandListRun> run = processor.Run(bytes);
+        return run ? hexlith::core::Status{} : hexlith::core::Status{run.Failure()};
+    };
+    const hexlith::core::Status replayed =
+        hexlith::application::ReplayGpuRecording(source, *memory, visitor);
+    if (!replayed) {
+        std::cerr << "hexlith-oracle-run: " << replayed.Failure().Message() << '\n';
+        return Failure;
+    }
+    writer.Close();
+    std::cout << writer.Cases() << " texture cases\n";
+    return out ? Success : Failure;
+}
+
 int Main(std::span<char* const> arguments) {
     if (arguments.size() == 3 && std::string_view{arguments[1]} == "--precision") {
         return MeasurePrecision(fs::path{arguments[2]});
+    }
+    if (arguments.size() == 4 && std::string_view{arguments[1]} == "--texture-cases-from") {
+        return WriteTextureCases(fs::path{arguments[2]}, fs::path{arguments[3]});
     }
     if (arguments.size() == 4 && std::string_view{arguments[1]} == "--shader-cases-from") {
         return WriteShaderCases(fs::path{arguments[2]}, fs::path{arguments[3]});
@@ -650,6 +815,10 @@ int Main(std::span<char* const> arguments) {
     }
     if (!RunShaders(directory)) {
         std::cerr << "hexlith-oracle-run: the shader cases could not be read or answered\n";
+        return Failure;
+    }
+    if (!RunTextures(directory)) {
+        std::cerr << "hexlith-oracle-run: the texture cases could not be read or answered\n";
         return Failure;
     }
     return Success;

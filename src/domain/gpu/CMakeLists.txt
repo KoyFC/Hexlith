@@ -12,4 +12,6 @@ target_sources(
             shader_arithmetic.h
             shader_interpreter.cpp
             shader_interpreter.h
+            pixel_formats.cpp
+            pixel_formats.h
 )

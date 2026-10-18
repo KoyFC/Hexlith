@@ -32,12 +32,13 @@ Usage:
 """
 
 import argparse
-import os
 import pathlib
 import random
 import struct
 import subprocess
 import sys
+
+from azahar_oracle import run_azahar
 
 SECTIONS = [
     "registers",
@@ -296,18 +297,6 @@ def read_results(path, cases):
             case.append((events, hashes, registers))
         results.append(case)
     return results
-
-
-def run_azahar(azahar, image, work, timeout):
-    environment = dict(os.environ)
-    environment["HEXLITH_ORACLE_DIR"] = str(work)
-    environment["XDG_CONFIG_HOME"] = str(work / "config")
-    environment["XDG_DATA_HOME"] = str(work / "data")
-    (work / "done.txt").unlink(missing_ok=True)
-    subprocess.run([azahar, image], env=environment, timeout=timeout,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-    if not (work / "done.txt").exists():
-        sys.exit("Azahar quit without running the cases")
 
 
 def compare(cases, ours, theirs):

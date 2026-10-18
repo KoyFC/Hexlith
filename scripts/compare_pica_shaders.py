@@ -30,12 +30,13 @@ Usage:
 
 import argparse
 import math
-import os
 import pathlib
 import random
 import struct
 import subprocess
 import sys
+
+from azahar_oracle import run_azahar
 
 CODE_WORDS = 4096
 UNIFORMS = 96
@@ -220,18 +221,6 @@ def register_name(index):
                 names.append(f"{bank}{number}.{component}")
     names += ["bank", "a0.x", "a0.y", "aL", "cmp.x", "cmp.y"]
     return names[index]
-
-
-def run_azahar(azahar, image, work, timeout):
-    environment = dict(os.environ)
-    environment["HEXLITH_ORACLE_DIR"] = str(work)
-    environment["XDG_CONFIG_HOME"] = str(work / "config")
-    environment["XDG_DATA_HOME"] = str(work / "data")
-    (work / "done.txt").unlink(missing_ok=True)
-    subprocess.run([azahar, image], env=environment, timeout=timeout,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-    if not (work / "done.txt").exists():
-        sys.exit("Azahar quit without running the cases")
 
 
 def describe(case):

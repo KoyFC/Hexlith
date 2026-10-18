@@ -28,12 +28,13 @@ Usage:
 
 import argparse
 import collections
-import os
 import pathlib
 import random
 import struct
 import subprocess
 import sys
+
+from azahar_oracle import run_azahar
 
 # The standard coefficient sets of y2r:u: ITU Rec. 601 and 709, with and
 # without scaling. Source: standard_coefficients in Azahar's y2r_u.cpp.
@@ -107,18 +108,6 @@ def read_results(path):
         results.append(data[at + 4:at + 4 + length])
         at += 4 + length
     return results
-
-
-def run_azahar(azahar, image, work, timeout):
-    environment = dict(os.environ)
-    environment["HEXLITH_ORACLE_DIR"] = str(work)
-    environment["XDG_CONFIG_HOME"] = str(work / "config")
-    environment["XDG_DATA_HOME"] = str(work / "data")
-    (work / "done.txt").unlink(missing_ok=True)
-    subprocess.run([azahar, image], env=environment, timeout=timeout,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-    if not (work / "done.txt").exists():
-        sys.exit("Azahar quit without running the cases")
 
 
 def describe(case):

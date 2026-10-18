@@ -13,10 +13,10 @@ index 37eee4fc3..29a44b338 100644
      loader/3dsx.cpp
 diff --git a/src/core/hexlith_oracle.cpp b/src/core/hexlith_oracle.cpp
 new file mode 100644
-index 000000000..c793284ab
+index 000000000..ec437f804
 --- /dev/null
 +++ b/src/core/hexlith_oracle.cpp
-@@ -0,0 +1,596 @@
+@@ -0,0 +1,629 @@
 +// Hexlith oracle hooks. Licensed as the rest of Azahar, GPLv2 or any later
 +// version.
 +//
@@ -57,6 +57,7 @@ index 000000000..c793284ab
 +#include "video_core/pica/shader_setup.h"
 +#include "video_core/pica/shader_unit.h"
 +#include "video_core/shader/shader_interpreter.h"
++#include "video_core/texture/texture_decode.h"
 +
 +namespace Hexlith {
 +namespace {
@@ -553,10 +554,42 @@ index 000000000..c793284ab
 +    }
 +}
 +
++// Textures ----------------------------------------------------------------------
++
++// texture-cases.bin: a word with the count of cases, then each case: the
++// format as GPUREG_TEXUNITi_TYPE holds it, the width and the height, then
++// the texture's bytes as a word of length and the bytes. texture-results.bin
++// answers each case with every texel, row by row in stored order, as red,
++// green, blue and alpha bytes.
++void RunTextures(const std::string& directory) {
++    std::ifstream in(directory + "/texture-cases.bin", std::ios::binary);
++    if (!in) {
++        return;
++    }
++    std::ofstream out(directory + "/texture-results.bin", std::ios::binary);
++    const u32 cases = Take<u32>(in);
++    for (u32 c = 0; c < cases; ++c) {
++        Pica::Texture::TextureInfo info{};
++        info.format = static_cast<Pica::TexturingRegs::TextureFormat>(Take<u32>(in));
++        info.width = Take<u32>(in);
++        info.height = Take<u32>(in);
++        info.SetDefaultStride();
++        const std::vector<u8> bytes = TakeBytes(in);
++        for (u32 y = 0; y < info.height; ++y) {
++            for (u32 x = 0; x < info.width; ++x) {
++                const auto texel = Pica::Texture::LookupTexture(bytes.data(), x, y, info, false);
++                const u8 rgba[4] = {texel.r(), texel.g(), texel.b(), texel.a()};
++                out.write(reinterpret_cast<const char*>(rgba), sizeof(rgba));
++            }
++        }
++    }
++}
++
 +void RunOracle(Core::System& system, const std::string& directory) {
 +    RunY2r(system, directory);
 +    RunPica(system, directory);
 +    RunShaders(directory);
++    RunTextures(directory);
 +    std::ofstream(directory + "/done.txt") << "done\n";
 +}
 +

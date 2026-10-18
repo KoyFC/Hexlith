@@ -5,6 +5,7 @@ hexlith_add_test(
     gpu_memory_test.cpp
     recording_index_test.cpp
     shader_interpreter_test.cpp
+    pixel_formats_test.cpp
 )
 
 target_link_libraries(hexlith_domain_gpu_test PRIVATE Hexlith::Domain)
