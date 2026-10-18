@@ -16,6 +16,8 @@ add_library(
     golden_trace.h
     gpu_recording.cpp
     gpu_recording.h
+    gpu_replay.cpp
+    gpu_replay.h
     input_script.cpp
     input_script.h
     manifest.cpp

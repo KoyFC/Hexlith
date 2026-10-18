@@ -4,6 +4,7 @@ hexlith_add_test(
     directory_blob_sink_test.cpp
     directory_tree_store_test.cpp
     gpu_recording_directory_test.cpp
+    gpu_recording_files_test.cpp
     file_rom_source_test.cpp
     scripted_input_test.cpp
 )

@@ -25,7 +25,9 @@ A command list's `gx` line comes first, then a `page` line for every page of VRA
 
 ## Replaying
 
-Start with GPU-visible memory all zeros and read the index in order, writing each page as it comes. When a `list` line is reached, memory is as it stood when the game submitted that list. The other GX commands are there for their order and their parameters: what a fill or a copy did to memory also appears in the pages before the next list.
+`application::ReplayGpuRecording` does this. Start with GPU-visible memory all zeros and read the index in order, writing each page as it comes. When a `list` line is reached, memory is as it stood when the game submitted that list. The other GX commands are there for their order and their parameters: what a fill or a copy did to memory also appears in the pages before the next list.
+
+A page's address is the game's virtual address. The GPU's registers hold physical ones, so a replay writes each page at the physical address behind it: VRAM at `0x1F000000` is physical `0x18000000`, and a linear heap, at `0x14000000` or `0x30000000`, is FCRAM from physical `0x20000000` (`domain::gpu::GpuMemory`).
 
 What a screen shows in a frame is the framebuffer its last `framebuffer` line chose, as it stands once every line of the frames before has been replayed. A display transfer writes that framebuffer, and a replay has to carry it out, because the recording only sees memory before a list and the transfer comes after the frame's last one.
 
@@ -47,15 +49,15 @@ Recorded on 2026-10-17 from a new game, with two taps of A through the language 
 | Pages recorded | 6,886 |
 | On disk | 22 MB |
 
-Recorded again on 2026-10-18 in format 2, the same way, with `--stop-after frame:620`. The game draws every other frame from frame 228:
+Recorded again on 2026-10-18 in format 2, the same way, with `--stop-after frame:1150 --limit 9000000000`, which reaches the title screen at frame 932 and its video. The game draws every other frame from frame 228:
 
 | | |
 | --- | --- |
-| Command lists | 2,896, from 32 to 38,736 bytes, 11,768,176 bytes in all |
-| Memory fills | 839 |
-| Display transfers | 839 |
-| Cache flushes | 2,164 |
-| Framebuffers shown | 840, every one in VRAM, in the 24-bit format |
-| Pages recorded | 29,391 |
-| On disk | 73 MB |
-| Time | 72 seconds |
+| Command lists | 4,915, from 32 to 38,736 bytes, 14,282,800 bytes in all |
+| Memory fills | 1,369 |
+| Display transfers | 1,369 |
+| Cache flushes | 3,489 |
+| Framebuffers shown | 1,370, every one in VRAM, in the 24-bit format |
+| Pages recorded | 70,320 |
+| On disk | 206 MB |
+| Time | 148 seconds |

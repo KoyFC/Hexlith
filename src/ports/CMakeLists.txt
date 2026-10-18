@@ -11,6 +11,7 @@ target_sources(
     hexlith_ports
     INTERFACE FILE_SET HEADERS BASE_DIRS "${PROJECT_SOURCE_DIR}/src" FILES blob_sink.h
                                                                            gpu_recorder.h
+                                                                           gpu_recording_source.h
                                                                            input_source.h
                                                                            rom_source.h
                                                                            tree_store.h

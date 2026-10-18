@@ -49,7 +49,7 @@ Presets are the local path. CI configures explicitly with `-DCMAKE_CXX_COMPILER`
 
 `clang-tidy` is not run by CI, but the configuration is kept correct and the tree is kept clean against it: `clang-tidy -p build/ci $(git ls-files '*.cpp' '*.h')`.
 
-The ARM and video code and their tests turn off `readability-magic-numbers` in a `.clang-tidy` of their own, with the reason in the file. A decoder or a pixel format is written in bit positions and its tests in encodings, and naming those would hide what the line says.
+The ARM, video and GPU code and their tests turn off `readability-magic-numbers` in a `.clang-tidy` of their own, with the reason in the file. A decoder or a pixel format is written in bit positions and its tests in encodings, and naming those would hide what the line says.
 
 `src/domain/services` turns off the two checks that would make a command handler static or const. Handlers sit in one table of pointers to member functions, so they all keep the same signature whether or not they touch the service's state.
 
