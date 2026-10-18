@@ -1,7 +1,12 @@
 target_sources(
     hexlith_domain
-    PRIVATE gpu_memory.cpp
+    PRIVATE command_processor.h
+            float24.h
+            gpu_memory.cpp
             gpu_memory.h
+            pica_registers.h
+            pica_state.cpp
+            pica_state.h
             recording_index.cpp
             recording_index.h
 )
