@@ -1,0 +1,7 @@
+# Pixel formats, tile layouts and the hardware's registers are specified in
+# bit positions and field widths, and a bit position is the specification
+# rather than a number that needs a name. Naming each one would hide what a
+# line says and make it impossible to check against GBATEK or 3dbrew by eye.
+# Every other check stays on.
+InheritParentConfig: true
+Checks: "-readability-magic-numbers"

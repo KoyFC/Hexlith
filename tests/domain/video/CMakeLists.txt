@@ -1,0 +1,3 @@
+hexlith_add_test(hexlith_domain_video_test morton_test.cpp yuv_conversion_test.cpp)
+
+target_link_libraries(hexlith_domain_video_test PRIVATE Hexlith::Domain)

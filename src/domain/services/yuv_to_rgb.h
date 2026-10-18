@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <vector>
 
 namespace hexlith::domain::services {
 
@@ -19,8 +20,10 @@ namespace hexlith::domain::services {
 // Every setting is kept and answered back, the checks Azahar makes on the
 // line width, the line count and the coefficient set are made, and a
 // conversion ends 50,000 ticks after it starts, Azahar's MinY2RDelay, with
-// the event signalled. No pixel is converted: nothing on the way to the
-// title screen reads the result, and drawing is the next phase's.
+// the event signalled. The conversion itself is done at the start, as
+// Azahar does it: the samples are gathered from the buffers the title named,
+// each in units with a gap after each, converted by video::ConvertYuvToRgb,
+// and scattered to the output buffer the same way.
 class YuvToRgb final : public CommandTable<YuvToRgb> {
 public:
     explicit YuvToRgb(kernel::Kernel& kernel);
@@ -89,6 +92,13 @@ private:
     void SetDitheringWeights(kernel::IpcRequest& request);
     void GetDitheringWeights(kernel::IpcRequest& request);
     void StartConversion(kernel::IpcRequest& request);
+    // Converts the image the settings and buffers describe, if the hardware
+    // could. A buffer that cannot be read or written leaves the output as it
+    // was, or written in part.
+    void Convert();
+    [[nodiscard]] std::vector<std::uint8_t> Gather(const Transfer& transfer,
+                                                   std::size_t bytes) const;
+    void Scatter(const Transfer& transfer, std::span<const std::uint8_t> bytes);
     void StopConversion(kernel::IpcRequest& request);
     void IsBusyConversion(kernel::IpcRequest& request);
     void SetPackageParameter(kernel::IpcRequest& request);

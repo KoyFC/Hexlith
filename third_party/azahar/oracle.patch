@@ -1,0 +1,358 @@
+diff --git a/src/core/CMakeLists.txt b/src/core/CMakeLists.txt
+index 37eee4fc3..29a44b338 100644
+--- a/src/core/CMakeLists.txt
++++ b/src/core/CMakeLists.txt
+@@ -466,6 +466,8 @@ add_library(citra_core STATIC EXCLUDE_FROM_ALL
+     hw/rsa/rsa.h
+     hw/unique_data.cpp
+     hw/unique_data.h
++    hexlith_oracle.cpp
++    hexlith_oracle.h
+     hw/y2r.cpp
+     hw/y2r.h
+     loader/3dsx.cpp
+diff --git a/src/core/hexlith_oracle.cpp b/src/core/hexlith_oracle.cpp
+new file mode 100644
+index 000000000..b6e9e2c9a
+--- /dev/null
++++ b/src/core/hexlith_oracle.cpp
+@@ -0,0 +1,271 @@
++// Hexlith oracle hooks. Licensed as the rest of Azahar, GPLv2 or any later
++// version.
++//
++// Three environment variables switch them on, each independently:
++//
++//   HEXLITH_INPUT=<file>       the player's input, in Hexlith's input script
++//                              format (tap, press and release of buttons), by
++//                              vertical blank.
++//   HEXLITH_CAPTURE_DIR=<dir>  with HEXLITH_CAPTURE_FRAMES=<n,n,...>, writes
++//                              both screens' framebuffers at those frames and
++//                              quits after the last.
++//   HEXLITH_ORACLE_DIR=<dir>   at the first vertical blank, runs the cases in
++//                              the directory through Azahar's own code, writes
++//                              the results beside them, and quits.
++
++#include "core/hexlith_oracle.h"
++
++#include <cstdio>
++#include <cstdlib>
++#include <fstream>
++#include <iterator>
++#include <map>
++#include <set>
++#include <sstream>
++#include <string>
++#include <vector>
++
++#include "core/core.h"
++#include "core/hle/service/cam/y2r_u.h"
++#include "core/hw/y2r.h"
++#include "core/memory.h"
++#include "video_core/gpu.h"
++#include "video_core/pica/pica_core.h"
++
++namespace Hexlith {
++namespace {
++
++u64 frame = 0;
++
++std::string Environment(const char* name) {
++    const char* value = std::getenv(name);
++    return value == nullptr ? std::string{} : std::string{value};
++}
++
++// Input ---------------------------------------------------------------------
++
++// HID pad bits by Hexlith's button names. Source: PadState in hid.h.
++const std::map<std::string, u32> ButtonBits = {
++    {"a", 1u << 0},      {"b", 1u << 1},     {"select", 1u << 2}, {"start", 1u << 3},
++    {"right", 1u << 4},  {"left", 1u << 5},  {"up", 1u << 6},     {"down", 1u << 7},
++    {"r", 1u << 8},      {"l", 1u << 9},     {"x", 1u << 10},     {"y", 1u << 11},
++};
++
++// The buttons held in each frame, from the frame they change on.
++struct Script {
++    bool loaded = false;
++    std::map<u64, u32> held_from;
++};
++
++Script LoadScript() {
++    Script script;
++    script.loaded = true;
++    const std::string path = Environment("HEXLITH_INPUT");
++    if (path.empty()) {
++        return script;
++    }
++    std::ifstream file(path);
++    std::map<u64, std::vector<std::pair<u32, bool>>> changes;
++    std::string line;
++    while (std::getline(file, line)) {
++        line = line.substr(0, line.find('#'));
++        std::istringstream words(line);
++        u64 at = 0;
++        std::string action;
++        if (!(words >> at >> action)) {
++            continue;
++        }
++        u32 bits = 0;
++        u64 length = 4;
++        std::string word;
++        while (words >> word) {
++            if (word == "for") {
++                words >> length;
++            } else if (ButtonBits.count(word) != 0) {
++                bits |= ButtonBits.at(word);
++            }
++        }
++        if (action == "press" || action == "tap") {
++            changes[at].push_back({bits, true});
++        }
++        if (action == "release") {
++            changes[at].push_back({bits, false});
++        }
++        if (action == "tap") {
++            changes[at + length].push_back({bits, false});
++        }
++    }
++    u32 held = 0;
++    for (const auto& [at, list] : changes) {
++        for (const auto& [bits, down] : list) {
++            held = down ? (held | bits) : (held & ~bits);
++        }
++        script.held_from[at] = held;
++    }
++    return script;
++}
++
++// Captures --------------------------------------------------------------------
++
++std::set<u64> CaptureFrames() {
++    std::set<u64> frames;
++    std::stringstream list(Environment("HEXLITH_CAPTURE_FRAMES"));
++    std::string item;
++    while (std::getline(list, item, ',')) {
++        if (!item.empty()) {
++            frames.insert(std::stoull(item));
++        }
++    }
++    return frames;
++}
++
++// Both screens as the LCD shows them: the framebuffer the configuration
++// selects, its format and stride, 400 and 320 rows of 240 pixels.
++void Capture(Core::System& system, const std::string& directory) {
++    const auto& regs = system.GPU().PicaCore().regs;
++    constexpr u32 Rows[2] = {400, 320};
++    for (u32 screen = 0; screen < 2; ++screen) {
++        const auto& config = regs.framebuffer_config[screen];
++        const u32 address =
++            config.second_fb_active ? config.address_left2 : config.address_left1;
++        const u32 size = config.stride * Rows[screen];
++        const u8* bytes = system.Memory().GetPhysicalPointer(address);
++        const std::string name = directory + "/frame-" + std::to_string(frame) + "-" +
++                                 (screen == 0 ? "top" : "bottom");
++        std::ofstream out(name + ".bin", std::ios::binary);
++        if (bytes != nullptr) {
++            out.write(reinterpret_cast<const char*>(bytes), size);
++        }
++        std::ofstream info(name + ".txt");
++        info << "address " << std::hex << address << "\nformat " << config.format
++             << "\nstride " << std::dec << config.stride << "\nrows " << Rows[screen] << '\n';
++    }
++}
++
++// Y2R cases -------------------------------------------------------------------
++
++// Where the cases' buffers are put: VRAM, which every application maps at
++// 0x1F000000, far from anything the game has drawn by its first frame.
++constexpr VAddr InputAddress = 0x1F000000;
++constexpr VAddr OutputAddress = 0x1F100000;
++
++template <typename T>
++T Take(std::istream& in) {
++    T value{};
++    in.read(reinterpret_cast<char*>(&value), sizeof(value));
++    return value;
++}
++
++std::vector<u8> TakeBytes(std::istream& in) {
++    std::vector<u8> bytes(Take<u32>(in));
++    in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
++    return bytes;
++}
++
++// A buffer of one sample or one pixel a unit and no gap, so that any size
++// divides into units.
++Service::Y2R::ConversionBuffer Buffer(VAddr address, u32 size, u16 unit) {
++    Service::Y2R::ConversionBuffer buffer{};
++    buffer.address = address;
++    buffer.image_size = size;
++    buffer.transfer_unit = unit;
++    buffer.gap = 0;
++    return buffer;
++}
++
++// y2r-cases.bin, a count then each case: input format, output format,
++// rotation and block alignment as bytes, the width and the lines as
++// halfwords, eight signed halfword coefficients, the alpha and three bytes of
++// padding, then the Y, U, V and YUYV buffers as they sit in memory, each a
++// word of length and its bytes. y2r-results.bin answers each with a word of
++// length and the output bytes.
++void RunY2r(Core::System& system, const std::string& directory) {
++    std::ifstream in(directory + "/y2r-cases.bin", std::ios::binary);
++    if (!in) {
++        return;
++    }
++    std::ofstream out(directory + "/y2r-results.bin", std::ios::binary);
++    Memory::MemorySystem& memory = system.Memory();
++    const u32 count = Take<u32>(in);
++    for (u32 index = 0; index < count; ++index) {
++        Service::Y2R::ConversionConfiguration cvt{};
++        cvt.input_format = static_cast<Service::Y2R::InputFormat>(Take<u8>(in));
++        cvt.output_format = static_cast<Service::Y2R::OutputFormat>(Take<u8>(in));
++        cvt.rotation = static_cast<Service::Y2R::Rotation>(Take<u8>(in));
++        cvt.block_alignment = static_cast<Service::Y2R::BlockAlignment>(Take<u8>(in));
++        cvt.input_line_width = Take<u16>(in);
++        cvt.input_lines = Take<u16>(in);
++        for (auto& coefficient : cvt.coefficients) {
++            coefficient = Take<s16>(in);
++        }
++        cvt.alpha = Take<u8>(in);
++        Take<u8>(in);
++        Take<u16>(in);
++
++        const bool wide = cvt.input_format == Service::Y2R::InputFormat::YUV422_Indiv16 ||
++                          cvt.input_format == Service::Y2R::InputFormat::YUV420_Indiv16;
++        const u16 sample = wide ? 2 : 1;
++        VAddr next = InputAddress;
++        Service::Y2R::ConversionBuffer* planes[4] = {&cvt.src_Y, &cvt.src_U, &cvt.src_V,
++                                                     &cvt.src_YUYV};
++        for (auto* plane : planes) {
++            const std::vector<u8> bytes = TakeBytes(in);
++            if (!bytes.empty()) {
++                memory.WriteBlock(next, bytes.data(), bytes.size());
++            }
++            *plane = Buffer(next, static_cast<u32>(bytes.size()), sample);
++            next += 0x10000;
++        }
++        static constexpr u16 PixelBytes[4] = {4, 3, 2, 2};
++        const u16 pixel = PixelBytes[static_cast<u32>(cvt.output_format) & 3];
++        const u32 output_size = cvt.input_line_width * cvt.input_lines * pixel;
++        cvt.dst = Buffer(OutputAddress, output_size, pixel);
++
++        HW::Y2R::PerformConversion(memory, cvt);
++
++        std::vector<u8> result(output_size);
++        memory.ReadBlock(OutputAddress, result.data(), result.size());
++        const u32 length = output_size;
++        out.write(reinterpret_cast<const char*>(&length), sizeof(length));
++        out.write(reinterpret_cast<const char*>(result.data()), result.size());
++    }
++}
++
++void RunOracle(Core::System& system, const std::string& directory) {
++    RunY2r(system, directory);
++    std::ofstream(directory + "/done.txt") << "done\n";
++}
++
++} // namespace
++
++void OnVBlank(Core::System& system) {
++    ++frame;
++
++    static const std::string oracle = Environment("HEXLITH_ORACLE_DIR");
++    if (!oracle.empty()) {
++        RunOracle(system, oracle);
++        std::fflush(nullptr);
++        std::_Exit(0);
++    }
++
++    static const std::string capture = Environment("HEXLITH_CAPTURE_DIR");
++    static const std::set<u64> frames = CaptureFrames();
++    if (!capture.empty() && frames.count(frame) != 0) {
++        Capture(system, capture);
++        if (frame == *frames.rbegin()) {
++            std::fflush(nullptr);
++            std::_Exit(0);
++        }
++    }
++}
++
++u32 ScriptedButtons() {
++    static const Script script = LoadScript();
++    const auto after = script.held_from.upper_bound(frame);
++    if (after == script.held_from.begin()) {
++        return 0;
++    }
++    return std::prev(after)->second;
++}
++
++} // namespace Hexlith
+diff --git a/src/core/hexlith_oracle.h b/src/core/hexlith_oracle.h
+new file mode 100644
+index 000000000..4bb78df65
+--- /dev/null
++++ b/src/core/hexlith_oracle.h
+@@ -0,0 +1,22 @@
++// Hexlith oracle hooks: scripted input, framebuffer captures and batch runs
++// of Azahar's own hardware code on cases Hexlith generates. Licensed as the
++// rest of Azahar, GPLv2 or any later version.
++
++#pragma once
++
++#include "common/common_types.h"
++
++namespace Core {
++class System;
++}
++
++namespace Hexlith {
++
++// Called at every vertical blank of the top screen, once the interrupts are
++// signalled and the framebuffers for the frame are chosen.
++void OnVBlank(Core::System& system);
++
++// The buttons the input script holds in the current frame, as HID pad bits.
++u32 ScriptedButtons();
++
++} // namespace Hexlith
+diff --git a/src/core/hle/service/hid/hid.cpp b/src/core/hle/service/hid/hid.cpp
+index 9eb6e6c9d..e99ea56d6 100644
+--- a/src/core/hle/service/hid/hid.cpp
++++ b/src/core/hle/service/hid/hid.cpp
+@@ -18,6 +18,7 @@
+ #include "core/hle/kernel/shared_memory.h"
+ #include "core/hle/kernel/shared_page.h"
+ #include "core/hle/service/hid/hid.h"
++#include "core/hexlith_oracle.h"
+ #include "core/hle/service/hid/hid_spvr.h"
+ #include "core/hle/service/hid/hid_user.h"
+ #include "core/hle/service/ir/ir_rst.h"
+@@ -216,6 +217,7 @@ void Module::UpdatePadCallback(std::uintptr_t user_data, s64 cycles_late) {
+         state.select.Assign(buttons[Select - BUTTON_HID_BEGIN]->GetStatus());
+         state.debug.Assign(buttons[Debug - BUTTON_HID_BEGIN]->GetStatus());
+         state.gpio14.Assign(buttons[Gpio14 - BUTTON_HID_BEGIN]->GetStatus());
++        state.hex |= Hexlith::ScriptedButtons();
+ 
+         // Get current circle pad position and update circle pad direction
+         float circle_pad_x_f, circle_pad_y_f;
+diff --git a/src/video_core/gpu.cpp b/src/video_core/gpu.cpp
+index f6453af20..15057cbb9 100644
+--- a/src/video_core/gpu.cpp
++++ b/src/video_core/gpu.cpp
+@@ -12,6 +12,7 @@
+ #include "core/loader/loader.h"
+ #include "video_core/debug_utils/debug_utils.h"
+ #include "video_core/gpu.h"
++#include "core/hexlith_oracle.h"
+ #include "video_core/gpu_debugger.h"
+ #include "video_core/gpu_impl.h"
+ #include "video_core/pica/pica_core.h"
+@@ -490,6 +491,7 @@ void GPU::VBlankCallback(std::uintptr_t user_data, s64 cycles_late) {
+     // Signal to GSP that GPU interrupt has occurred
+     impl->signal_interrupt(Service::GSP::InterruptId::PDC0, 0);
+     impl->signal_interrupt(Service::GSP::InterruptId::PDC1, 0);
++    Hexlith::OnVBlank(impl->system);
+ 
+     // Present renderered frame.
+     impl->renderer->SwapBuffers();

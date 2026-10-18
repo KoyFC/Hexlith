@@ -1,5 +1,10 @@
 #include "domain/services/yuv_to_rgb.h"
 
+#include "domain/video/yuv_conversion.h"
+
+#include <algorithm>
+#include <utility>
+
 namespace hexlith::domain::services {
 namespace {
 
@@ -18,6 +23,9 @@ constexpr std::array<std::array<std::int16_t, 8>, StandardSets> StandardCoeffici
 // SetInputLineWidth and SetInputLines in y2r_u.cpp.
 constexpr std::uint32_t MaximumLength = 1024;
 constexpr std::uint32_t LineWidthMultiple = 8;
+
+// The output's buffer, after Y, U, V and YUYV.
+constexpr std::size_t OutputTransfer = 4;
 
 // A bool travels in the low byte of its word.
 constexpr std::uint32_t ByteMask = 0xFF;
@@ -236,7 +244,93 @@ void YuvToRgb::GetDitheringWeights(kernel::IpcRequest& request) {
     }
 }
 
+std::vector<std::uint8_t> YuvToRgb::Gather(const Transfer& transfer, std::size_t bytes) const {
+    std::vector<std::uint8_t> gathered;
+    if (transfer.unit == 0) {
+        return gathered;
+    }
+    gathered.reserve(bytes);
+    std::uint32_t address = transfer.address;
+    std::vector<std::uint8_t> unit(transfer.unit);
+    while (gathered.size() < bytes) {
+        if (!kernel_->Space().Memory().Copy(address, unit).Ok()) {
+            return {};
+        }
+        const std::size_t taken = std::min<std::size_t>(unit.size(), bytes - gathered.size());
+        gathered.insert(
+            gathered.end(), unit.begin(), unit.begin() + static_cast<std::ptrdiff_t>(taken));
+        address += transfer.unit + transfer.gap;
+    }
+    return gathered;
+}
+
+void YuvToRgb::Scatter(const Transfer& transfer, std::span<const std::uint8_t> bytes) {
+    if (transfer.unit == 0) {
+        return;
+    }
+    std::uint32_t address = transfer.address;
+    for (std::size_t at = 0; at < bytes.size(); at += transfer.unit) {
+        const std::size_t length = std::min<std::size_t>(transfer.unit, bytes.size() - at);
+        if (!kernel_->Space().Memory().Load(address, bytes.subspan(at, length)).Ok()) {
+            return;
+        }
+        address += transfer.unit + transfer.gap;
+    }
+}
+
+void YuvToRgb::Convert() {
+    const auto setting = [this](Setting which) {
+        return settings_.at(static_cast<std::size_t>(which));
+    };
+    video::YuvConversion conversion{
+        .input = static_cast<video::YuvFormat>(setting(Setting::InputFormat)),
+        .output = static_cast<video::RgbFormat>(setting(Setting::OutputFormat)),
+        .rotation = static_cast<video::Rotation>(setting(Setting::Rotation)),
+        .layout = static_cast<video::OutputLayout>(setting(Setting::BlockAlignment)),
+        .width = line_width_,
+        .lines = lines_,
+        .coefficients = {},
+        .alpha = static_cast<std::uint8_t>(setting(Setting::Alpha))};
+    for (std::size_t index = 0; index < conversion.coefficients.size(); ++index) {
+        const std::uint32_t word = coefficients_.at(index / 2);
+        conversion.coefficients.at(index) =
+            static_cast<std::int16_t>(index % 2 == 0 ? word & HalfwordMask : word >> 16U);
+    }
+    if (!video::IsConvertible(conversion)) {
+        return;
+    }
+
+    // A wide format's samples are the low bytes of halfwords.
+    const std::size_t stride = video::BytesPerSample(conversion.input);
+    const auto plane = [&](video::YuvPlane which, std::size_t transfer) {
+        std::vector<std::uint8_t> bytes =
+            Gather(transfers_.at(transfer), video::SamplesNeeded(conversion, which) * stride);
+        std::vector<std::uint8_t> samples;
+        samples.reserve(bytes.size() / stride);
+        for (std::size_t at = 0; at < bytes.size(); at += stride) {
+            samples.push_back(bytes[at]);
+        }
+        return samples;
+    };
+    const std::vector<std::uint8_t> y = plane(video::YuvPlane::Y, 0);
+    const std::vector<std::uint8_t> u = plane(video::YuvPlane::U, 1);
+    const std::vector<std::uint8_t> v = plane(video::YuvPlane::V, 2);
+    const std::vector<std::uint8_t> interleaved = plane(video::YuvPlane::Interleaved, 3);
+    for (const auto& [samples, which] : {std::pair{&y, video::YuvPlane::Y},
+                                         std::pair{&u, video::YuvPlane::U},
+                                         std::pair{&v, video::YuvPlane::V},
+                                         std::pair{&interleaved, video::YuvPlane::Interleaved}}) {
+        if (samples->size() < video::SamplesNeeded(conversion, which)) {
+            return;
+        }
+    }
+    const std::vector<std::uint8_t> output = video::ConvertYuvToRgb(
+        conversion, video::YuvPlanes{.y = y, .u = u, .v = v, .interleaved = interleaved});
+    Scatter(transfers_.at(OutputTransfer), output);
+}
+
 void YuvToRgb::StartConversion(kernel::IpcRequest& request) {
+    Convert();
     ++conversion_;
     busy_ = true;
     const std::uint64_t started = conversion_;
