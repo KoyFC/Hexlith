@@ -13,10 +13,10 @@ index 37eee4fc3..29a44b338 100644
      loader/3dsx.cpp
 diff --git a/src/core/hexlith_oracle.cpp b/src/core/hexlith_oracle.cpp
 new file mode 100644
-index 000000000..b6e9e2c9a
+index 000000000..b9b4ce532
 --- /dev/null
 +++ b/src/core/hexlith_oracle.cpp
-@@ -0,0 +1,271 @@
+@@ -0,0 +1,479 @@
 +// Hexlith oracle hooks. Licensed as the rest of Azahar, GPLv2 or any later
 +// version.
 +//
@@ -34,8 +34,10 @@ index 000000000..b6e9e2c9a
 +
 +#include "core/hexlith_oracle.h"
 +
++#include <array>
 +#include <cstdio>
 +#include <cstdlib>
++#include <cstring>
 +#include <fstream>
 +#include <iterator>
 +#include <map>
@@ -50,6 +52,7 @@ index 000000000..b6e9e2c9a
 +#include "core/memory.h"
 +#include "video_core/gpu.h"
 +#include "video_core/pica/pica_core.h"
++#include "video_core/pica/shader_setup.h"
 +
 +namespace Hexlith {
 +namespace {
@@ -250,8 +253,193 @@ index 000000000..b6e9e2c9a
 +    }
 +}
 +
++
++// PICA command lists ----------------------------------------------------------
++
++bool pica_oracle_active = false;
++
++struct PicaEvent {
++    u8 kind;
++    u64 registers;
++    u64 extra;
++};
++std::vector<PicaEvent> pica_events;
++
++// FNV-1a, 64 bits, over bytes: Hexlith's tool hashes the same bytes the same
++// way, so that two states compare by a word each.
++u64 Hash(const void* data, std::size_t size, u64 hash = 0xCBF29CE484222325ULL) {
++    const u8* bytes = static_cast<const u8*>(data);
++    for (std::size_t i = 0; i < size; ++i) {
++        hash ^= bytes[i];
++        hash *= 0x100000001B3ULL;
++    }
++    return hash;
++}
++
++constexpr u32 InternalRegisters = 0x300;
++constexpr u32 ListScratch = 0x185C0000;
++
++// Back to a state both sides can start from: every internal register zero
++// but the interrupt setup Nintendo's code leaves, empty shader memories,
++// uniforms, attributes and tables.
++void ResetPica(Pica::PicaCore& pica) {
++    pica.regs.internal.reg_array.fill(0);
++    pica.regs.internal.irq_compare = 0x12345678;
++    pica.regs.internal.irq_mask = 0xFFFFFFF0;
++    pica.regs.internal.irq_autostop = 1;
++    for (Pica::ShaderSetup* setup : {&pica.vs_setup, &pica.gs_setup}) {
++        setup->UpdateProgramCode(Pica::ProgramCode{});
++        setup->UpdateSwizzleData(Pica::SwizzleData{});
++        setup->uniforms = Pica::Uniforms{};
++        setup->uniform_queue.Reset();
++    }
++    pica.input_default_attributes = Pica::AttributeBuffer{};
++    pica.immediate.input_vertex = Pica::AttributeBuffer{};
++    pica.immediate.Reset();
++    for (auto& table : pica.lighting.luts) {
++        for (auto& entry : table) {
++            entry.raw = 0;
++        }
++    }
++    for (auto& entry : pica.fog.lut) {
++        entry.raw = 0;
++    }
++    for (auto& entry : pica.proctex.noise_table) entry.raw = 0;
++    for (auto& entry : pica.proctex.color_map_table) entry.raw = 0;
++    for (auto& entry : pica.proctex.alpha_map_table) entry.raw = 0;
++    for (auto& entry : pica.proctex.color_table) entry.raw = 0;
++    for (auto& entry : pica.proctex.color_diff_table) entry.raw = 0;
++}
++
++u64 HashUniforms(const Pica::ShaderSetup& setup) {
++    u64 hash = 0xCBF29CE484222325ULL;
++    for (const auto& uniform : setup.uniforms.f) {
++        for (u32 c = 0; c < 4; ++c) {
++            const float value = uniform[c].ToFloat32();
++            hash = Hash(&value, sizeof(value), hash);
++        }
++    }
++    return hash;
++}
++
++u64 HashBools(const Pica::ShaderSetup& setup) {
++    u32 bits = 0;
++    for (u32 i = 0; i < 16; ++i) {
++        bits |= (setup.uniforms.b[i] ? 1u : 0u) << i;
++    }
++    return Hash(&bits, sizeof(bits));
++}
++
++u64 HashInts(const Pica::ShaderSetup& setup) {
++    u64 hash = 0xCBF29CE484222325ULL;
++    for (const auto& value : setup.uniforms.i) {
++        const u32 word = value.x | (value.y << 8) | (value.z << 16) | (value.w << 24);
++        hash = Hash(&word, sizeof(word), hash);
++    }
++    return hash;
++}
++
++u64 HashAttributes(const Pica::AttributeBuffer& buffer) {
++    u64 hash = 0xCBF29CE484222325ULL;
++    for (const auto& attribute : buffer) {
++        for (u32 c = 0; c < 4; ++c) {
++            const float value = attribute[c].ToFloat32();
++            hash = Hash(&value, sizeof(value), hash);
++        }
++    }
++    return hash;
++}
++
++template <typename Table>
++u64 HashRaw(const Table& table, u64 hash = 0xCBF29CE484222325ULL) {
++    for (const auto& entry : table) {
++        const u32 raw = entry.raw;
++        hash = Hash(&raw, sizeof(raw), hash);
++    }
++    return hash;
++}
++
++// The sixteen section hashes docs/pica-commands.md lists, in its order.
++std::vector<u64> HashState(Pica::PicaCore& pica) {
++    std::vector<u64> hashes;
++    hashes.push_back(Hash(pica.regs.internal.reg_array.data(), InternalRegisters * sizeof(u32)));
++    for (Pica::ShaderSetup* setup : {&pica.vs_setup, &pica.gs_setup}) {
++        hashes.push_back(Hash(setup->GetProgramCode().data(), sizeof(Pica::ProgramCode)));
++        hashes.push_back(Hash(setup->GetSwizzleData().data(), sizeof(Pica::SwizzleData)));
++        hashes.push_back(HashUniforms(*setup));
++        hashes.push_back(HashBools(*setup));
++        hashes.push_back(HashInts(*setup));
++    }
++    hashes.push_back(HashAttributes(pica.input_default_attributes));
++    u64 lighting = 0xCBF29CE484222325ULL;
++    for (const auto& table : pica.lighting.luts) {
++        lighting = HashRaw(table, lighting);
++    }
++    hashes.push_back(lighting);
++    hashes.push_back(HashRaw(pica.fog.lut));
++    u64 proctex = HashRaw(pica.proctex.noise_table);
++    proctex = HashRaw(pica.proctex.color_map_table, proctex);
++    proctex = HashRaw(pica.proctex.alpha_map_table, proctex);
++    proctex = HashRaw(pica.proctex.color_table, proctex);
++    proctex = HashRaw(pica.proctex.color_diff_table, proctex);
++    hashes.push_back(proctex);
++    hashes.push_back(HashAttributes(pica.immediate.input_vertex));
++    return hashes;
++}
++
++// pica-cases.bin: a word with the count of cases; each case a word with its
++// count of steps; each step a word with a count of memory blocks, each block
++// its physical address, its length and its bytes, then a command list as its
++// length and bytes. Every case starts from ResetPica. pica-results.bin
++// answers each step with its events and the section hashes.
++void RunPica(Core::System& system, const std::string& directory) {
++    std::ifstream in(directory + "/pica-cases.bin", std::ios::binary);
++    if (!in) {
++        return;
++    }
++    std::ofstream out(directory + "/pica-results.bin", std::ios::binary);
++    Pica::PicaCore& pica = system.GPU().PicaCore();
++    Memory::MemorySystem& memory = system.Memory();
++    pica_oracle_active = true;
++    const u32 cases = Take<u32>(in);
++    for (u32 c = 0; c < cases; ++c) {
++        ResetPica(pica);
++        const u32 steps = Take<u32>(in);
++        for (u32 s = 0; s < steps; ++s) {
++            const u32 blocks = Take<u32>(in);
++            for (u32 b = 0; b < blocks; ++b) {
++                const u32 address = Take<u32>(in);
++                const std::vector<u8> bytes = TakeBytes(in);
++                u8* target = memory.GetPhysicalPointer(address);
++                if (target != nullptr) {
++                    std::memcpy(target, bytes.data(), bytes.size());
++                }
++            }
++            const std::vector<u8> list = TakeBytes(in);
++            std::memcpy(memory.GetPhysicalPointer(ListScratch), list.data(), list.size());
++            pica_events.clear();
++            pica.ProcessCmdList(ListScratch, static_cast<u32>(list.size()), false);
++
++            const u32 count = static_cast<u32>(pica_events.size());
++            out.write(reinterpret_cast<const char*>(&count), sizeof(count));
++            for (const PicaEvent& event : pica_events) {
++                out.write(reinterpret_cast<const char*>(&event.kind), sizeof(event.kind));
++                out.write(reinterpret_cast<const char*>(&event.registers), sizeof(event.registers));
++                out.write(reinterpret_cast<const char*>(&event.extra), sizeof(event.extra));
++            }
++            for (const u64 hash : HashState(pica)) {
++                out.write(reinterpret_cast<const char*>(&hash), sizeof(hash));
++            }
++            out.write(reinterpret_cast<const char*>(pica.regs.internal.reg_array.data()),
++                      InternalRegisters * sizeof(u32));
++        }
++    }
++    pica_oracle_active = false;
++}
++
 +void RunOracle(Core::System& system, const std::string& directory) {
 +    RunY2r(system, directory);
++    RunPica(system, directory);
 +    std::ofstream(directory + "/done.txt") << "done\n";
 +}
 +
@@ -278,6 +466,26 @@ index 000000000..b6e9e2c9a
 +    }
 +}
 +
++bool PicaOracleActive() {
++    return pica_oracle_active;
++}
++
++void NotePicaEvent(u8 kind, const u32* registers, const void* extra, std::size_t extra_size) {
++    // The data ports of the FIFOs are left out: when a command writes one
++    // several times, Azahar stores the last value before it handles the
++    // first, so what they hold in the middle of a command is not comparable.
++    std::array<u32, InternalRegisters> copy;
++    std::memcpy(copy.data(), registers, sizeof(copy));
++    static constexpr std::pair<u32, u32> Ports[] = {{0x0B0, 0x0B8}, {0x0E8, 0x0F0}, {0x1C8, 0x1D0}, {0x233, 0x236}, {0x291, 0x299}, {0x29C, 0x2A4}, {0x2A6, 0x2AE}, {0x2C1, 0x2C9}, {0x2CC, 0x2D4}, {0x2D6, 0x2DE}};
++    for (const auto& [first, end] : Ports) {
++        for (u32 id = first; id < end; ++id) {
++            copy[id] = 0;
++        }
++    }
++    pica_events.push_back(PicaEvent{kind, Hash(copy.data(), sizeof(copy)),
++                                    extra != nullptr ? Hash(extra, extra_size) : 0});
++}
++
 +u32 ScriptedButtons() {
 +    static const Script script = LoadScript();
 +    const auto after = script.held_from.upper_bound(frame);
@@ -290,15 +498,17 @@ index 000000000..b6e9e2c9a
 +} // namespace Hexlith
 diff --git a/src/core/hexlith_oracle.h b/src/core/hexlith_oracle.h
 new file mode 100644
-index 000000000..4bb78df65
+index 000000000..289e81b46
 --- /dev/null
 +++ b/src/core/hexlith_oracle.h
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,30 @@
 +// Hexlith oracle hooks: scripted input, framebuffer captures and batch runs
 +// of Azahar's own hardware code on cases Hexlith generates. Licensed as the
 +// rest of Azahar, GPLv2 or any later version.
 +
 +#pragma once
++
++#include <cstddef>
 +
 +#include "common/common_types.h"
 +
@@ -314,6 +524,12 @@ index 000000000..4bb78df65
 +
 +// The buttons the input script holds in the current frame, as HID pad bits.
 +u32 ScriptedButtons();
++
++// While the oracle runs command lists, the PICA core reports what it would
++// draw instead of drawing it. Kinds: 1 draw arrays, 2 draw elements, 3 a
++// vertex in immediate mode, 4 the primitive assembler restarted, 5 FINALIZE.
++bool PicaOracleActive();
++void NotePicaEvent(u8 kind, const u32* registers, const void* extra, std::size_t extra_size);
 +
 +} // namespace Hexlith
 diff --git a/src/core/hle/service/hid/hid.cpp b/src/core/hle/service/hid/hid.cpp
@@ -356,3 +572,66 @@ index f6453af20..15057cbb9 100644
  
      // Present renderered frame.
      impl->renderer->SwapBuffers();
+diff --git a/src/video_core/pica/pica_core.cpp b/src/video_core/pica/pica_core.cpp
+index 910ebc202..80ca5c12b 100644
+--- a/src/video_core/pica/pica_core.cpp
++++ b/src/video_core/pica/pica_core.cpp
+@@ -11,6 +11,7 @@
+ #include "core/memory.h"
+ #include "video_core/debug_utils/debug_utils.h"
+ #include "video_core/pica/pica_core.h"
++#include "core/hexlith_oracle.h"
+ #include "video_core/pica/vertex_loader.h"
+ #include "video_core/rasterizer_interface.h"
+ #include "video_core/shader/shader.h"
+@@ -583,6 +584,9 @@ void PicaCore::HandleSpecialReg(u32 id, u32 value, bool& stop_requested) {
+         if (any_byte_match(regs.internal.reg_array[id], regs.internal.irq_compare)) [[likely]] {
+             signal_interrupt(Service::GSP::InterruptId::P3D,
+                              delay_generator.CalculateAndResetDelay());
++            if (Hexlith::PicaOracleActive()) {
++                Hexlith::NotePicaEvent(5, regs.internal.reg_array.data(), nullptr, 0);
++            }
+             if (regs.internal.irq_autostop) [[likely]] {
+                 stop_requested = true;
+             }
+@@ -591,10 +595,16 @@ void PicaCore::HandleSpecialReg(u32 id, u32 value, bool& stop_requested) {
+ 
+     case PICA_REG_INDEX(pipeline.triangle_topology):
+         primitive_assembler.Reconfigure(regs.internal.pipeline.triangle_topology);
++        if (Hexlith::PicaOracleActive()) {
++            Hexlith::NotePicaEvent(4, regs.internal.reg_array.data(), nullptr, 0);
++        }
+         break;
+ 
+     case PICA_REG_INDEX(pipeline.restart_primitive):
+         primitive_assembler.Reset();
++        if (Hexlith::PicaOracleActive()) {
++            Hexlith::NotePicaEvent(4, regs.internal.reg_array.data(), nullptr, 0);
++        }
+         break;
+ 
+     case PICA_REG_INDEX(pipeline.vs_default_attributes_setup.index):
+@@ -1007,6 +1017,12 @@ void PicaCore::SubmitImmediate(u32 value) {
+ }
+ 
+ void PicaCore::DrawImmediate() {
++    if (Hexlith::PicaOracleActive()) {
++        Hexlith::NotePicaEvent(3, regs.internal.reg_array.data(), immediate.input_vertex.data(),
++                               sizeof(immediate.input_vertex));
++        immediate.current_attribute = 0;
++        return;
++    }
+     // Compile the vertex shader.
+     shader_engine->SetupBatch(vs_setup, regs.internal.vs.main_offset);
+ 
+@@ -1045,6 +1061,10 @@ void PicaCore::DrawImmediate() {
+ }
+ 
+ void PicaCore::DrawArrays(bool is_indexed) {
++    if (Hexlith::PicaOracleActive()) {
++        Hexlith::NotePicaEvent(is_indexed ? 2 : 1, regs.internal.reg_array.data(), nullptr, 0);
++        return;
++    }
+     MICROPROFILE_SCOPE(GPU_Drawing);
+ 
+     // Track vertex in the debug recorder.

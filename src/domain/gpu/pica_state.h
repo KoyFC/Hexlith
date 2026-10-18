@@ -84,6 +84,8 @@ public:
     static constexpr std::size_t FogLutEntries = 128;
     static constexpr std::size_t ProcTexSmallLut = 128;
     static constexpr std::size_t ProcTexLargeLut = 256;
+    // Tables 0 to 5, of which 1 is none.
+    static constexpr std::size_t ProcTexTables = 6;
 
     // Stores a value under a byte mask, and carries out what the register
     // does when written. The value a shader, LUT or attribute port takes is
@@ -128,7 +130,7 @@ public:
 
     // The procedural texture's tables by GBATEK's numbers: noise 0, colour
     // map 2, alpha map 3, colour 4, colour difference 5. 1 is not a table.
-    [[nodiscard]] const std::array<std::array<std::uint32_t, ProcTexLargeLut>, 6>&
+    [[nodiscard]] const std::array<std::array<std::uint32_t, ProcTexLargeLut>, ProcTexTables>&
     ProcTexLuts() const {
         return proctex_luts_;
     }
@@ -159,7 +161,7 @@ private:
     PackedVec4Queue fixed_attribute_queue_;
     std::array<std::array<std::uint32_t, LightingLutEntries>, LightingLuts> lighting_luts_{};
     std::array<std::uint32_t, FogLutEntries> fog_lut_{};
-    std::array<std::array<std::uint32_t, ProcTexLargeLut>, 6> proctex_luts_{};
+    std::array<std::array<std::uint32_t, ProcTexLargeLut>, ProcTexTables> proctex_luts_{};
 };
 
 }  // namespace hexlith::domain::gpu

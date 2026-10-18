@@ -34,7 +34,12 @@ concept PicaExecutor = requires(T executor, const PicaState& state, bool indexed
 // The defaults are what GBATEK says Nintendo's code sets, 12345678h and
 // autostop. A recording does not hold the game's own writes to them.
 struct InterruptSetup {
-    std::uint32_t compare = 0x12345678;
+    static constexpr std::uint32_t NintendoCompare = 0x12345678;
+    // What Nintendo's code puts in GPUREG_IRQ_MASK: the first four of the 64
+    // interrupts enabled.
+    static constexpr std::uint32_t NintendoMask = 0xFFFFFFF0;
+
+    std::uint32_t compare = NintendoCompare;
     bool autostop = true;
 };
 
@@ -102,14 +107,16 @@ private:
     static constexpr std::uint32_t ExtraMask = 0xFF;
     static constexpr unsigned ConsecutiveBit = 31;
 
+    // A list's little-endian words.
     static std::vector<std::uint32_t> Words(std::span<const std::uint8_t> bytes) {
-        std::vector<std::uint32_t> words(bytes.size() / 4);
+        constexpr std::size_t WordBytes = 4;
+        constexpr unsigned ByteBits = 8;
+        std::vector<std::uint32_t> words(bytes.size() / WordBytes);
         for (std::size_t index = 0; index < words.size(); ++index) {
-            const std::size_t at = index * 4;
-            words[index] = static_cast<std::uint32_t>(bytes[at]) |
-                           (static_cast<std::uint32_t>(bytes[at + 1]) << 8U) |
-                           (static_cast<std::uint32_t>(bytes[at + 2]) << 16U) |
-                           (static_cast<std::uint32_t>(bytes[at + 3]) << 24U);
+            for (std::size_t byte = 0; byte < WordBytes; ++byte) {
+                words[index] |= static_cast<std::uint32_t>(bytes[(index * WordBytes) + byte])
+                                << (ByteBits * byte);
+            }
         }
         return words;
     }
@@ -163,8 +170,10 @@ private:
     // Source: GBATEK, Finalize Interrupt registers.
     std::optional<WriteEffect> Finalize(std::uint32_t request, CommandListRun& run) {
         constexpr std::uint32_t Byte = 0xFF;
+        constexpr unsigned ByteBits = 8;
+        constexpr unsigned WordBits = 32;
         bool matched = false;
-        for (unsigned shift = 0; shift < 32; shift += 8) {
+        for (unsigned shift = 0; shift < WordBits; shift += ByteBits) {
             matched =
                 matched || ((request >> shift) & Byte) == ((interrupts_.compare >> shift) & Byte);
         }

@@ -112,7 +112,7 @@ REA opens the main executable as `format: "raw-binary"`, `architecture: "arm"`, 
 
 Golden-trace differential testing against Azahar compares the sequence of service requests and module loads of a whole boot with the same boot under a patched Azahar, by `scripts/compare_golden_trace.py`. `docs/golden-traces.md` has the procedure and what the first comparison found. It is not a substitute for unit tests.
 
-Azahar's own code for a piece of hardware is an oracle too, run on cases Hexlith generates. `third_party/azahar/oracle.patch` makes Azahar run a directory of cases at its first vertical blank and quit, `tools/hexlith-oracle-run` runs the same cases through Hexlith, and a script compares the two, as `scripts/compare_y2r.py` does for the YUV to RGB conversion. The same patch takes its input from a script and captures framebuffers at chosen frames. `third_party/azahar/README.md` has the case formats.
+Azahar's own code for a piece of hardware is an oracle too, run on cases Hexlith generates. `third_party/azahar/oracle.patch` makes Azahar run a directory of cases at its first vertical blank and quit, `tools/hexlith-oracle-run` runs the same cases through Hexlith, and a script compares the two, as `scripts/compare_y2r.py` does for the YUV to RGB conversion and `scripts/compare_pica_commands.py` for the PICA command processor. Run the second after any change to `src/domain/gpu`; `docs/pica-commands.md` records its results and the faults it found in Azahar. The same patch takes its input from a script and captures framebuffers at chosen frames. `third_party/azahar/README.md` has the case formats.
 
 ## Commits
 

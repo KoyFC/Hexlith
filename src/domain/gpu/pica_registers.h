@@ -16,9 +16,14 @@ using RegisterFile = std::array<std::uint32_t, RegisterCount>;
 
 namespace reg {
 
-// Finalize Interrupt registers.
+// Finalize Interrupt registers. Only the requests can be written by a list;
+// the CPU sets the compare values, the mask and autostop at the IDs their
+// addresses give, 10401080h, 104010C0h and 104010D0h.
 constexpr std::uint16_t IrqRequestFirst = 0x010;
 constexpr std::uint16_t IrqRequestLast = 0x01F;
+constexpr std::uint16_t IrqCompare = 0x020;
+constexpr std::uint16_t IrqMask = 0x030;
+constexpr std::uint16_t IrqAutostop = 0x034;
 
 // Geometry Pipeline registers.
 constexpr std::uint16_t AttributeBufferBase = 0x200;
@@ -92,10 +97,13 @@ constexpr std::uint16_t BlockSize = 0x30;
 // A command header's byte mask, one bit for each byte of the value, spread
 // into a mask of the bits to write.
 constexpr std::uint32_t ExpandByteMask(std::uint32_t byte_mask) {
+    constexpr unsigned WordBytes = 4;
+    constexpr unsigned ByteBits = 8;
+    constexpr std::uint32_t AllOnes = 0xFF;
     std::uint32_t mask = 0;
-    for (unsigned byte = 0; byte < 4; ++byte) {
+    for (unsigned byte = 0; byte < WordBytes; ++byte) {
         if ((byte_mask & (1U << byte)) != 0) {
-            mask |= 0xFFU << (8 * byte);
+            mask |= AllOnes << (ByteBits * byte);
         }
     }
     return mask;
