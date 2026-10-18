@@ -13,10 +13,10 @@ index 37eee4fc3..29a44b338 100644
      loader/3dsx.cpp
 diff --git a/src/core/hexlith_oracle.cpp b/src/core/hexlith_oracle.cpp
 new file mode 100644
-index 000000000..b9b4ce532
+index 000000000..c793284ab
 --- /dev/null
 +++ b/src/core/hexlith_oracle.cpp
-@@ -0,0 +1,479 @@
+@@ -0,0 +1,596 @@
 +// Hexlith oracle hooks. Licensed as the rest of Azahar, GPLv2 or any later
 +// version.
 +//
@@ -35,6 +35,8 @@ index 000000000..b9b4ce532
 +#include "core/hexlith_oracle.h"
 +
 +#include <array>
++#include <bit>
++#include <memory>
 +#include <cstdio>
 +#include <cstdlib>
 +#include <cstring>
@@ -53,6 +55,8 @@ index 000000000..b9b4ce532
 +#include "video_core/gpu.h"
 +#include "video_core/pica/pica_core.h"
 +#include "video_core/pica/shader_setup.h"
++#include "video_core/pica/shader_unit.h"
++#include "video_core/shader/shader_interpreter.h"
 +
 +namespace Hexlith {
 +namespace {
@@ -437,9 +441,122 @@ index 000000000..b9b4ce532
 +    pica_oracle_active = false;
 +}
 +
++// Shader programs --------------------------------------------------------------
++
++template <typename T>
++void Put(std::ostream& out, const T& value) {
++    out.write(reinterpret_cast<const char*>(&value), sizeof(value));
++}
++
++void TakeVectors(std::istream& in, Common::Vec4<Pica::f24>* vectors, std::size_t count) {
++    for (std::size_t i = 0; i < count; ++i) {
++        for (u32 c = 0; c < 4; ++c) {
++            vectors[i][c] = Pica::f24::FromFloat32(std::bit_cast<float>(Take<u32>(in)));
++        }
++    }
++}
++
++void PutVectors(std::ostream& out, const Common::Vec4<Pica::f24>* vectors, std::size_t count) {
++    for (std::size_t i = 0; i < count; ++i) {
++        for (u32 c = 0; c < 4; ++c) {
++            Put(out, std::bit_cast<u32>(vectors[i][c].ToFloat32()));
++        }
++    }
++}
++
++// shader-cases.bin: a word with the count of cases, then each case: a word
++// that is 0 for a vertex shader and 1 for a geometry shader, the entry point,
++// the output mask, 4096 words of code, 4096 of operand descriptors, 96
++// uniforms of four float32 bit patterns, the bool uniforms, the four integer
++// uniforms, then the registers as the run starts: 16 inputs, 16 temporaries,
++// two banks of 16 outputs, the output bank, a0.x, a0.y, aL and the two
++// condition flags as words. shader-results.bin answers each case with the
++// registers as the run leaves them, in the same layout, then the count of
++// primitives emitted and each as a word that is 1 if its winding was
++// reversed and its three vertices of 16 attributes.
++void RunShaders(const std::string& directory) {
++    std::ifstream in(directory + "/shader-cases.bin", std::ios::binary);
++    if (!in) {
++        return;
++    }
++    std::ofstream out(directory + "/shader-results.bin", std::ios::binary);
++    const u32 cases = Take<u32>(in);
++    auto setup = std::make_unique<Pica::ShaderSetup>();
++    auto code = std::make_unique<Pica::ProgramCode>();
++    auto descriptors = std::make_unique<Pica::SwizzleData>();
++    Pica::Shader::InterpreterEngine engine;
++    for (u32 c = 0; c < cases; ++c) {
++        const bool geometry = Take<u32>(in) != 0;
++        const u32 entry = Take<u32>(in);
++        const u32 output_mask = Take<u32>(in);
++        for (auto& word : *code) word = Take<u32>(in);
++        for (auto& word : *descriptors) word = Take<u32>(in);
++        setup->UpdateProgramCode(*code);
++        setup->UpdateSwizzleData(*descriptors);
++        TakeVectors(in, setup->uniforms.f.data(), 96);
++        const u32 bools = Take<u32>(in);
++        for (u32 i = 0; i < 16; ++i) setup->uniforms.b[i] = ((bools >> i) & 1) != 0;
++        for (u32 i = 0; i < 4; ++i) {
++            const u32 word = Take<u32>(in);
++            setup->uniforms.i[i] = Common::Vec4<u8>{static_cast<u8>(word), static_cast<u8>(word >> 8),
++                                                    static_cast<u8>(word >> 16), static_cast<u8>(word >> 24)};
++        }
++
++        auto unit = std::make_unique<Pica::GeometryShaderUnit>();
++        Pica::ShaderUnit& state = *unit;
++        if (!geometry) {
++            state.emitter_ptr = nullptr;
++        }
++        TakeVectors(in, state.input.data(), 16);
++        TakeVectors(in, state.temporary.data(), 16);
++        TakeVectors(in, state.output[0].data(), 16);
++        TakeVectors(in, state.output[1].data(), 16);
++        state.output_bank = Take<u32>(in) != 0;
++        for (auto& address : state.address_registers) address = static_cast<s32>(Take<u32>(in));
++        for (auto& condition : state.conditional_code) condition = Take<u32>(in) != 0;
++
++        std::vector<std::pair<bool, std::vector<Pica::AttributeBuffer>>> primitives;
++        bool reversed = false;
++        std::vector<Pica::AttributeBuffer> vertices;
++        unit->SetVertexHandlers(
++            [&](const Pica::AttributeBuffer& vertex) {
++                vertices.push_back(vertex);
++                if (vertices.size() == 3) {
++                    primitives.push_back({reversed, vertices});
++                    vertices.clear();
++                    reversed = false;
++                }
++            },
++            [&] { reversed = true; });
++        unit->emitter.output_mask = output_mask;
++        // Neither is initialised by the unit's constructor.
++        unit->emitter.emit_state.raw = 0;
++        unit->emitter.buffer = {};
++
++        engine.SetupBatch(*setup, entry);
++        engine.Run(*setup, state);
++
++        PutVectors(out, state.input.data(), 16);
++        PutVectors(out, state.temporary.data(), 16);
++        PutVectors(out, state.output[0].data(), 16);
++        PutVectors(out, state.output[1].data(), 16);
++        Put(out, static_cast<u32>(state.output_bank));
++        for (const auto address : state.address_registers) Put(out, static_cast<u32>(address));
++        for (const auto condition : state.conditional_code) Put(out, static_cast<u32>(condition));
++        Put(out, static_cast<u32>(primitives.size()));
++        for (const auto& [winding, primitive] : primitives) {
++            Put(out, static_cast<u32>(winding));
++            for (const auto& vertex : primitive) {
++                PutVectors(out, vertex.data(), 16);
++            }
++        }
++    }
++}
++
 +void RunOracle(Core::System& system, const std::string& directory) {
 +    RunY2r(system, directory);
 +    RunPica(system, directory);
++    RunShaders(directory);
 +    std::ofstream(directory + "/done.txt") << "done\n";
 +}
 +

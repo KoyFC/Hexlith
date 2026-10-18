@@ -23,5 +23,6 @@ The format is deliberately short: context, the options that were actually consid
 | [0015](0015-save-data-lives-in-memory-and-is-written-on-commit.md) | Save data lives in memory and is written on commit | Accepted |
 | [0016](0016-the-gpu-recording-keeps-lists-and-changed-pages.md) | The GPU recording keeps the lists and the pages that changed | Accepted |
 | [0017](0017-pica-state-is-the-register-file.md) | The PICA state is its register file, and a list is walked with no virtual call | Accepted |
+| [0018](0018-a-shader-interpreter-is-the-semantic-reference.md) | A PICA shader interpreter is the semantic reference, and it calculates in float32 | Accepted |
 
 A record marked provisional has a named condition that will settle it. It is written down because work has to proceed in the meantime, not because the question is closed.

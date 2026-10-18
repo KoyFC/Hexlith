@@ -9,4 +9,7 @@ target_sources(
             pica_state.h
             recording_index.cpp
             recording_index.h
+            shader_arithmetic.h
+            shader_interpreter.cpp
+            shader_interpreter.h
 )
