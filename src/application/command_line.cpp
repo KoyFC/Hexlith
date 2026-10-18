@@ -26,17 +26,49 @@ constexpr std::string_view RecordGpuOption = "--record-gpu";
 
 constexpr std::string_view LoadEvent = "cro-load:";
 constexpr std::string_view UnloadEvent = "cro-unload:";
+constexpr std::string_view FrameEvent = "frame:";
+
+// A count, of instructions or frames, in decimal, with no sign and no suffix.
+core::Result<std::uint64_t> ParseCount(std::string_view option, std::string_view text) {
+    constexpr std::uint64_t Decimal = 10;
+    if (text.empty()) {
+        return core::Error{std::format("{} needs a number", option)};
+    }
+    std::uint64_t value = 0;
+    for (const char digit : text) {
+        if (digit < '0' || digit > '9') {
+            return core::Error{std::format("{} needs a number and was given {}", option, text)};
+        }
+        const auto next = static_cast<std::uint64_t>(digit - '0');
+        if (value > (UINT64_MAX - next) / Decimal) {
+            return core::Error{std::format("{} is too large", text)};
+        }
+        value = (value * Decimal) + next;
+    }
+    return value;
+}
 
 core::Result<BootStopPoint> ParseStopPoint(std::string_view text) {
-    for (const auto& [prefix, unload] :
-         {std::pair{LoadEvent, false}, std::pair{UnloadEvent, true}}) {
+    using Kind = BootStopPoint::Kind;
+    for (const auto& [prefix, kind] :
+         {std::pair{LoadEvent, Kind::ModuleLoad}, std::pair{UnloadEvent, Kind::ModuleUnload}}) {
         if (text.starts_with(prefix) && text.size() > prefix.size()) {
-            return BootStopPoint{.unload = unload,
-                                 .module = std::string{text.substr(prefix.size())}};
+            return BootStopPoint{
+                .kind = kind, .module = std::string{text.substr(prefix.size())}, .frame = 0};
         }
     }
-    return core::Error{std::format(
-        "{} takes cro-load:<module> or cro-unload:<module>, not '{}'", StopAfterOption, text)};
+    if (text.starts_with(FrameEvent)) {
+        const core::Result<std::uint64_t> frame =
+            ParseCount(StopAfterOption, text.substr(FrameEvent.size()));
+        if (!frame) {
+            return frame.Failure();
+        }
+        return BootStopPoint{.kind = Kind::Frame, .module = {}, .frame = frame.Value()};
+    }
+    return core::Error{
+        std::format("{} takes cro-load:<module>, cro-unload:<module> or frame:<number>, not '{}'",
+                    StopAfterOption,
+                    text)};
 }
 
 core::Status TakeValue(std::span<const std::string_view> arguments,
@@ -77,26 +109,6 @@ core::Status TakeStopPoint(std::span<const std::string_view> arguments,
     }
     into = std::move(parsed.Value());
     return {};
-}
-
-// A count of instructions, in decimal, with no sign and no suffix.
-core::Result<std::uint64_t> ParseCount(std::string_view option, std::string_view text) {
-    constexpr std::uint64_t Decimal = 10;
-    if (text.empty()) {
-        return core::Error{std::format("{} needs a number", option)};
-    }
-    std::uint64_t value = 0;
-    for (const char digit : text) {
-        if (digit < '0' || digit > '9') {
-            return core::Error{std::format("{} needs a number and was given {}", option, text)};
-        }
-        const auto next = static_cast<std::uint64_t>(digit - '0');
-        if (value > (UINT64_MAX - next) / Decimal) {
-            return core::Error{std::format("{} is too large", text)};
-        }
-        value = (value * Decimal) + next;
-    }
-    return value;
 }
 
 }  // namespace
@@ -315,7 +327,8 @@ std::string BootUsage() {
         "  {}           no save data at the start and none written, the same run every time\n"
         "  {} <path>       write the golden trace there, to compare with Azahar's\n"
         "  {} <path>        a script of the player's input, by frame\n"
-        "  {} <event>  stop once ldr:ro has done cro-load:<module> or cro-unload:<module>\n"
+        "  {} <event>  stop once ldr:ro has done cro-load:<module> or cro-unload:<module>,\n"
+        "                       or once frame:<number> has begun\n"
         "  {}         record the GPU's work under <work-dir>/<title>/gpu\n"
         "  {}               this text\n"
         "\n"

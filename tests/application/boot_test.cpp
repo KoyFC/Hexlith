@@ -100,7 +100,8 @@ TEST(ParseBootCommandLine, TakesALimitAndADirectoryToCompareWith) {
     EXPECT_EQ(options.Value().input, "/tmp/i");
     EXPECT_TRUE(options.Value().record_gpu);
     ASSERT_TRUE(options.Value().stop_after.has_value());
-    EXPECT_TRUE(options.Value().stop_after.value_or(BootStopPoint{}).unload);
+    EXPECT_EQ(options.Value().stop_after.value_or(BootStopPoint{}).kind,
+              BootStopPoint::Kind::ModuleUnload);
     EXPECT_EQ(options.Value().stop_after.value_or(BootStopPoint{}).module, "DllA");
 }
 
@@ -110,8 +111,17 @@ TEST(ParseBootCommandLine, RunsLongEnoughByDefault) {
     EXPECT_EQ(options.Value().instruction_limit, DefaultBootInstructionLimit);
 }
 
+TEST(ParseBootCommandLine, StopsAtAFrame) {
+    const std::vector<std::string_view> arguments = {"--stop-after", "frame:600"};
+    const core::Result<BootOptions> options = ParseBootCommandLine(arguments);
+    ASSERT_TRUE(options.Ok()) << options.Failure().Message();
+    const BootStopPoint point = options.Value().stop_after.value_or(BootStopPoint{});
+    EXPECT_EQ(point.kind, BootStopPoint::Kind::Frame);
+    EXPECT_EQ(point.frame, 600U);
+}
+
 TEST(ParseBootCommandLine, RefusesAStopPointItDoesNotKnow) {
-    for (const std::string_view point : {"cro-load:", "frame:12", "DllA"}) {
+    for (const std::string_view point : {"cro-load:", "frame:", "frame:-1", "vblank:12", "DllA"}) {
         const std::vector<std::string_view> arguments = {"--stop-after", point};
         EXPECT_FALSE(ParseBootCommandLine(arguments).Ok()) << point;
     }

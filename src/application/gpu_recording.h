@@ -24,11 +24,14 @@ struct GpuRecordingSummary {
     std::uint32_t smallest_list = 0;
     std::uint32_t largest_list = 0;
     std::size_t pages = 0;
+    std::size_t framebuffers = 0;
 };
 
 // Records the GPU's work as the title hands it to gsp::Gpu: every GX command,
 // and for each command list, first every page of GPU-visible memory that has
-// changed since the last list, then the list's bytes. GPU-visible memory is
+// changed since the last list, then the list's bytes; and each framebuffer a
+// screen is given to show, at the vertical blank that shows it. GPU-visible
+// memory is
 // VRAM and the linear heap, which is where a title puts what the GPU reads.
 // ADR 0016 has why it is recorded this way.
 //
@@ -57,6 +60,7 @@ public:
 
 private:
     void Take(const domain::services::Graphics::GxCommand& command);
+    void Take(const domain::services::Graphics::FramebufferSwap& swap);
     void RecordChangedPages(std::uint64_t frame);
     void RecordPagesOf(std::uint64_t frame, std::uint32_t begin, std::uint32_t end);
     void Keep(const core::Status& status);

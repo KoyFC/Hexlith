@@ -70,6 +70,7 @@ void PrintRecording(const application::GpuRecordingSummary& summary, std::string
                              summary.largest_list,
                              summary.list_bytes,
                              summary.pages);
+    std::cout << std::format("        {} framebuffers shown\n", summary.framebuffers);
 }
 
 void Report(std::string_view message) {
@@ -270,8 +271,18 @@ bool AttachGolden(const application::BootOptions& options,
 }
 
 void StopAfter(const application::BootStopPoint& point, application::BootedTitle& title) {
+    using Kind = application::BootStopPoint::Kind;
+    if (point.kind == Kind::Frame) {
+        title.Gpu().OnVerticalBlank([point, &title](std::uint64_t frame) {
+            if (frame == point.frame) {
+                title.Kernel().RequestStop();
+            }
+        });
+        return;
+    }
     using Event = hexlith::domain::services::RelocatableObjects::ModuleEvent;
-    const Event::Kind wanted = point.unload ? Event::Kind::Unloaded : Event::Kind::Loaded;
+    const Event::Kind wanted =
+        point.kind == Kind::ModuleUnload ? Event::Kind::Unloaded : Event::Kind::Loaded;
     title.Loader().OnModuleEvent([point, wanted, &title](const Event& event) {
         if (event.kind == wanted && event.name == point.module) {
             title.Kernel().RequestStop();

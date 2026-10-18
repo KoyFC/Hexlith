@@ -14,7 +14,7 @@ constexpr std::string_view ListsDirectory = "lists";
 constexpr std::string_view PagesDirectory = "pages";
 constexpr std::string_view PartialSuffix = ".partial";
 constexpr std::string_view OldSuffix = ".old";
-constexpr std::string_view FormatLine = "# hexlith gpu recording, format 1";
+constexpr std::string_view FormatLine = "# hexlith gpu recording, format 2";
 
 core::Status WriteBytes(const fs::path& path, core::ByteSpan bytes) {
     std::ofstream file(path, std::ios::binary | std::ios::trunc);
@@ -92,6 +92,17 @@ GpuRecordingDirectory::List(std::uint64_t frame, std::uint32_t address, core::By
         return written;
     }
     return Line(std::format("{} list {:08X} {:08X} {}", frame, address, bytes.size(), name));
+}
+
+core::Status
+GpuRecordingDirectory::Framebuffer(std::uint64_t frame,
+                                   std::uint32_t screen,
+                                   const std::array<std::uint32_t, FramebufferWords>& words) {
+    std::string line = std::format("{} framebuffer {}", frame, screen);
+    for (const std::uint32_t word : words) {
+        line += std::format(" {:08X}", word);
+    }
+    return Line(line);
 }
 
 core::Status GpuRecordingDirectory::Finish() {

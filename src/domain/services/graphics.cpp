@@ -44,6 +44,19 @@ constexpr unsigned StatusShift = 16;
 constexpr unsigned StopShift = 24;
 constexpr std::uint32_t StatusStopped = 1;
 
+// Framebuffer updates: from 0x200, one of 0x40 bytes for each client and
+// screen, the top screen's first. Each starts with the index of the one of its
+// two descriptions to use and a byte that is set when the game has written a
+// new one, then the two descriptions of seven words, from offsets 4 and 0x20.
+// Source: FrameBufferUpdate and GetFrameBufferInfo in Azahar's gsp_gpu.h and
+// gsp_gpu.cpp; 3dbrew, GSP Shared Memory.
+constexpr std::uint32_t FramebufferUpdatesOffset = 0x200;
+constexpr std::uint32_t FramebufferUpdateSize = 0x40;
+constexpr std::uint32_t Screens = 2;
+constexpr std::uint32_t UpdateDirtyOffset = 1;
+constexpr std::uint32_t UpdateFirstInfo = 4;
+constexpr std::uint32_t UpdateSecondInfo = 0x20;
+
 // Command IDs.
 constexpr std::uint32_t RequestDma = 0;
 constexpr std::uint32_t SubmitCommandList = 1;
@@ -127,6 +140,21 @@ std::uint64_t CopyNanoseconds(bool texture, bool from_vram, bool to_vram, std::u
     return static_cast<std::uint64_t>(static_cast<double>(bytes) * NanosecondsPerSecond / rate);
 }
 
+// A framebuffer's description, its seven words in the order the game writes
+// them.
+template<typename NextWord>
+Graphics::FramebufferInfo ReadFramebufferInfo(NextWord next) {
+    Graphics::FramebufferInfo info;
+    info.active = next();
+    info.address_left = next();
+    info.address_right = next();
+    info.stride = next();
+    info.format = next();
+    info.shown = next();
+    info.unknown = next();
+    return info;
+}
+
 // The register writes a PICA command list makes: each header word announces
 // one write and any extra parameters after it, and each command is padded to
 // eight bytes. Source: 3dbrew, GPU/Internal Registers, command lists.
@@ -204,10 +232,40 @@ void Graphics::ScheduleVerticalBlank() {
     kernel::Scheduler& scheduler = kernel_->Threads();
     scheduler.ScheduleAt(scheduler.Ticks() + FrameTicks, [this] {
         ++frames_;
+        if (vertical_blank_observer_) {
+            vertical_blank_observer_(frames_);
+        }
         Raise(Interrupt::Pdc0);
+        TakeFramebufferUpdates(0);
         Raise(Interrupt::Pdc1);
+        TakeFramebufferUpdates(1);
         ScheduleVerticalBlank();
     });
+}
+
+void Graphics::TakeFramebufferUpdates(std::uint32_t screen) {
+    const std::span<std::uint8_t> bytes = shared_->pages.front().backing->Bytes();
+    for (const Client& client : clients_) {
+        const std::uint32_t base =
+            FramebufferUpdatesOffset +
+            (((Screens * client.thread_id) + screen) * FramebufferUpdateSize);
+        if (bytes[base + UpdateDirtyOffset] == 0) {
+            continue;
+        }
+        bytes[base + UpdateDirtyOffset] = 0;
+        std::uint32_t at = base + ((bytes[base] & 1U) == 0 ? UpdateFirstInfo : UpdateSecondInfo);
+        Swap(screen, ReadFramebufferInfo([this, &at] {
+                 const std::uint32_t word = Word(at);
+                 at += WordBytes;
+                 return word;
+             }));
+    }
+}
+
+void Graphics::Swap(std::uint32_t screen, const FramebufferInfo& info) {
+    if (framebuffer_observer_) {
+        framebuffer_observer_(FramebufferSwap{.frame = frames_, .screen = screen, .info = info});
+    }
 }
 
 void Graphics::Queue(const Client& client, Interrupt interrupt) {
@@ -535,8 +593,8 @@ void Graphics::Succeed(kernel::IpcRequest& request) {
 }
 
 void Graphics::SetBufferSwap(kernel::IpcRequest& request) {
-    // The screen and the framebuffer it should show next, which nothing here
-    // shows.
+    const std::uint32_t screen = request.Pop();
+    Swap(screen, ReadFramebufferInfo([&request] { return request.Pop(); }));
     request.ReplyWith(kernel::result::Success);
 }
 

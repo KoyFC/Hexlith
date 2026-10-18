@@ -45,6 +45,13 @@ public:
         return {};
     }
 
+    core::Status Framebuffer(std::uint64_t frame,
+                             std::uint32_t screen,
+                             const std::array<std::uint32_t, FramebufferWords>& words) override {
+        events.push_back(std::format("{} framebuffer {} {:08X}", frame, screen, words.at(1)));
+        return {};
+    }
+
     core::Status Finish() override {
         return {};
     }
@@ -116,6 +123,25 @@ TEST(GpuRecording, RecordsAPageAgainOnlyOnceItChanges) {
     fixture.SubmitList();
     EXPECT_EQ(fixture.recording.Summary().pages, 2U);
     EXPECT_TRUE(fixture.recording.Finish().Ok());
+}
+
+// The first client's update for the bottom screen, its dirty byte, and its
+// second description's address word. Source: FrameBufferUpdate in Azahar's
+// gsp_gpu.h.
+constexpr std::uint32_t BottomUpdate = 0x240;
+constexpr std::uint32_t SecondLeftAddress = BottomUpdate + 0x20 + 4;
+constexpr std::uint32_t ShownAddress = 0x14400000;
+// The index byte picking the second description, and the dirty byte set.
+constexpr std::uint32_t SecondAndDirty = 0x0101;
+
+TEST(GpuRecording, RecordsAFramebufferAtTheVerticalBlankThatShowsIt) {
+    Fixture fixture;
+    fixture.PutWord(SecondLeftAddress, ShownAddress);
+    fixture.PutWord(BottomUpdate, SecondAndDirty);
+    fixture.harness.Kernel().Threads().Advance(Graphics::FrameTicks);
+    EXPECT_EQ(fixture.recorder.events,
+              (std::vector<std::string>{std::format("1 framebuffer 1 {:08X}", ShownAddress)}));
+    EXPECT_EQ(fixture.recording.Summary().framebuffers, 1U);
 }
 
 TEST(GpuRecording, LeavesOutAPageThatHoldsOnlyZeros) {

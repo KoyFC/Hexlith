@@ -48,10 +48,13 @@ struct AnalyzeOptions {
     bool help = false;
 };
 
-// A module event to stop the run after, as --stop-after names it.
+// What to stop the run after, as --stop-after names it: a module event, or
+// the vertical blank that starts a frame.
 struct BootStopPoint {
-    bool unload = false;
+    enum class Kind : std::uint8_t { ModuleLoad, ModuleUnload, Frame };
+    Kind kind = Kind::ModuleLoad;
     std::string module;
+    std::uint64_t frame = 0;
 };
 
 struct BootOptions {
@@ -84,7 +87,8 @@ struct BootOptions {
     std::optional<std::string> input;
 
     // Stops the run once ldr:ro has loaded or unloaded a module, where a
-    // breakpoint after the game's request would stop Azahar.
+    // breakpoint after the game's request would stop Azahar, or once a frame
+    // has begun.
     std::optional<BootStopPoint> stop_after;
 
     // Records the GPU's work under the work directory, as

@@ -28,6 +28,9 @@ public:
     core::Status Command(std::uint64_t frame, const std::array<std::uint32_t, 8>& words) override;
     core::Status Page(std::uint64_t frame, std::uint32_t address, core::ByteSpan bytes) override;
     core::Status List(std::uint64_t frame, std::uint32_t address, core::ByteSpan bytes) override;
+    core::Status Framebuffer(std::uint64_t frame,
+                             std::uint32_t screen,
+                             const std::array<std::uint32_t, FramebufferWords>& words) override;
     core::Status Finish() override;
 
     [[nodiscard]] std::string Describe() const override;

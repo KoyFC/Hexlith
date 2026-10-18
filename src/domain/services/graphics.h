@@ -29,7 +29,9 @@ namespace hexlith::domain::services {
 // raises PPF, a DMA copies and raises DMA, a display transfer raises PPF
 // without converting anything, and a command list raises P3D without being
 // run. Both screens' vertical blanks, PDC0 and PDC1, arrive every 4,481,136
-// ticks, the frame time Azahar gives as measured on hardware.
+// ticks, the frame time Azahar gives as measured on hardware. At each, the
+// framebuffer the game asked that screen to show next in shared memory
+// becomes the one it shows; SetBufferSwap does the same at once.
 // Registers keep what is written to them and answer it back.
 class Graphics final : public CommandTable<Graphics> {
 public:
@@ -70,6 +72,39 @@ public:
         command_observer_ = std::move(observer);
     }
 
+    // What a screen is told to show, as the game describes it: which of its
+    // two framebuffers the addresses are for, the left and right eye's
+    // address, the bytes from one row to the next, the pixel format, and
+    // which of the two to show. Source: FrameBufferInfo in Azahar's
+    // gsp_gpu.h; 3dbrew, GSP Shared Memory.
+    struct FramebufferInfo {
+        std::uint32_t active = 0;
+        std::uint32_t address_left = 0;
+        std::uint32_t address_right = 0;
+        std::uint32_t stride = 0;
+        std::uint32_t format = 0;
+        std::uint32_t shown = 0;
+        std::uint32_t unknown = 0;
+    };
+
+    // The top screen is 0 and the bottom 1.
+    struct FramebufferSwap {
+        std::uint64_t frame = 0;
+        std::uint32_t screen = 0;
+        FramebufferInfo info;
+    };
+
+    // Called at the top screen's vertical blank with the frame it begins,
+    // before anything is raised.
+    void OnVerticalBlank(std::function<void(std::uint64_t)> observer) {
+        vertical_blank_observer_ = std::move(observer);
+    }
+
+    // Called each time a screen is given a framebuffer to show.
+    void OnFramebuffer(std::function<void(const FramebufferSwap&)> observer) {
+        framebuffer_observer_ = std::move(observer);
+    }
+
     // Command IDs. Source: CommandId in Azahar's gsp_command.h.
     static constexpr std::uint32_t SubmitCommandListId = 1;
 
@@ -100,6 +135,9 @@ private:
     void AcquireRight(kernel::IpcRequest& request);
 
     void ScheduleVerticalBlank();
+    // Shows what each client asked the screen to show next, if it asked.
+    void TakeFramebufferUpdates(std::uint32_t screen);
+    void Swap(std::uint32_t screen, const FramebufferInfo& info);
     void Raise(Interrupt interrupt);
     // Raises an interrupt once a GPU operation that takes this long is done,
     // with the time every request costs on top.
@@ -127,6 +165,8 @@ private:
     // When the last operation started will be done.
     std::uint64_t busy_until_ = 0;
     std::function<void(const GxCommand&)> command_observer_;
+    std::function<void(const FramebufferSwap&)> framebuffer_observer_;
+    std::function<void(std::uint64_t)> vertical_blank_observer_;
 };
 
 }  // namespace hexlith::domain::services

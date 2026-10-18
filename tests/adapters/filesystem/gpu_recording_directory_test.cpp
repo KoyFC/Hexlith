@@ -43,9 +43,23 @@ fs::path RecordSample(std::string_view name) {
 TEST(GpuRecordingDirectory, WritesAnIndexOfEveryEvent) {
     const fs::path root = RecordSample("index");
     const std::string index = Read(root / "recording.txt");
-    EXPECT_TRUE(index.starts_with("# hexlith gpu recording, format 1\n")) << index;
+    EXPECT_TRUE(index.starts_with("# hexlith gpu recording, format 2\n")) << index;
     EXPECT_NE(index.find("3 gx 00000001 14000000 00000004"), std::string::npos) << index;
     EXPECT_NE(index.find("4 list 14000000 00000004 000000.bin"), std::string::npos) << index;
+    fs::remove_all(root);
+}
+
+TEST(GpuRecordingDirectory, WritesAFramebufferAsItsWords) {
+    const fs::path root = Root("framebuffer");
+    fs::remove_all(root);
+    GpuRecordingDirectory recording{root};
+    EXPECT_TRUE(recording.Prepare().Ok());
+    EXPECT_TRUE(recording.Framebuffer(5, 1, {1, 0x14400000, 0x14500000, 0x2D0, 0x201, 1, 0}).Ok());
+    EXPECT_TRUE(recording.Finish().Ok());
+    EXPECT_NE(Read(root / "recording.txt")
+                  .find("5 framebuffer 1 00000001 14400000 14500000 000002D0 00000201 00000001 "
+                        "00000000\n"),
+              std::string::npos);
     fs::remove_all(root);
 }
 

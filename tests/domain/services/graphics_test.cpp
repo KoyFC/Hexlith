@@ -81,6 +81,60 @@ TEST(Graphics, QueuesBothVerticalBlanksEachFrame) {
     EXPECT_EQ(gsp.Shared()[QueueSlots + 1], Pdc1);
 }
 
+// Framebuffer updates for the first client: the top screen's at 0x200, the
+// bottom's at 0x240, each an index byte, a dirty byte, and two descriptions of
+// seven words from offsets 4 and 0x20. Source: FrameBufferUpdate in Azahar's
+// gsp_gpu.h; 3dbrew, GSP Shared Memory.
+constexpr std::uint32_t TopUpdate = 0x200;
+constexpr std::uint32_t FirstInfo = 4;
+constexpr std::uint32_t SecondInfo = 0x20;
+constexpr std::uint32_t TopAddress = 0x14100000;
+constexpr std::uint32_t OtherAddress = 0x14200000;
+// The index byte picking the second description, and the dirty byte set.
+constexpr std::uint32_t SecondAndDirty = 0x0101;
+
+// Registers a client, listens for swaps, and asks for the top screen to show
+// the second of two descriptions.
+struct SwapHarness : Harness {
+    SwapHarness() {
+        Register();
+        service.OnFramebuffer(
+            [this](const Graphics::FramebufferSwap& swap) { swaps.push_back(swap); });
+        PutWord(TopUpdate + FirstInfo + 4, OtherAddress);
+        PutWord(TopUpdate + SecondInfo, 1);
+        PutWord(TopUpdate + SecondInfo + 4, TopAddress);
+        PutWord(TopUpdate, SecondAndDirty);
+    }
+
+    std::vector<Graphics::FramebufferSwap> swaps;
+};
+
+TEST(Graphics, ShowsTheFramebufferTheGameAskedForAtTheVerticalBlank) {
+    SwapHarness gsp;
+    gsp.harness.Kernel().Threads().Advance(Graphics::FrameTicks);
+    ASSERT_EQ(gsp.swaps.size(), 1U);
+    EXPECT_EQ(gsp.swaps.front().frame, 1U);
+    EXPECT_EQ(gsp.swaps.front().screen, 0U);
+    EXPECT_EQ(gsp.swaps.front().info.active, 1U) << "the description the index picks";
+    EXPECT_EQ(gsp.swaps.front().info.address_left, TopAddress);
+}
+
+TEST(Graphics, TakesAFramebufferUpdateOnce) {
+    SwapHarness gsp;
+    gsp.harness.Kernel().Threads().Advance(Graphics::FrameTicks);
+    EXPECT_EQ(gsp.Shared()[TopUpdate + 1], 0) << "the dirty byte is cleared";
+    gsp.harness.Kernel().Threads().Advance(Graphics::FrameTicks);
+    EXPECT_EQ(gsp.swaps.size(), 1U) << "nothing new to show";
+}
+
+TEST(Graphics, CountsTheFrameBeforeTheVerticalBlankIsRaised) {
+    Harness gsp;
+    std::vector<std::uint64_t> frames;
+    gsp.service.OnVerticalBlank([&frames](std::uint64_t frame) { frames.push_back(frame); });
+    gsp.harness.Kernel().Threads().Advance(2 * Graphics::FrameTicks);
+    EXPECT_EQ(frames, (std::vector<std::uint64_t>{1, 2}));
+}
+
 // The time every request costs, 300 microseconds, in ticks. Source:
 // sync_delay_nanoseconds in Azahar's gsp_gpu.cpp.
 constexpr std::uint64_t SyncTicks = 300'000ULL * kernel::Arm11TicksPerSecond / 1'000'000'000ULL;

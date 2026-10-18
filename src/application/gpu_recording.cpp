@@ -25,6 +25,22 @@ GpuRecording::GpuRecording(kernel::Kernel& kernel,
                            ports::GpuRecorder& recorder)
     : kernel_(&kernel), recorder_(&recorder) {
     gpu.OnCommand([this](const domain::services::Graphics::GxCommand& command) { Take(command); });
+    gpu.OnFramebuffer(
+        [this](const domain::services::Graphics::FramebufferSwap& swap) { Take(swap); });
+}
+
+void GpuRecording::Take(const domain::services::Graphics::FramebufferSwap& swap) {
+    const domain::services::Graphics::FramebufferInfo& info = swap.info;
+    Keep(recorder_->Framebuffer(swap.frame,
+                                swap.screen,
+                                {info.active,
+                                 info.address_left,
+                                 info.address_right,
+                                 info.stride,
+                                 info.format,
+                                 info.shown,
+                                 info.unknown}));
+    ++summary_.framebuffers;
 }
 
 void GpuRecording::Keep(const core::Status& status) {
