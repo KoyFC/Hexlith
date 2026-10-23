@@ -1,5 +1,6 @@
 #include "adapters/filesystem/gpu_recording_files.h"
 #include "adapters/filesystem/png_file.h"
+#include "adapters/vulkan/vulkan_backend.h"
 #include "application/gpu_render.h"
 
 #include <cstdint>
@@ -24,15 +25,18 @@ namespace {
 namespace fs = std::filesystem;
 namespace application = hexlith::application;
 namespace gpu = hexlith::domain::gpu;
+namespace vulkan = hexlith::adapters::vulkan;
 
 constexpr int Success = 0;
 constexpr int Failure = 1;
 constexpr int Usage = 2;
 
 constexpr std::string_view UsageText =
-    "usage: hexlith-gpu-replay [--sampling hardware|azahar] --frames <n,n,...> <recording> <directory>\n"
+    "usage: hexlith-gpu-replay [--backend reference|vulkan] [--device <name>]\n"
+    "                          [--sampling hardware|azahar] --frames <n,n,...> <recording> <directory>\n"
     "\n"
-    "Replays the GPU recording in <recording> through the reference renderer, with its\n"
+    "Replays the GPU recording in <recording> through the reference renderer, or with\n"
+    "--backend vulkan through the Vulkan backend on the device named like <name>, with its\n"
     "memory fills and display transfers, and writes what each screen shows in each of\n"
     "the frames as frame-<n>-top.png and frame-<n>-bottom.png in <directory>.\n"
     "\n"
@@ -62,6 +66,8 @@ std::optional<std::set<std::uint64_t>> ParseFrames(std::string_view text) {
 }
 
 struct Arguments {
+    bool vulkan = false;
+    std::string device;
     gpu::Sampling sampling = gpu::Sampling::Hardware;
     std::set<std::uint64_t> frames;
     fs::path recording;
@@ -80,6 +86,14 @@ std::optional<Arguments> Parse(std::span<char* const> arguments) {
                 return std::nullopt;
             }
             parsed.frames = *frames;
+        } else if (argument == "--backend" && has_value) {
+            const std::string_view backend{arguments[++at]};
+            if (backend != "vulkan" && backend != "reference") {
+                return std::nullopt;
+            }
+            parsed.vulkan = backend == "vulkan";
+        } else if (argument == "--device" && has_value) {
+            parsed.device = arguments[++at];
         } else if (argument == "--sampling" && has_value) {
             const std::string_view sampling{arguments[++at]};
             if (sampling == "azahar") {
@@ -122,7 +136,25 @@ int Main(std::span<char* const> arguments) {
         return hexlith::core::Status{};
     };
     auto memory = std::make_unique<gpu::GpuMemory>();
-    application::ReferenceGpuBackend backend(*memory, parsed->sampling);
+    std::unique_ptr<vulkan::VulkanContext> context;
+    std::unique_ptr<hexlith::ports::GpuBackend> chosen;
+    if (parsed->vulkan) {
+        auto made = vulkan::VulkanContext::Create({.device = parsed->device, .validation = true});
+        if (!made) {
+            std::cerr << "hexlith-gpu-replay: " << made.Failure().Message() << '\n';
+            return Failure;
+        }
+        context = std::move(made.Value());
+        auto backend = vulkan::VulkanGpuBackend::Create(*context, *memory, parsed->sampling);
+        if (!backend) {
+            std::cerr << "hexlith-gpu-replay: " << backend.Failure().Message() << '\n';
+            return Failure;
+        }
+        chosen = std::move(backend.Value());
+    } else {
+        chosen = std::make_unique<application::ReferenceGpuBackend>(*memory, parsed->sampling);
+    }
+    hexlith::ports::GpuBackend& backend = *chosen;
     const hexlith::core::Result<application::GpuRenderSummary> rendered =
         application::RenderGpuRecording(source, *memory, backend, parsed->frames, write);
     if (!rendered) {
@@ -140,6 +172,13 @@ int Main(std::span<char* const> arguments) {
                              summary.unsupported || statistics.unsupported
                                  ? "; something asked for was not implemented"
                                  : "");
+    if (context && context->ValidationMessages() > 0) {
+        std::cerr << std::format(
+            "hexlith-gpu-replay: {} Vulkan validation messages, the first: {}\n",
+            context->ValidationMessages(),
+            context->FirstValidationMessage());
+        return Failure;
+    }
     return Success;
 }
 

@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace hexlith::domain::gpu {
 
@@ -25,30 +26,27 @@ struct ReferenceRendererStatistics {
     bool unsupported_shader = false;
 };
 
-// The whole pipeline in software, as a command processor's executor: vertex
-// loading, the vertex shader, the geometry shader, primitive assembly and
-// the reference rasterizer, drawing into GPU memory. It is what the Vulkan
-// backend is checked against, and is itself checked against Azahar's
-// software renderer (docs/pica-rasterizer.md).
-class ReferenceRenderer {
+// The vertex half of the pipeline in software: vertex loading, the vertex
+// shader, the geometry shader and primitive assembly, which leave each draw's
+// triangles, as the rasterizer takes them, in Triangles(). The reference
+// renderer rasterizes them; the Vulkan backend draws them when a geometry
+// shader or immediate mode keeps the vertices on the CPU (ADR 0022).
+class VertexPipeline {
 public:
-    explicit ReferenceRenderer(GpuMemory& memory,
-                               Sampling sampling = Sampling::Hardware,
-                               ShaderPrecision precision = ShaderPrecision::Float32)
-        : memory_(&memory), precision_(precision), rasterizer_(memory, sampling), emitter_(0) {}
+    explicit VertexPipeline(GpuMemory& memory, ShaderPrecision precision = ShaderPrecision::Float32)
+        : memory_(&memory), precision_(precision), emitter_(0) {}
 
     void Draw(PicaState& state, bool indexed);
     void ImmediateVertex(PicaState& state);
     void RestartPrimitive(PicaState& state);
 
-    void Finalize() {}
+    // The triangles assembled so far, for the caller to take and clear.
+    [[nodiscard]] std::vector<PrimitiveAssembler::Triangle>& Triangles() {
+        return triangles_;
+    }
 
     [[nodiscard]] const ReferenceRendererStatistics& Statistics() const {
         return statistics_;
-    }
-
-    [[nodiscard]] const RasterizerStatistics& Rasterization() const {
-        return rasterizer_.Statistics();
     }
 
 private:
@@ -67,9 +65,9 @@ private:
 
     GpuMemory* memory_;
     ShaderPrecision precision_;
-    Rasterizer rasterizer_;
     PrimitiveAssembler assembler_;
     ReferenceRendererStatistics statistics_;
+    std::vector<PrimitiveAssembler::Triangle> triangles_;
 
     // The geometry shader keeps its registers and its emitter's state from one
     // run to the next, and from one draw to the next (Azahar's
@@ -81,6 +79,41 @@ private:
     std::size_t geometry_filled_ = 0;
     std::size_t geometry_needed_ = 0;
     std::size_t vertex_outputs_ = 0;
+};
+
+// The whole pipeline in software, as a command processor's executor: the
+// vertex pipeline, then the reference rasterizer, drawing into GPU memory.
+// It is what the Vulkan backend is checked against, and is itself checked
+// against Azahar's software renderer (docs/pica-rasterizer.md).
+class ReferenceRenderer {
+public:
+    explicit ReferenceRenderer(GpuMemory& memory,
+                               Sampling sampling = Sampling::Hardware,
+                               ShaderPrecision precision = ShaderPrecision::Float32)
+        : vertices_(memory, precision), rasterizer_(memory, sampling) {}
+
+    void Draw(PicaState& state, bool indexed);
+    void ImmediateVertex(PicaState& state);
+
+    void RestartPrimitive(PicaState& state) {
+        vertices_.RestartPrimitive(state);
+    }
+
+    void Finalize() {}
+
+    [[nodiscard]] const ReferenceRendererStatistics& Statistics() const {
+        return vertices_.Statistics();
+    }
+
+    [[nodiscard]] const RasterizerStatistics& Rasterization() const {
+        return rasterizer_.Statistics();
+    }
+
+private:
+    void Rasterize(const PicaState& state);
+
+    VertexPipeline vertices_;
+    Rasterizer rasterizer_;
 };
 
 static_assert(PicaExecutor<ReferenceRenderer>);

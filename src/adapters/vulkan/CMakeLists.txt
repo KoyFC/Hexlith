@@ -6,10 +6,14 @@ add_library(Hexlith::Vulkan ALIAS hexlith_vulkan)
 
 target_sources(
     hexlith_vulkan
-    PRIVATE glsl_compiler.cpp
+    PRIVATE fragment_shader.cpp
+            fragment_shader.h
+            glsl_compiler.cpp
             glsl_compiler.h
             shader_cases.cpp
             shader_cases.h
+            vulkan_backend.cpp
+            vulkan_backend.h
             vulkan_context.cpp
             vulkan_context.h
 )

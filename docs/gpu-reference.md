@@ -15,6 +15,8 @@ Frame numbers are the recording's, which count vertical blanks as Hexlith's boot
 ```sh
 hexlith-gpu-replay --frames 220,400,1100 <work>/<title>/gpu <work>/<title>/gpu-replay/hardware
 hexlith-gpu-replay --sampling azahar --frames 220,400,1100 <work>/<title>/gpu <work>/<title>/gpu-replay/azahar
+hexlith-gpu-replay --backend vulkan [--device llvmpipe] --frames 220,400,1100 <work>/<title>/gpu <work>/<title>/gpu-replay/vulkan
+scripts/compare_screens.py <work>/<title>/gpu-replay/hardware <work>/<title>/gpu-replay/vulkan
 ```
 
 The tool replays the recording through `application::RenderGpuRecording`: every list through the reference renderer, every memory fill and display transfer through the transfer engines of [`docs/gpu-transfers.md`](gpu-transfers.md), and every framebuffer line into `domain::gpu::ScreenSetup`. A frame's picture is what its screens show once its framebuffer lines are in and before its own work starts. The pictures are the game's, so they go in the workspace and never in the repository. Replaying to frame 1100 takes three and a half minutes with the release build.
@@ -37,3 +39,8 @@ With the reference sampling as the registers say, bilinear and with mipmaps, rat
 | Top, F3 1100 | 72.6% | 1.59 | 10 | 64 |
 
 The bottom screen is black at frames 400 and 700 and shows the video at 1000 and 1100, which differs by at most 1. The largest differences are at the edges of text and sprites, where a filtered sample mixes in the transparent texels around a glyph. This is what the Vulkan backend, which filters, may differ from Azahar by; it is held to the reference in its filtering mode, where no such difference should arise.
+
+## Drawn by Vulkan
+
+The milestone's pictures come from the Vulkan backend of [ADR 0022](adr/0022-the-vulkan-backend-keeps-gpu-memory-true.md), from the recording alone. On 2026-10-23 all ten screens of frames 220, 400, 700, 1000 and 1100 were within the tolerance of [ADR 0021](adr/0021-the-vulkan-backend-is-held-to-the-reference-within-a-measured-tolerance.md), on the Intel Lunar Lake GPU and on llvmpipe alike, with no message from the Vulkan validation layer. The ADR has the numbers for each screen and what each difference comes from.
+

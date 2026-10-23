@@ -26,5 +26,7 @@ The format is deliberately short: context, the options that were actually consid
 | [0018](0018-a-shader-interpreter-is-the-semantic-reference.md) | A PICA shader interpreter is the semantic reference, and it calculates in float32 | Accepted |
 | [0019](0019-the-reference-rasterizer-follows-azahar-and-samples-two-ways.md) | The reference rasterizer follows Azahar's software renderer, and samples textures two ways | Accepted |
 | [0020](0020-pica-shaders-become-glsl-compiled-by-glslang.md) | PICA vertex shaders become GLSL that keeps the interpreter's shape, compiled by glslang | Accepted |
+| [0021](0021-the-vulkan-backend-is-held-to-the-reference-within-a-measured-tolerance.md) | The Vulkan backend is held to the reference within a measured tolerance | Accepted |
+| [0022](0022-the-vulkan-backend-keeps-gpu-memory-true.md) | The Vulkan backend keeps GPU memory true and the PICA's fragment stage in one shader | Accepted |
 
 A record marked provisional has a named condition that will settle it. It is written down because work has to proceed in the meantime, not because the question is closed.

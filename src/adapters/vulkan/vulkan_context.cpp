@@ -149,10 +149,19 @@ core::Status VulkanContext::CreateDevice() {
     queue.queueFamilyIndex = queue_family_;
     queue.queueCount = 1;
     queue.pQueuePriorities = &priority;
+    // The output merger's logic operations and the custom clip plane need
+    // these; a device without them still checks shaders.
+    VkPhysicalDeviceFeatures available{};
+    vkGetPhysicalDeviceFeatures(physical_, &available);
+    VkPhysicalDeviceFeatures enabled{};
+    enabled.logicOp = available.logicOp;
+    enabled.shaderClipDistance = available.shaderClipDistance;
+    can_draw_ = available.logicOp == VK_TRUE && available.shaderClipDistance == VK_TRUE;
     VkDeviceCreateInfo create{};
     create.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     create.queueCreateInfoCount = 1;
     create.pQueueCreateInfos = &queue;
+    create.pEnabledFeatures = &enabled;
     if (const core::Status created =
             Check(vkCreateDevice(physical_, &create, nullptr, &device_), "vkCreateDevice");
         !created) {

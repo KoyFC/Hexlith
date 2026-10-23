@@ -73,7 +73,7 @@ private:
 
 }  // namespace
 
-void ReferenceRenderer::Draw(PicaState& state, bool indexed) {
+void VertexPipeline::Draw(PicaState& state, bool indexed) {
     ++statistics_.draws;
     ConfigureGeometryStage(state);
     const VertexLoader loader(state.Registers());
@@ -100,7 +100,7 @@ void ReferenceRenderer::Draw(PicaState& state, bool indexed) {
 
 // A vertex given in immediate mode runs on registers of its own (Azahar's
 // DrawImmediate), and goes on as a drawn one does.
-void ReferenceRenderer::ImmediateVertex(PicaState& state) {
+void VertexPipeline::ImmediateVertex(PicaState& state) {
     const bool geometry_shader =
         Field(state.Register(reg::GeometryStageConfig), 0, 2) == GeometryShaderInUse;
     if (geometry_shader != geometry_shader_) {
@@ -111,7 +111,7 @@ void ReferenceRenderer::ImmediateVertex(PicaState& state) {
 }
 
 // GPUREG_PRIMITIVE_CONFIG bits 8 and 9 give the topology. Source: GBATEK.
-void ReferenceRenderer::RestartPrimitive(PicaState& state) {
+void VertexPipeline::RestartPrimitive(PicaState& state) {
     constexpr unsigned TopologyShift = 8;
     assembler_.Restart(static_cast<PrimitiveAssembler::Topology>(
         Field(state.Register(reg::PrimitiveConfig), TopologyShift, 2)));
@@ -121,7 +121,7 @@ void ReferenceRenderer::RestartPrimitive(PicaState& state) {
 // GPUREG_GSH_MISC0's low byte is its mode. Only the mode that takes a fixed
 // number of the vertex shader's outputs at a time is implemented: GBATEK
 // calls it point mode, and it is the one the reference title uses.
-void ReferenceRenderer::ConfigureGeometryStage(const PicaState& state) {
+void VertexPipeline::ConfigureGeometryStage(const PicaState& state) {
     geometry_shader_ = Field(state.Register(reg::GeometryStageConfig), 0, 2) == GeometryShaderInUse;
     geometry_filled_ = 0;
     if (!geometry_shader_) {
@@ -137,9 +137,9 @@ void ReferenceRenderer::ConfigureGeometryStage(const PicaState& state) {
     emitter_.SetOutputMask(UnitRegister(state, reg::GeometryShaderBase, reg::shader::OutputMask));
 }
 
-ShaderRegisters::Bank ReferenceRenderer::ShadeVertex(const PicaState& state,
-                                                     const VertexLoader::Inputs& attributes,
-                                                     ShaderRegisters& registers) {
+ShaderRegisters::Bank VertexPipeline::ShadeVertex(const PicaState& state,
+                                                  const VertexLoader::Inputs& attributes,
+                                                  ShaderRegisters& registers) {
     ++statistics_.vertex_shader_runs;
     PlaceInputs(state.Registers(), reg::VertexShaderBase, attributes, registers);
     const ShaderRun run{
@@ -152,7 +152,7 @@ ShaderRegisters::Bank ReferenceRenderer::ShadeVertex(const PicaState& state,
                        registers.outputs.at(registers.output_bank));
 }
 
-void ReferenceRenderer::SubmitVertex(PicaState& state, const ShaderRegisters::Bank& packed) {
+void VertexPipeline::SubmitVertex(PicaState& state, const ShaderRegisters::Bank& packed) {
     if (!geometry_shader_) {
         Assemble(state, packed);
         return;
@@ -170,7 +170,7 @@ void ReferenceRenderer::SubmitVertex(PicaState& state, const ShaderRegisters::Ba
     }
 }
 
-void ReferenceRenderer::RunGeometryShader(PicaState& state) {
+void VertexPipeline::RunGeometryShader(PicaState& state) {
     ++statistics_.geometry_shader_runs;
     PlaceInputs(state.Registers(), reg::GeometryShaderBase, geometry_inputs_, geometry_registers_);
     const ShaderRun run{
@@ -192,12 +192,29 @@ void ReferenceRenderer::RunGeometryShader(PicaState& state) {
     }
 }
 
-void ReferenceRenderer::Assemble(const PicaState& state, const ShaderRegisters::Bank& packed) {
+void VertexPipeline::Assemble(const PicaState& state, const ShaderRegisters::Bank& packed) {
     const std::optional<PrimitiveAssembler::Triangle> triangle =
         assembler_.Submit(MakeOutputVertex(state.Registers(), packed));
     if (triangle.has_value()) {
-        rasterizer_.DrawTriangle(state, *triangle);
+        triangles_.push_back(*triangle);
     }
+}
+
+void ReferenceRenderer::Draw(PicaState& state, bool indexed) {
+    vertices_.Draw(state, indexed);
+    Rasterize(state);
+}
+
+void ReferenceRenderer::ImmediateVertex(PicaState& state) {
+    vertices_.ImmediateVertex(state);
+    Rasterize(state);
+}
+
+void ReferenceRenderer::Rasterize(const PicaState& state) {
+    for (const PrimitiveAssembler::Triangle& triangle : vertices_.Triangles()) {
+        rasterizer_.DrawTriangle(state, triangle);
+    }
+    vertices_.Triangles().clear();
 }
 
 }  // namespace hexlith::domain::gpu

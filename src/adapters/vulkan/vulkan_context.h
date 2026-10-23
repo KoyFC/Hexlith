@@ -70,6 +70,12 @@ public:
         return first_validation_message_;
     }
 
+    // Whether the device has what the backend draws with: logic operations
+    // and clip distances.
+    [[nodiscard]] bool CanDraw() const {
+        return can_draw_;
+    }
+
     [[nodiscard]] bool Validating() const {
         return messenger_ != VK_NULL_HANDLE;
     }
@@ -100,6 +106,7 @@ private:
     VkCommandPool pool_ = VK_NULL_HANDLE;
     std::string device_name_;
     FloatControls floats_;
+    bool can_draw_ = false;
     std::uint64_t validation_messages_ = 0;
     std::string first_validation_message_;
 };

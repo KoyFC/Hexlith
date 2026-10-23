@@ -1,3 +1,3 @@
-hexlith_add_test(hexlith_adapters_vulkan_test shader_cases_test.cpp)
+hexlith_add_test(hexlith_adapters_vulkan_test shader_cases_test.cpp vulkan_backend_test.cpp)
 
 target_link_libraries(hexlith_adapters_vulkan_test PRIVATE Hexlith::Vulkan Hexlith::TestSupport)
