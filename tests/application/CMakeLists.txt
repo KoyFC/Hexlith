@@ -7,6 +7,7 @@ hexlith_add_test(
     extract_test.cpp
     golden_trace_test.cpp
     gpu_recording_test.cpp
+    gpu_render_test.cpp
     gpu_replay_test.cpp
     ../domain/services/service_harness.cpp
     ../domain/services/service_harness.h

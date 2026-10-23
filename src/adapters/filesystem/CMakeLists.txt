@@ -12,6 +12,8 @@ target_sources(
             gpu_recording_files.h
             file_rom_source.cpp
             file_rom_source.h
+            png_file.cpp
+            png_file.h
             scripted_input.cpp
             scripted_input.h
             workspace_locator.cpp
