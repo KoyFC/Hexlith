@@ -10,6 +10,7 @@ target_link_libraries(hexlith_ports INTERFACE Hexlith::Core Hexlith::Domain)
 target_sources(
     hexlith_ports
     INTERFACE FILE_SET HEADERS BASE_DIRS "${PROJECT_SOURCE_DIR}/src" FILES blob_sink.h
+                                                                           gpu_backend.h
                                                                            gpu_recorder.h
                                                                            gpu_recording_source.h
                                                                            input_source.h

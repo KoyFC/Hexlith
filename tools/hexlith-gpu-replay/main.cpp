@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <format>
 #include <iostream>
+#include <memory>
 #include <set>
 #include <span>
 #include <string>
@@ -61,7 +62,8 @@ std::optional<std::set<std::uint64_t>> ParseFrames(std::string_view text) {
 }
 
 struct Arguments {
-    application::GpuRenderOptions options;
+    gpu::Sampling sampling = gpu::Sampling::Hardware;
+    std::set<std::uint64_t> frames;
     fs::path recording;
     fs::path output;
 };
@@ -77,11 +79,11 @@ std::optional<Arguments> Parse(std::span<char* const> arguments) {
             if (!frames) {
                 return std::nullopt;
             }
-            parsed.options.frames = *frames;
+            parsed.frames = *frames;
         } else if (argument == "--sampling" && has_value) {
             const std::string_view sampling{arguments[++at]};
             if (sampling == "azahar") {
-                parsed.options.sampling = gpu::Sampling::AzaharSoftware;
+                parsed.sampling = gpu::Sampling::AzaharSoftware;
             } else if (sampling != "hardware") {
                 return std::nullopt;
             }
@@ -89,7 +91,7 @@ std::optional<Arguments> Parse(std::span<char* const> arguments) {
             positional.push_back(argument);
         }
     }
-    if (positional.size() != 2 || parsed.options.frames.empty()) {
+    if (positional.size() != 2 || parsed.frames.empty()) {
         return std::nullopt;
     }
     parsed.recording = positional[0];
@@ -119,20 +121,25 @@ int Main(std::span<char* const> arguments) {
         }
         return hexlith::core::Status{};
     };
+    auto memory = std::make_unique<gpu::GpuMemory>();
+    application::ReferenceGpuBackend backend(*memory, parsed->sampling);
     const hexlith::core::Result<application::GpuRenderSummary> rendered =
-        application::RenderGpuRecording(source, parsed->options, write);
+        application::RenderGpuRecording(source, *memory, backend, parsed->frames, write);
     if (!rendered) {
         std::cerr << "hexlith-gpu-replay: " << rendered.Failure().Message() << '\n';
         return Failure;
     }
     const application::GpuRenderSummary& summary = rendered.Value();
-    std::cout << std::format("{} lists, {} draws, {} fills, {} transfers{}\n",
-                             summary.lists,
-                             summary.draws,
+    const hexlith::ports::GpuBackendStatistics statistics = backend.Statistics();
+    std::cout << std::format("{}: {} lists, {} draws, {} fills, {} transfers{}\n",
+                             backend.Describe(),
+                             statistics.lists,
+                             statistics.draws,
                              summary.fills,
                              summary.transfers,
-                             summary.unsupported ? "; something asked for was not implemented"
-                                                 : "");
+                             summary.unsupported || statistics.unsupported
+                                 ? "; something asked for was not implemented"
+                                 : "");
     return Success;
 }
 

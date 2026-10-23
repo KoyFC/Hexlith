@@ -1,13 +1,11 @@
 #include "application/gpu_render.h"
 
 #include "application/gpu_replay.h"
-#include "domain/gpu/command_processor.h"
 #include "domain/gpu/gx_command.h"
 #include "domain/gpu/memory_transfer.h"
-#include "domain/gpu/reference_renderer.h"
 
 #include <algorithm>
-#include <memory>
+#include <format>
 
 namespace hexlith::application {
 namespace {
@@ -16,17 +14,11 @@ namespace gpu = domain::gpu;
 
 class Renderer {
 public:
-    Renderer(const GpuRenderOptions& options,
+    Renderer(gpu::GpuMemory& memory,
+             ports::GpuBackend& backend,
+             const std::set<std::uint64_t>& frames,
              const std::function<core::Status(const RenderedFrame&)>& sink)
-        : memory_(std::make_unique<gpu::GpuMemory>()),
-          renderer_(*memory_, options.sampling),
-          processor_(state_, *memory_, renderer_),
-          sink_(&sink),
-          pending_(options.frames) {}
-
-    [[nodiscard]] gpu::GpuMemory& Memory() {
-        return *memory_;
-    }
+        : memory_(&memory), backend_(&backend), sink_(&sink), pending_(frames) {}
 
     // A frame's picture is taken at its first event that is not a
     // framebuffer line, which come first in a frame.
@@ -48,9 +40,7 @@ public:
     }
 
     core::Status List(std::span<const std::uint8_t> bytes) {
-        ++summary_.lists;
-        const core::Result<gpu::CommandListRun> run = processor_.Run(bytes);
-        return run ? core::Status{} : core::Status{run.Failure()};
+        return backend_->RunCommandList(bytes);
     }
 
     void Command(const gpu::GxCommandWords& words) {
@@ -77,19 +67,13 @@ public:
         return Before(seen_ + 1, false);
     }
 
-    [[nodiscard]] GpuRenderSummary Summary() const {
-        GpuRenderSummary summary = summary_;
-        summary.draws = renderer_.Statistics().draws;
-        summary.unsupported = summary.unsupported || renderer_.Statistics().unsupported_shader ||
-                              renderer_.Rasterization().unsupported;
-        return summary;
+    [[nodiscard]] const GpuRenderSummary& Summary() const {
+        return summary_;
     }
 
 private:
-    std::unique_ptr<gpu::GpuMemory> memory_;
-    gpu::PicaState state_;
-    gpu::ReferenceRenderer renderer_;
-    gpu::CommandProcessor<gpu::ReferenceRenderer> processor_;
+    gpu::GpuMemory* memory_;
+    ports::GpuBackend* backend_;
     gpu::ScreenSetup screens_;
     const std::function<core::Status(const RenderedFrame&)>* sink_;
     std::set<std::uint64_t> pending_;
@@ -99,16 +83,38 @@ private:
 
 }  // namespace
 
+ReferenceGpuBackend::ReferenceGpuBackend(gpu::GpuMemory& memory, gpu::Sampling sampling)
+    : renderer_(memory, sampling), processor_(state_, memory, renderer_), sampling_(sampling) {}
+
+core::Status ReferenceGpuBackend::RunCommandList(std::span<const std::uint8_t> list) {
+    ++lists_;
+    const core::Result<gpu::CommandListRun> run = processor_.Run(list);
+    return run ? core::Status{} : core::Status{run.Failure()};
+}
+
+ports::GpuBackendStatistics ReferenceGpuBackend::Statistics() const {
+    return {.lists = lists_,
+            .draws = renderer_.Statistics().draws,
+            .unsupported =
+                renderer_.Statistics().unsupported_shader || renderer_.Rasterization().unsupported};
+}
+
+std::string ReferenceGpuBackend::Describe() const {
+    return std::format("the reference renderer, sampling {}",
+                       sampling_ == gpu::Sampling::Hardware ? "as the registers say"
+                                                            : "as Azahar does");
+}
+
 core::Result<GpuRenderSummary>
 RenderGpuRecording(ports::GpuRecordingSource& source,
-                   const GpuRenderOptions& options,
+                   gpu::GpuMemory& memory,
+                   ports::GpuBackend& backend,
+                   const std::set<std::uint64_t>& frames,
                    const std::function<core::Status(const RenderedFrame&)>& sink) {
-    if (options.frames.empty()) {
+    if (frames.empty()) {
         return GpuRenderSummary{};
     }
-    // Nothing a list can write sets the interrupt registers; Nintendo's code
-    // sets them before the first (InterruptSetup's defaults).
-    Renderer renderer(options, sink);
+    Renderer renderer(memory, backend, frames, sink);
     GpuReplayVisitor visitor;
     visitor.command = [&renderer](const gpu::RecordedCommand& command) {
         core::Status before = renderer.Before(command.frame, false);
@@ -129,8 +135,7 @@ RenderGpuRecording(ports::GpuRecordingSource& source,
         }
         return before;
     };
-    const std::uint64_t last = *options.frames.rbegin();
-    const core::Status replayed = ReplayGpuRecording(source, renderer.Memory(), visitor, last);
+    const core::Status replayed = ReplayGpuRecording(source, memory, visitor, *frames.rbegin());
     if (!replayed) {
         return replayed.Failure();
     }

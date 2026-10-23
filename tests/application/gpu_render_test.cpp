@@ -1,6 +1,7 @@
 #include "application/gpu_render.h"
 
 #include <gtest/gtest.h>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -43,16 +44,16 @@ constexpr std::string_view Recording =
     "1 gx 00000002 1F000000 FFFFFFFF 1F0002D0 00000000 00000000 00000000 00000201\n"
     "3 gx 00000005 00000000 00000000 00000000 00000000 00000000 00000000 00000000\n";
 
-std::vector<RenderedFrame> Render(std::set<std::uint64_t> frames) {
+std::vector<RenderedFrame> Render(const std::set<std::uint64_t>& frames) {
     IndexOnlySource source{std::string{Recording}};
+    auto memory = std::make_unique<gpu::GpuMemory>();
+    ReferenceGpuBackend backend(*memory, gpu::Sampling::Hardware);
     std::vector<RenderedFrame> rendered;
-    const core::Result<GpuRenderSummary> summary =
-        RenderGpuRecording(source,
-                           {.sampling = gpu::Sampling::Hardware, .frames = std::move(frames)},
-                           [&rendered](const RenderedFrame& frame) {
-                               rendered.push_back(frame);
-                               return core::Status{};
-                           });
+    const core::Result<GpuRenderSummary> summary = RenderGpuRecording(
+        source, *memory, backend, frames, [&rendered](const RenderedFrame& frame) {
+            rendered.push_back(frame);
+            return core::Status{};
+        });
     EXPECT_TRUE(summary.Ok());
     return rendered;
 }
