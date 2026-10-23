@@ -6,9 +6,12 @@
 #include "domain/gpu/float24.h"
 #include "domain/gpu/pixel_formats.h"
 #include "domain/gpu/reference_renderer.h"
+#include "domain/gpu/shader_glsl.h"
+#include "domain/gpu/vertex_stage.h"
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <format>
@@ -63,11 +66,18 @@ constexpr std::size_t LightingWords =
     gpu::PicaState::LightingLuts * gpu::PicaState::LightingLutEntries;
 constexpr std::size_t FogWords = gpu::PicaState::FogLutEntries;
 constexpr std::size_t LevelsPerUnit = 16;
-constexpr std::size_t DrawWords = RegisterWords + LightingWords + FogWords + (3 * LevelsPerUnit);
+constexpr std::size_t LevelWords = 3 * LevelsPerUnit;
+// The vertex shader's uniforms, for a draw whose vertices the GPU shades.
+constexpr std::size_t FloatUniformWords = gpu::ShaderUnitState::FloatUniforms * 4;
+constexpr std::size_t UniformWords = FloatUniformWords + 1 + gpu::ShaderUnitState::IntUniforms;
+constexpr std::size_t DrawWords =
+    RegisterWords + LightingWords + FogWords + LevelWords + UniformWords;
 constexpr std::uint32_t NoLevel = 0xFFFFFFFF;
 
 // A vertex as the vertex shader takes it: the 24 semantic slots.
 constexpr std::size_t VertexFloats = gpu::OutputVertex::Slots;
+// A vertex the GPU shades: its sixteen input registers.
+constexpr std::size_t InputFloats = gpu::ShaderRegisters::Count * 4;
 
 // The shaders' push constants, std430: the draw, the sampling mode, the
 // buffer's height, the clip plane, and the PICA's viewport.
@@ -87,6 +97,9 @@ constexpr VkFormat DepthImageFormat = VK_FORMAT_D32_SFLOAT_S8_UINT;
 // words it comes from.
 struct PipelineKey {
     std::array<std::uint32_t, 11> words{};
+    // The vertex program the GPU shades the draw's vertices with, or zero
+    // for vertices shaded on the CPU.
+    std::uint64_t program = 0;
     auto operator<=>(const PipelineKey&) const = default;
 };
 
@@ -152,6 +165,9 @@ bool Overlaps(std::uint32_t first,
 
 // One PICA draw waiting for the list to end.
 struct PendingDraw {
+    // Whether first_vertex counts in the GPU-shaded vertices' inputs rather
+    // than the CPU-shaded vertices.
+    bool shaded_on_gpu = false;
     std::uint32_t first_vertex = 0;
     std::uint32_t vertices = 0;
     PipelineKey key;
@@ -272,11 +288,15 @@ struct Attachments {
 
 class VulkanGpuBackend::Implementation {
 public:
-    Implementation(VulkanContext& context, gpu::GpuMemory& memory, gpu::Sampling sampling)
+    Implementation(VulkanContext& context,
+                   gpu::GpuMemory& memory,
+                   gpu::Sampling sampling,
+                   VertexShading shading)
         : context_(&context),
           device_(context.Device()),
           memory_(&memory),
           sampling_(sampling),
+          shading_(shading),
           vertices_(memory),
           executor_{this},
           processor_(state_, memory, executor_) {}
@@ -300,6 +320,10 @@ public:
         return context_->DeviceName();
     }
 
+    [[nodiscard]] std::uint64_t GpuShadedDraws() const {
+        return gpu_shaded_draws_;
+    }
+
     [[nodiscard]] gpu::Sampling SamplingMode() const {
         return sampling_;
     }
@@ -309,6 +333,10 @@ public:
         Implementation* self;
 
         void Draw(gpu::PicaState& state, bool indexed) const {
+            if (self->shading_ == VertexShading::GpuWherePossible &&
+                self->vertices_.TakesWholeTriangles(state) && self->QueueShaded(state, indexed)) {
+                return;
+            }
             self->vertices_.Draw(state, indexed);
             self->Queue(state);
         }
@@ -327,6 +355,9 @@ public:
 
 private:
     void Queue(const gpu::PicaState& state);
+    bool QueueShaded(const gpu::PicaState& state, bool indexed);
+    std::optional<PendingDraw> Prepare(const gpu::PicaState& state);
+    core::Result<VkShaderModule> ShadedModule(const gpu::PicaState& state, std::uint64_t key);
     void WriteDrawWords(const gpu::PicaState& state, std::uint32_t index);
     std::uint32_t Decode(std::uint32_t address,
                          gpu::TextureFormat format,
@@ -360,6 +391,7 @@ private:
     VkDevice device_;
     gpu::GpuMemory* memory_;
     gpu::Sampling sampling_;
+    VertexShading shading_;
     gpu::PicaState state_;
     gpu::VertexPipeline vertices_;
     Executor executor_;
@@ -373,56 +405,47 @@ private:
     VkShaderModule vertex_module_ = VK_NULL_HANDLE;
     VkShaderModule fragment_module_ = VK_NULL_HANDLE;
     std::map<PipelineKey, VkPipeline> pipelines_;
+    // Translated vertex programs, by a hash of their code, descriptors and
+    // entry point; a null module for one the translation cannot take.
+    std::map<std::uint64_t, VkShaderModule> shaded_modules_;
     std::map<std::pair<std::uint32_t, std::uint32_t>, Attachments> attachments_;
 
     // What the pending draws of the current list need.
     std::vector<PendingDraw> pending_;
     std::vector<float> vertex_data_;
+    std::vector<float> input_data_;
     std::vector<std::uint32_t> draw_words_;
     std::vector<std::uint32_t> texels_;
     std::map<std::array<std::uint32_t, 5>, std::uint32_t> decoded_;
 
     std::uint64_t lists_ = 0;
     std::uint64_t draws_ = 0;
+    std::uint64_t gpu_shaded_draws_ = 0;
     bool unsupported_ = false;
 };
 
 // ---------------------------------------------------------------------------
 // Collecting a list's draws.
 
-void VulkanGpuBackend::Implementation::Queue(const gpu::PicaState& state) {
-    std::vector<gpu::PrimitiveAssembler::Triangle>& triangles = vertices_.Triangles();
+// A draw's target, words, push constants and viewport, or nothing for a
+// draw the backend does not draw. A texture drawn earlier in the list has to
+// be in memory before it is decoded, so the list so far is drawn first.
+std::optional<PendingDraw> VulkanGpuBackend::Implementation::Prepare(const gpu::PicaState& state) {
     const gpu::RegisterFile& registers = state.Registers();
-    ++draws_;
     const std::optional<Target> target = TargetOf(registers);
     // Gas and shadow rendering are not implemented.
     if (!target || Field(registers.at(reg::ColorOperation), 0, 2) != 0 || target->width == 0) {
-        unsupported_ = unsupported_ || !triangles.empty();
-        triangles.clear();
-        return;
+        unsupported_ = true;
+        return std::nullopt;
     }
-    if (triangles.empty()) {
-        return;
-    }
-    // A texture drawn earlier in the list has to be in memory before it is
-    // decoded.
     if (ReadsPendingTarget(registers)) {
         if (const core::Status flushed = Flush(); !flushed) {
             unsupported_ = true;
         }
     }
     PendingDraw draw;
-    draw.first_vertex = static_cast<std::uint32_t>(vertex_data_.size() / VertexFloats);
-    draw.vertices = static_cast<std::uint32_t>(triangles.size() * 3);
     draw.key = KeyOf(registers);
     draw.target = *target;
-    for (const gpu::PrimitiveAssembler::Triangle& triangle : triangles) {
-        for (const gpu::OutputVertex& vertex : triangle) {
-            vertex_data_.insert(vertex_data_.end(), vertex.values.begin(), vertex.values.end());
-        }
-    }
-    triangles.clear();
-
     const auto index = static_cast<std::uint32_t>(pending_.size());
     WriteDrawWords(state, index);
     draw.push.draw = index;
@@ -453,7 +476,126 @@ void VulkanGpuBackend::Implementation::Queue(const gpu::PicaState& state) {
                    .height = 2.0F * half_height,
                    .minDepth = 0.0F,
                    .maxDepth = 1.0F};
-    pending_.push_back(draw);
+    return draw;
+}
+
+// A draw whose vertices the CPU shaded and assembled.
+void VulkanGpuBackend::Implementation::Queue(const gpu::PicaState& state) {
+    std::vector<gpu::PrimitiveAssembler::Triangle>& triangles = vertices_.Triangles();
+    ++draws_;
+    if (triangles.empty()) {
+        return;
+    }
+    std::optional<PendingDraw> draw = Prepare(state);
+    if (!draw) {
+        triangles.clear();
+        return;
+    }
+    draw->first_vertex = static_cast<std::uint32_t>(vertex_data_.size() / VertexFloats);
+    draw->vertices = static_cast<std::uint32_t>(triangles.size() * 3);
+    for (const gpu::PrimitiveAssembler::Triangle& triangle : triangles) {
+        for (const gpu::OutputVertex& vertex : triangle) {
+            vertex_data_.insert(vertex_data_.end(), vertex.values.begin(), vertex.values.end());
+        }
+    }
+    triangles.clear();
+    pending_.push_back(*draw);
+}
+
+namespace {
+
+// The hash a vertex program's translation is kept by: FNV-1a over its entry
+// point, code and descriptors.
+std::uint64_t ProgramKey(const gpu::ShaderUnitState& unit, std::uint32_t entry) {
+    constexpr std::uint64_t Basis = 14695981039346656037ULL;
+    constexpr std::uint64_t Prime = 1099511628211ULL;
+    std::uint64_t key = Basis ^ entry;
+    for (const std::uint32_t word : unit.code) {
+        key = (key ^ word) * Prime;
+    }
+    for (const std::uint32_t word : unit.descriptors) {
+        key = (key ^ word) * Prime;
+    }
+    return key;
+}
+
+}  // namespace
+
+// A draw whose vertices the GPU shades with the translated program: each
+// vertex's inputs loaded and placed as the reference places them, the
+// triangles the vertices three at a time. False, and nothing queued, for a
+// program the translation cannot take.
+bool VulkanGpuBackend::Implementation::QueueShaded(const gpu::PicaState& state, bool indexed) {
+    const std::uint32_t entry =
+        Field(state.Register(gpu::reg::VertexShaderBase + gpu::reg::shader::EntryPoint), 0, 16);
+    const std::uint64_t key = ProgramKey(state.VertexShader(), entry);
+    const core::Result<VkShaderModule> module = ShadedModule(state, key);
+    if (!module || module.Value() == VK_NULL_HANDLE) {
+        return false;
+    }
+    ++draws_;
+    ++gpu_shaded_draws_;
+    const std::uint32_t count = state.Register(gpu::reg::VertexCount);
+    if (count == 0) {
+        return true;
+    }
+    std::optional<PendingDraw> draw = Prepare(state);
+    if (!draw) {
+        return true;
+    }
+    draw->shaded_on_gpu = true;
+    draw->key.program = key;
+    draw->first_vertex = static_cast<std::uint32_t>(input_data_.size() / InputFloats);
+    draw->vertices = count;
+    const gpu::VertexLoader loader(state.Registers());
+    const std::uint32_t first = state.Register(gpu::reg::FirstIndex);
+    for (std::uint32_t at = 0; at < count; ++at) {
+        const std::uint32_t vertex =
+            indexed ? gpu::ReadIndex(*memory_, state.Registers(), at) : at + first;
+        gpu::ShaderRegisters registers;
+        gpu::PlaceInputs(state.Registers(),
+                         gpu::reg::VertexShaderBase,
+                         loader.Load(*memory_, vertex, state.FixedAttributeValues()),
+                         registers);
+        for (const gpu::Vec4& input : registers.inputs) {
+            input_data_.insert(input_data_.end(), input.begin(), input.end());
+        }
+    }
+    pending_.push_back(*draw);
+    return true;
+}
+
+core::Result<VkShaderModule>
+VulkanGpuBackend::Implementation::ShadedModule(const gpu::PicaState& state, std::uint64_t key) {
+    if (const auto found = shaded_modules_.find(key); found != shaded_modules_.end()) {
+        return found->second;
+    }
+    const std::uint32_t entry =
+        Field(state.Register(gpu::reg::VertexShaderBase + gpu::reg::shader::EntryPoint), 0, 16);
+    const gpu::GlslShader translated = gpu::TranslateShader(state.VertexShader(), entry);
+    VkShaderModule module = VK_NULL_HANDLE;
+    if (!translated.unsupported) {
+        const std::string source =
+            "#version 450\n" + FloatControlLines(context_->Floats()) + std::string{CommonSource} +
+            std::string{ShadedVertexInputSource} + translated.source +
+            std::string{VertexOutputSource} + std::string{ShadedVertexMainSource};
+        const core::Result<std::vector<std::uint32_t>> spirv =
+            CompileGlsl(source, ShaderStage::Vertex);
+        if (!spirv) {
+            return spirv.Failure();
+        }
+        VkShaderModuleCreateInfo create{};
+        create.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        create.codeSize = spirv.Value().size() * sizeof(std::uint32_t);
+        create.pCode = spirv.Value().data();
+        if (const core::Status made = Check(
+                vkCreateShaderModule(device_, &create, nullptr, &module), "vkCreateShaderModule");
+            !made) {
+            return made.Failure();
+        }
+    }
+    shaded_modules_.emplace(key, module);
+    return module;
 }
 
 // The register file, the tables, and each enabled unit's decoded levels.
@@ -471,6 +613,16 @@ void VulkanGpuBackend::Implementation::WriteDrawWords(const gpu::PicaState& stat
     }
     std::ranges::copy(state.FogLut(), out.begin() + static_cast<std::ptrdiff_t>(at));
     at += FogWords;
+    const gpu::ShaderUnitState& vertex_shader = state.VertexShader();
+    std::size_t uniform = at + LevelWords;
+    for (const gpu::Vec4& value : vertex_shader.float_uniforms) {
+        for (const float component : value) {
+            out[uniform++] = std::bit_cast<std::uint32_t>(component);
+        }
+    }
+    out[uniform++] = vertex_shader.bool_uniforms;
+    std::ranges::copy(vertex_shader.int_uniforms,
+                      out.begin() + static_cast<std::ptrdiff_t>(uniform));
     for (std::size_t unit = 0; unit < 3; ++unit) {
         const std::span<std::uint32_t> levels =
             out.subspan(at + (unit * LevelsPerUnit), LevelsPerUnit);
@@ -578,6 +730,7 @@ core::Status VulkanGpuBackend::Implementation::Flush() {
     }
     pending_.clear();
     vertex_data_.clear();
+    input_data_.clear();
     draw_words_.clear();
     texels_.clear();
     decoded_.clear();
@@ -608,7 +761,10 @@ core::Status VulkanGpuBackend::Implementation::DrawGroup(std::size_t first, std:
     auto texels = HostBuffer::Create(*context_,
                                      std::max<VkDeviceSize>(texels_.size() * 4, 16),
                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    for (const auto* buffer : {&staging, &vertices, &words, &texels}) {
+    auto inputs = HostBuffer::Create(*context_,
+                                     std::max<VkDeviceSize>(input_data_.size() * sizeof(float), 16),
+                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    for (const auto* buffer : {&staging, &vertices, &inputs, &words, &texels}) {
         if (!*buffer) {
             return buffer->Failure();
         }
@@ -620,6 +776,8 @@ core::Status VulkanGpuBackend::Implementation::DrawGroup(std::size_t first, std:
            stage.subspan(color_size + depth_size, stencil_size));
     std::memcpy(
         vertices.Value()->Bytes().data(), vertex_data_.data(), vertex_data_.size() * sizeof(float));
+    std::memcpy(
+        inputs.Value()->Bytes().data(), input_data_.data(), input_data_.size() * sizeof(float));
     std::memcpy(words.Value()->Bytes().data(), draw_words_.data(), draw_words_.size() * 4);
     std::memcpy(texels.Value()->Bytes().data(), texels_.data(), texels_.size() * 4);
 
@@ -651,6 +809,7 @@ core::Status VulkanGpuBackend::Implementation::DrawGroup(std::size_t first, std:
     Attachments& images = *attachments.Value();
     VkBuffer staging_buffer = staging.Value()->Buffer();
     VkBuffer vertex_buffer = vertices.Value()->Buffer();
+    VkBuffer input_buffer = inputs.Value()->Buffer();
     core::Status drawn = context_->Submit([&](VkCommandBuffer commands) {
         const auto barrier = [&](VkImage image,
                                  VkImageAspectFlags aspect,
@@ -755,12 +914,13 @@ core::Status VulkanGpuBackend::Implementation::DrawGroup(std::size_t first, std:
                                 0,
                                 nullptr);
         const VkDeviceSize no_offset = 0;
-        vkCmdBindVertexBuffers(commands, 0, 1, &vertex_buffer, &no_offset);
         const VkRect2D scissor{.offset = {.x = 0, .y = 0},
                                .extent = {.width = target.width, .height = target.height}};
         for (std::size_t at = first; at < end; ++at) {
             const PendingDraw& draw = pending_[at];
             vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.at(at - first));
+            vkCmdBindVertexBuffers(
+                commands, 0, 1, draw.shaded_on_gpu ? &input_buffer : &vertex_buffer, &no_offset);
             vkCmdSetViewport(commands, 0, 1, &draw.viewport);
             vkCmdSetScissor(commands, 0, 1, &scissor);
             vkCmdPushConstants(commands,
@@ -920,7 +1080,7 @@ core::Status VulkanGpuBackend::Implementation::CreateLayouts() {
         bindings.at(binding).binding = binding;
         bindings.at(binding).descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings.at(binding).descriptorCount = 1;
-        bindings.at(binding).stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings.at(binding).stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     }
     VkDescriptorSetLayoutCreateInfo set{};
     set.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -1014,9 +1174,11 @@ core::Status VulkanGpuBackend::Implementation::CreateRenderPass() {
 }
 
 core::Status VulkanGpuBackend::Implementation::CreateShaders() {
-    const std::string preamble = "#version 450\n" + FloatControlLines(context_->Floats());
+    const std::string preamble = "#version 450\n" + FloatControlLines(context_->Floats()) +
+                                 std::string{CommonSource} + std::string{MultiplySource};
     const core::Result<std::vector<std::uint32_t>> vertex =
-        CompileGlsl(preamble + std::string{VertexShaderSource}, ShaderStage::Vertex);
+        CompileGlsl(preamble + std::string{VertexOutputSource} + std::string{VertexShaderSource},
+                    ShaderStage::Vertex);
     if (!vertex) {
         return vertex.Failure();
     }
@@ -1057,14 +1219,14 @@ core::Result<VkPipeline> VulkanGpuBackend::Implementation::Pipeline(const Pipeli
     const bool has_stencil = w[10] == static_cast<std::uint32_t>(gpu::DepthFormat::D24S8);
 
     const std::array<VkPipelineShaderStageCreateInfo, 2> stages = {
-        VkPipelineShaderStageCreateInfo{.sType =
-                                            VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                                        .pNext = nullptr,
-                                        .flags = 0,
-                                        .stage = VK_SHADER_STAGE_VERTEX_BIT,
-                                        .module = vertex_module_,
-                                        .pName = "main",
-                                        .pSpecializationInfo = nullptr},
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stage = VK_SHADER_STAGE_VERTEX_BIT,
+            .module = key.program == 0 ? vertex_module_ : shaded_modules_.at(key.program),
+            .pName = "main",
+            .pSpecializationInfo = nullptr},
         VkPipelineShaderStageCreateInfo{.sType =
                                             VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                                         .pNext = nullptr,
@@ -1073,10 +1235,14 @@ core::Result<VkPipeline> VulkanGpuBackend::Implementation::Pipeline(const Pipeli
                                         .module = fragment_module_,
                                         .pName = "main",
                                         .pSpecializationInfo = nullptr}};
-    const VkVertexInputBindingDescription binding{.binding = 0,
-                                                  .stride = VertexFloats * sizeof(float),
-                                                  .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
-    std::array<VkVertexInputAttributeDescription, VertexFloats / 4> attributes{};
+    // Vertices shaded on the CPU come as their 24 slots, those the GPU
+    // shades as their 16 input registers; four floats to a location.
+    const std::size_t floats = key.program == 0 ? VertexFloats : InputFloats;
+    const VkVertexInputBindingDescription binding{
+        .binding = 0,
+        .stride = static_cast<std::uint32_t>(floats * sizeof(float)),
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
+    std::vector<VkVertexInputAttributeDescription> attributes(floats / 4);
     for (std::uint32_t location = 0; location < attributes.size(); ++location) {
         attributes.at(location) = {.location = location,
                                    .binding = 0,
@@ -1301,6 +1467,9 @@ VulkanGpuBackend::Implementation::~Implementation() {
     for (auto& [key, pipeline] : pipelines_) {
         vkDestroyPipeline(device_, pipeline, nullptr);
     }
+    for (auto& [key, module] : shaded_modules_) {
+        vkDestroyShaderModule(device_, module, nullptr);
+    }
     vkDestroyShaderModule(device_, vertex_module_, nullptr);
     vkDestroyShaderModule(device_, fragment_module_, nullptr);
     vkDestroyRenderPass(device_, render_pass_, nullptr);
@@ -1311,9 +1480,11 @@ VulkanGpuBackend::Implementation::~Implementation() {
 
 // ---------------------------------------------------------------------------
 
-core::Result<std::unique_ptr<VulkanGpuBackend>>
-VulkanGpuBackend::Create(VulkanContext& context, gpu::GpuMemory& memory, gpu::Sampling sampling) {
-    auto implementation = std::make_unique<Implementation>(context, memory, sampling);
+core::Result<std::unique_ptr<VulkanGpuBackend>> VulkanGpuBackend::Create(VulkanContext& context,
+                                                                         gpu::GpuMemory& memory,
+                                                                         gpu::Sampling sampling,
+                                                                         VertexShading shading) {
+    auto implementation = std::make_unique<Implementation>(context, memory, sampling, shading);
     if (const core::Status ready = implementation->Initialise(); !ready) {
         return ready.Failure();
     }
@@ -1334,8 +1505,9 @@ ports::GpuBackendStatistics VulkanGpuBackend::Statistics() const {
 }
 
 std::string VulkanGpuBackend::Describe() const {
-    return std::format("Vulkan on {}, sampling {}",
+    return std::format("Vulkan on {}, {} draws' vertices shaded on the GPU, sampling {}",
                        implementation_->DeviceName(),
+                       implementation_->GpuShadedDraws(),
                        implementation_->SamplingMode() == gpu::Sampling::Hardware
                            ? "as the registers say"
                            : "as Azahar does");

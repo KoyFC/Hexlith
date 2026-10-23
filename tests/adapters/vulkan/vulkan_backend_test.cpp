@@ -203,5 +203,24 @@ TEST(VulkanGpuBackend, DrawsWhatTheReferenceDraws) {
     EXPECT_EQ(context->ValidationMessages(), 0U) << context->FirstValidationMessage();
 }
 
+TEST(VulkanGpuBackend, ShadesVerticesAlikeOnTheCpuAndTheGpu) {
+    const std::unique_ptr<VulkanContext> context = Context();
+    if (!context) {
+        GTEST_SKIP() << "no Vulkan device that can draw";
+    }
+    const auto draw = [&context](VertexShading shading) {
+        return Draw(
+            [&context, shading](gpu::GpuMemory& memory) -> std::unique_ptr<ports::GpuBackend> {
+                auto backend =
+                    VulkanGpuBackend::Create(*context, memory, gpu::Sampling::Hardware, shading);
+                return backend ? std::move(backend.Value()) : nullptr;
+            });
+    };
+    const auto on_cpu = draw(VertexShading::Cpu);
+    const auto on_gpu = draw(VertexShading::GpuWherePossible);
+    EXPECT_EQ(Differences(*on_gpu, *on_cpu, ColorAddress), "");
+    EXPECT_EQ(Differences(*on_gpu, *on_cpu, DepthAddress), "");
+}
+
 }  // namespace
 }  // namespace hexlith::adapters::vulkan

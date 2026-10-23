@@ -133,6 +133,23 @@ VertexLoader::Load(const GpuMemory& memory,
     return inputs;
 }
 
+std::uint32_t ReadIndex(const GpuMemory& memory, const RegisterFile& registers, std::uint32_t at) {
+    constexpr unsigned HalfwordBit = 31;
+    constexpr std::uint32_t AddressMask = 0x0FFFFFFF;
+    constexpr unsigned AddressShift = 3;
+    const std::uint32_t config = registers.at(reg::IndexList);
+    const std::uint32_t base = (registers.at(reg::AttributeBufferBase) & AddressMask)
+                               << AddressShift;
+    const bool halfwords = Field(config, HalfwordBit, 1) != 0;
+    const std::uint32_t size = halfwords ? 2 : 1;
+    const std::span<const std::uint8_t> bytes =
+        memory.Bytes(base + (config & AddressMask) + (at * size), size);
+    if (bytes.empty()) {
+        return 0;
+    }
+    return halfwords ? static_cast<std::uint32_t>(bytes[0] | (bytes[1] << 8U)) : bytes[0];
+}
+
 void PlaceInputs(const RegisterFile& registers,
                  std::uint16_t unit_base,
                  const VertexLoader::Inputs& attributes,

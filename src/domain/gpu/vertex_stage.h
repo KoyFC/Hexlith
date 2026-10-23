@@ -44,6 +44,12 @@ private:
     std::size_t count_ = 0;
 };
 
+// The vertex an indexed draw names at a position of its index buffer:
+// GPUREG_INDEXBUFFER_CONFIG's offset from the attribute base in bits 0 to 27,
+// halfwords rather than bytes when bit 31 is set. An index outside GPU memory
+// reads as zero. Source: GBATEK, Geometry Pipeline registers.
+std::uint32_t ReadIndex(const GpuMemory& memory, const RegisterFile& registers, std::uint32_t at);
+
 // The shader's inputs as GPUREG_xSH_ATTR_PERMUTATION places a vertex's
 // attributes in its input registers, the first `count` of them. Registers
 // no attribute names keep what they held. Source: GBATEK, Shader registers.
@@ -99,6 +105,16 @@ public:
     }
 
     std::optional<Triangle> Submit(const OutputVertex& vertex);
+
+    // Whether no vertex waits for a triangle, so that what comes next starts
+    // a fresh one.
+    [[nodiscard]] bool Idle() const {
+        return index_ == 0 && !ready_;
+    }
+
+    [[nodiscard]] Topology CurrentTopology() const {
+        return topology_;
+    }
 
 private:
     Topology topology_ = Topology::List;

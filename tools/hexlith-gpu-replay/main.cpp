@@ -32,13 +32,16 @@ constexpr int Failure = 1;
 constexpr int Usage = 2;
 
 constexpr std::string_view UsageText =
-    "usage: hexlith-gpu-replay [--backend reference|vulkan] [--device <name>]\n"
+    "usage: hexlith-gpu-replay [--backend reference|vulkan] [--device <name>] [--vertex-shading cpu|gpu]\n"
     "                          [--sampling hardware|azahar] --frames <n,n,...> <recording> <directory>\n"
     "\n"
     "Replays the GPU recording in <recording> through the reference renderer, or with\n"
     "--backend vulkan through the Vulkan backend on the device named like <name>, with its\n"
     "memory fills and display transfers, and writes what each screen shows in each of\n"
     "the frames as frame-<n>-top.png and frame-<n>-bottom.png in <directory>.\n"
+    "\n"
+    "The Vulkan backend shades vertices on the GPU where it can, or with\n"
+    "--vertex-shading cpu all of them on the CPU (ADR 0022).\n"
     "\n"
     "Textures are sampled as their registers say, or with --sampling azahar the nearest\n"
     "texel of the largest level, as Azahar's software renderer does (ADR 0019).\n";
@@ -68,41 +71,56 @@ std::optional<std::set<std::uint64_t>> ParseFrames(std::string_view text) {
 struct Arguments {
     bool vulkan = false;
     std::string device;
+    vulkan::VertexShading shading = vulkan::VertexShading::GpuWherePossible;
     gpu::Sampling sampling = gpu::Sampling::Hardware;
     std::set<std::uint64_t> frames;
     fs::path recording;
     fs::path output;
 };
 
+// One option and its value. False for an option or a value it does not know.
+bool ParseOption(std::string_view option, std::string_view value, Arguments& parsed) {
+    if (option == "--frames") {
+        const auto frames = ParseFrames(value);
+        parsed.frames = frames.value_or(std::set<std::uint64_t>{});
+        return frames.has_value();
+    }
+    if (option == "--backend") {
+        parsed.vulkan = value == "vulkan";
+        return value == "vulkan" || value == "reference";
+    }
+    if (option == "--vertex-shading") {
+        parsed.shading =
+            value == "cpu" ? vulkan::VertexShading::Cpu : vulkan::VertexShading::GpuWherePossible;
+        return value == "cpu" || value == "gpu";
+    }
+    if (option == "--device") {
+        parsed.device = value;
+        return true;
+    }
+    if (option == "--sampling") {
+        parsed.sampling =
+            value == "azahar" ? gpu::Sampling::AzaharSoftware : gpu::Sampling::Hardware;
+        return value == "azahar" || value == "hardware";
+    }
+    return false;
+}
+
 std::optional<Arguments> Parse(std::span<char* const> arguments) {
     Arguments parsed;
     std::vector<std::string_view> positional;
     for (std::size_t at = 1; at < arguments.size(); ++at) {
         const std::string_view argument{arguments[at]};
-        const bool has_value = at + 1 < arguments.size();
-        if (argument == "--frames" && has_value) {
-            const auto frames = ParseFrames(arguments[++at]);
-            if (!frames) {
-                return std::nullopt;
-            }
-            parsed.frames = *frames;
-        } else if (argument == "--backend" && has_value) {
-            const std::string_view backend{arguments[++at]};
-            if (backend != "vulkan" && backend != "reference") {
-                return std::nullopt;
-            }
-            parsed.vulkan = backend == "vulkan";
-        } else if (argument == "--device" && has_value) {
-            parsed.device = arguments[++at];
-        } else if (argument == "--sampling" && has_value) {
-            const std::string_view sampling{arguments[++at]};
-            if (sampling == "azahar") {
-                parsed.sampling = gpu::Sampling::AzaharSoftware;
-            } else if (sampling != "hardware") {
-                return std::nullopt;
-            }
-        } else {
+        if (!argument.starts_with("--")) {
             positional.push_back(argument);
+            continue;
+        }
+        if (at + 1 >= arguments.size()) {
+            return std::nullopt;
+        }
+        ++at;
+        if (!ParseOption(argument, arguments[at], parsed)) {
+            return std::nullopt;
         }
     }
     if (positional.size() != 2 || parsed.frames.empty()) {
@@ -145,7 +163,8 @@ int Main(std::span<char* const> arguments) {
             return Failure;
         }
         context = std::move(made.Value());
-        auto backend = vulkan::VulkanGpuBackend::Create(*context, *memory, parsed->sampling);
+        auto backend =
+            vulkan::VulkanGpuBackend::Create(*context, *memory, parsed->sampling, parsed->shading);
         if (!backend) {
             std::cerr << "hexlith-gpu-replay: " << backend.Failure().Message() << '\n';
             return Failure;

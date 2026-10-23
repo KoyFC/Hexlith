@@ -16,28 +16,9 @@ constexpr std::uint16_t VertexOutputTotal = 0x24A;
 constexpr std::uint16_t GeometryShaderConfig = 0x252;
 constexpr std::uint32_t GeometryShaderInUse = 2;
 constexpr std::uint32_t PointMode = 0;
-constexpr std::uint32_t AddressMask = 0x0FFFFFFF;
-constexpr unsigned AddressShift = 3;
 
 std::uint32_t UnitRegister(const PicaState& state, std::uint16_t base, std::uint16_t offset) {
     return state.Register(static_cast<std::uint16_t>(base + offset));
-}
-
-// GPUREG_INDEXBUFFER_CONFIG: the offset from the attribute base in bits 0 to
-// 27, and in bit 31 whether the indices are halfwords rather than bytes.
-std::uint32_t ReadIndex(const GpuMemory& memory, const PicaState& state, std::uint32_t at) {
-    constexpr unsigned HalfwordBit = 31;
-    const std::uint32_t config = state.Register(reg::IndexList);
-    const std::uint32_t base = (state.Register(reg::AttributeBufferBase) & AddressMask)
-                               << AddressShift;
-    const bool halfwords = Field(config, HalfwordBit, 1) != 0;
-    const std::uint32_t size = halfwords ? 2 : 1;
-    const std::span<const std::uint8_t> bytes =
-        memory.Bytes(base + (config & AddressMask) + (at * size), size);
-    if (bytes.empty()) {
-        return 0;
-    }
-    return halfwords ? static_cast<std::uint32_t>(bytes[0] | (bytes[1] << 8U)) : bytes[0];
 }
 
 // A small cache of shaded vertices for indexed draws, the most recent 64
@@ -73,6 +54,12 @@ private:
 
 }  // namespace
 
+bool VertexPipeline::TakesWholeTriangles(const PicaState& state) const {
+    return Field(state.Register(reg::GeometryStageConfig), 0, 2) != GeometryShaderInUse &&
+           assembler_.CurrentTopology() == PrimitiveAssembler::Topology::List &&
+           assembler_.Idle() && state.Register(reg::VertexCount) % 3 == 0;
+}
+
 void VertexPipeline::Draw(PicaState& state, bool indexed) {
     ++statistics_.draws;
     ConfigureGeometryStage(state);
@@ -85,7 +72,8 @@ void VertexPipeline::Draw(PicaState& state, bool indexed) {
     VertexCache cache;
     for (std::uint32_t at = 0; at < count; ++at) {
         // An indexed draw does not add the first index.
-        const std::uint32_t vertex = indexed ? ReadIndex(*memory_, state, at) : at + first;
+        const std::uint32_t vertex =
+            indexed ? ReadIndex(*memory_, state.Registers(), at) : at + first;
         std::optional<ShaderRegisters::Bank> outputs = indexed ? cache.Find(vertex) : std::nullopt;
         if (!outputs.has_value()) {
             outputs = ShadeVertex(

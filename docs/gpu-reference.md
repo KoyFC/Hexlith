@@ -42,5 +42,5 @@ The bottom screen is black at frames 400 and 700 and shows the video at 1000 and
 
 ## Drawn by Vulkan
 
-The milestone's pictures come from the Vulkan backend of [ADR 0022](adr/0022-the-vulkan-backend-keeps-gpu-memory-true.md), from the recording alone. On 2026-10-23 all ten screens of frames 220, 400, 700, 1000 and 1100 were within the tolerance of [ADR 0021](adr/0021-the-vulkan-backend-is-held-to-the-reference-within-a-measured-tolerance.md), on the Intel Lunar Lake GPU and on llvmpipe alike, with no message from the Vulkan validation layer. The ADR has the numbers for each screen and what each difference comes from.
+The milestone's pictures come from the Vulkan backend of [ADR 0022](adr/0022-the-vulkan-backend-keeps-gpu-memory-true.md), from the recording alone. On 2026-10-23 all ten screens of frames 220, 400, 700, 1000 and 1100 were within the tolerance of [ADR 0021](adr/0021-the-vulkan-backend-is-held-to-the-reference-within-a-measured-tolerance.md), on the Intel Lunar Lake GPU and on llvmpipe alike, with no message from the Vulkan validation layer. The ADR has the numbers for each screen and what each difference comes from. 16,400 of the 28,340 draws to frame 1100 have their vertices shaded on the GPU by the translated programs, and the pictures are the same to the bit as with every vertex shaded on the CPU.
 

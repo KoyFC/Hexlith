@@ -40,6 +40,12 @@ public:
     void ImmediateVertex(PicaState& state);
     void RestartPrimitive(PicaState& state);
 
+    // A draw whose vertices the shader translation can run on the GPU: no
+    // geometry shader, a list of whole triangles, and nothing left over in
+    // the assembler from before, so that the triangles are the vertices
+    // three at a time.
+    [[nodiscard]] bool TakesWholeTriangles(const PicaState& state) const;
+
     // The triangles assembled so far, for the caller to take and clear.
     [[nodiscard]] std::vector<PrimitiveAssembler::Triangle>& Triangles() {
         return triangles_;

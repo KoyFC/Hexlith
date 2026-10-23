@@ -9,95 +9,23 @@ namespace hexlith::adapters::vulkan {
 // draw's whole register file rather than being generated for each
 // configuration (ADR 0022).
 
-const std::string_view VertexShaderSource = R"(
-// The vertices come in already shaded, as the rasterizer takes them: 24
-// floats in six vec4s, the semantic slots of OutputVertex.
-layout(location = 0) in vec4 a_position;
-layout(location = 1) in vec4 a_quaternion;
-layout(location = 2) in vec4 a_color;
-layout(location = 3) in vec4 a_texcoords;
-layout(location = 4) in vec4 a_slots16;
-layout(location = 5) in vec4 a_slots20;
-
-layout(location = 0) out vec4 v_quaternion;
-layout(location = 1) out vec4 v_color;
-layout(location = 2) out vec4 v_texcoords;
-layout(location = 3) out vec4 v_slots16;
-layout(location = 4) out vec4 v_slots20;
-
-layout(push_constant) uniform Draw {
-    uint draw;
-    uint sampling;
-    uint height;
-    uint clip_enabled;
-    vec4 clip_plane;
-    // The PICA's viewport: half its width and height, and its corner.
-    vec4 viewport;
-};
-
-out gl_PerVertex {
-    vec4 gl_Position;
-    float gl_ClipDistance[1];
-};
-
-float pica_mul(float a, float b) {
-    precise float product = a * b;
-    return (isnan(product) && !isnan(a) && !isnan(b)) ? 0.0 : product;
-}
-
-void main() {
-    // The PICA places a vertex on the screen in sixteenths of a pixel,
-    // rounded to nearest, and fills by a rule that is Vulkan's top-left
-    // rule seen with y up. So the vertex goes to the screen as the reference
-    // computes it, is rounded there, and comes back in clip space on that
-    // grid, which Vulkan's finer one holds exactly.
-    vec4 position = a_position;
-    if (position.w > 0.0) {
-        float inverse_w = 1.0 / position.w;
-        precise vec2 screen = vec2(pica_mul(pica_mul(position.x, inverse_w) + 1.0, viewport.x) + viewport.z,
-                                   pica_mul(pica_mul(position.y, inverse_w) + 1.0, viewport.y) + viewport.w);
-        vec2 snapped = round(screen * 16.0) / 16.0;
-        precise vec2 normalised = (snapped - viewport.zw) / viewport.xy - 1.0;
-        position.xy = normalised * position.w;
-    }
-    // PICA clip space keeps z from -w to 0 and has y up; Vulkan's keeps z
-    // from 0 to w and has y down.
-    gl_Position = vec4(position.x, -position.y, -position.z, position.w);
-    gl_ClipDistance[0] = clip_enabled != 0u ? dot(a_position, clip_plane) : 1.0;
-    v_quaternion = a_quaternion;
-    v_color = a_color;
-    v_texcoords = a_texcoords;
-    v_slots16 = a_slots16;
-    v_slots20 = a_slots20;
-}
-)";
-
-const std::string_view FragmentShaderSource = R"(
-layout(location = 0) in vec4 v_quaternion;
-layout(location = 1) in vec4 v_color;
-layout(location = 2) in vec4 v_texcoords;
-layout(location = 3) in vec4 v_slots16;
-layout(location = 4) in vec4 v_slots20;
-
-layout(location = 0) out vec4 o_color;
-
+const std::string_view CommonSource = R"(
 // Each draw's words: the register file, the 24 lighting tables, the fog
-// table, then for each texture unit the offsets of its levels in the texels.
+// table, for each texture unit the offsets of its levels in the texels, then
+// the vertex shader's float uniforms, its bool uniforms and its integer
+// uniforms.
 const uint RegisterWords = 1024u;
 const uint LightingBase = RegisterWords;
 const uint FogBase = LightingBase + 24u * 256u;
 const uint LevelBase = FogBase + 128u;
 const uint LevelsPerUnit = 16u;
-const uint DrawWords = LevelBase + 3u * LevelsPerUnit;
+const uint FloatUniformBase = LevelBase + 3u * LevelsPerUnit;
+const uint BoolUniformWord = FloatUniformBase + 96u * 4u;
+const uint IntUniformBase = BoolUniformWord + 1u;
+const uint DrawWords = IntUniformBase + 4u;
 
 layout(std430, set = 0, binding = 0) readonly buffer Draws {
     uint words[];
-};
-
-// Texels as red, green, blue and alpha bytes, low to high, row by row in
-// stored order.
-layout(std430, set = 0, binding = 1) readonly buffer Texels {
-    uint texels[];
 };
 
 layout(push_constant) uniform Draw {
@@ -122,13 +50,149 @@ int signed_field(uint word, uint low, uint width) {
     return int(word << (32u - low - width)) >> int(32u - width);
 }
 
-uvec4 color_register(uint value) {
-    return uvec4(value & 0xFFu, (value >> 8u) & 0xFFu, (value >> 16u) & 0xFFu, value >> 24u);
-}
+)";
 
+// Zero times infinity is zero (ADR 0018). A shader translation defines this
+// itself.
+const std::string_view MultiplySource = R"(
 float pica_mul(float a, float b) {
     precise float product = a * b;
     return (isnan(product) && !isnan(a) && !isnan(b)) ? 0.0 : product;
+}
+)";
+
+const std::string_view VertexOutputSource = R"(
+layout(location = 0) out vec4 v_quaternion;
+layout(location = 1) out vec4 v_color;
+layout(location = 2) out vec4 v_texcoords;
+layout(location = 3) out vec4 v_slots16;
+layout(location = 4) out vec4 v_slots20;
+
+out gl_PerVertex {
+    vec4 gl_Position;
+    float gl_ClipDistance[1];
+};
+
+// A shaded vertex out to the rasterizer. The PICA places a vertex on the
+// screen in sixteenths of a pixel, rounded to nearest, and fills by a rule
+// that is Vulkan's top-left rule seen with y up. So the vertex goes to the
+// screen as the reference computes it, is rounded there, and comes back in
+// clip space on that grid, which Vulkan's finer one holds exactly. PICA clip
+// space keeps z from -w to 0 and has y up; Vulkan's keeps z from 0 to w and
+// has y down.
+void emit_vertex(vec4 position, vec4 quaternion, vec4 color, vec4 texcoords, vec4 slots16, vec4 slots20) {
+    gl_ClipDistance[0] = clip_enabled != 0u ? dot(position, clip_plane) : 1.0;
+    if (position.w > 0.0) {
+        float inverse_w = 1.0 / position.w;
+        precise vec2 screen = vec2(pica_mul(pica_mul(position.x, inverse_w) + 1.0, viewport.x) + viewport.z,
+                                   pica_mul(pica_mul(position.y, inverse_w) + 1.0, viewport.y) + viewport.w);
+        vec2 snapped = round(screen * 16.0) / 16.0;
+        precise vec2 normalised = (snapped - viewport.zw) / viewport.xy - 1.0;
+        position.xy = normalised * position.w;
+    }
+    gl_Position = vec4(position.x, -position.y, -position.z, position.w);
+    v_quaternion = quaternion;
+    v_color = color;
+    v_texcoords = texcoords;
+    v_slots16 = slots16;
+    v_slots20 = slots20;
+}
+)";
+
+const std::string_view VertexShaderSource = R"(
+// The vertices come in already shaded, as the rasterizer takes them: 24
+// floats in six vec4s, the semantic slots of OutputVertex.
+layout(location = 0) in vec4 a_position;
+layout(location = 1) in vec4 a_quaternion;
+layout(location = 2) in vec4 a_color;
+layout(location = 3) in vec4 a_texcoords;
+layout(location = 4) in vec4 a_slots16;
+layout(location = 5) in vec4 a_slots20;
+
+void main() {
+    emit_vertex(a_position, a_quaternion, a_color, a_texcoords, a_slots16, a_slots20);
+}
+)";
+
+const std::string_view ShadedVertexInputSource = R"(
+// The vertex shader's sixteen input registers, as the attribute permutation
+// filled them.
+layout(location = 0) in vec4 a_inputs[16];
+
+vec4 pica_float(uint index) {
+    uint at = draw * DrawWords + FloatUniformBase + index * 4u;
+    return uintBitsToFloat(uvec4(words[at], words[at + 1u], words[at + 2u], words[at + 3u]));
+}
+
+bool pica_bool(uint index) {
+    return ((words[draw * DrawWords + BoolUniformWord] >> index) & 1u) != 0u;
+}
+
+uint pica_int(uint index) {
+    return words[draw * DrawWords + IntUniformBase + index];
+}
+)";
+
+const std::string_view ShadedVertexMainSource = R"(
+// The program's outputs as MakeOutputVertex takes them: packed in register
+// order by GPUREG_VSH_OUTMAP_MASK, each component to the semantic
+// GPUREG_SH_OUTMAP_Oi names, a semantic no output gives 1.0, the colour made
+// positive and kept to one.
+void main() {
+    pica_v = a_inputs;
+    for (int at = 0; at < 16; ++at) {
+        pica_r[at] = vec4(0.0);
+        pica_o[at] = vec4(0.0);
+    }
+    pica_a = ivec3(0);
+    pica_cmp = bvec2(false);
+    pica_run(1048576u);
+    float slots[32];
+    for (int at = 0; at < 32; ++at) {
+        slots[at] = 1.0;
+    }
+    uint mask = reg(0x2BDu);
+    uint total = field(reg(0x04Fu), 0u, 3u);
+    uint packed = 0u;
+    for (uint output_ = 0u; output_ < 16u; ++output_) {
+        if (field(mask, output_, 1u) == 0u) {
+            continue;
+        }
+        if (packed < total) {
+            uint map = reg(0x050u + packed);
+            for (uint component = 0u; component < 4u; ++component) {
+                slots[field(map, 8u * component, 5u)] = pica_o[output_][component];
+            }
+        }
+        ++packed;
+    }
+    for (int channel = 8; channel < 12; ++channel) {
+        float magnitude = abs(slots[channel]);
+        slots[channel] = magnitude < 1.0 ? magnitude : 1.0;
+    }
+    emit_vertex(vec4(slots[0], slots[1], slots[2], slots[3]), vec4(slots[4], slots[5], slots[6], slots[7]),
+                vec4(slots[8], slots[9], slots[10], slots[11]), vec4(slots[12], slots[13], slots[14], slots[15]),
+                vec4(slots[16], slots[17], slots[18], slots[19]), vec4(slots[20], slots[21], slots[22], slots[23]));
+}
+)";
+
+const std::string_view FragmentShaderSource = R"(
+layout(location = 0) in vec4 v_quaternion;
+layout(location = 1) in vec4 v_color;
+layout(location = 2) in vec4 v_texcoords;
+layout(location = 3) in vec4 v_slots16;
+layout(location = 4) in vec4 v_slots20;
+
+layout(location = 0) out vec4 o_color;
+
+// Texels as red, green, blue and alpha bytes, low to high, row by row in
+// stored order.
+layout(std430, set = 0, binding = 1) readonly buffer Texels {
+    uint texels[];
+};
+
+uvec4 color_register(uint value) {
+    return uvec4(value & 0xFFu, (value >> 8u) & 0xFFu, (value >> 16u) & 0xFFu, value >> 24u);
 }
 
 int pica_trunc(float value) {
