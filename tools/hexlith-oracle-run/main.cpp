@@ -2,6 +2,8 @@
 #include "application/gpu_replay.h"
 #include "domain/gpu/command_processor.h"
 #include "domain/gpu/gpu_memory.h"
+#include "domain/gpu/gx_command.h"
+#include "domain/gpu/memory_transfer.h"
 #include "domain/gpu/pica_state.h"
 #include "domain/gpu/pixel_formats.h"
 #include "domain/gpu/reference_renderer.h"
@@ -340,9 +342,23 @@ bool RunPica(const fs::path& directory) {
 // reference renderer's side puts it there too, so that VRAM compares whole.
 constexpr std::uint32_t ListScratch = 0x185C0000;
 
+// What a step of raster-cases.bin does after writing its blocks.
+enum class RasterStep : std::uint8_t { List = 1 };
+
+// A GX command's memory fills or transfer, as gsp::Gpu would start them.
+void RunGxCommand(gpu::GpuMemory& memory, const gpu::GxCommandWords& words) {
+    for (const gpu::MemoryFillConfig& fill : gpu::MemoryFills(words)) {
+        static_cast<void>(gpu::RunMemoryFill(memory, fill));
+    }
+    if (const std::optional<gpu::TransferConfig> transfer = gpu::Transfer(words)) {
+        static_cast<void>(gpu::RunTransfer(memory, *transfer));
+    }
+}
+
 // raster-cases.bin and its results: every step's list drawn by the reference
-// renderer, sampling as Azahar's software renderer does, from memory all
-// zero, and VRAM hashed after each.
+// renderer, sampling as Azahar's software renderer does, and every GX
+// command's fills and transfers carried out, from memory all zero; VRAM and
+// the step's window of memory hashed after each.
 bool RunRaster(const fs::path& directory) {
     std::ifstream in(directory / "raster-cases.bin", std::ios::binary);
     if (!in) {
@@ -366,12 +382,25 @@ bool RunRaster(const fs::path& directory) {
             const auto address = Take<std::uint32_t>(in);
             static_cast<void>(memory->Write(address, TakeBytes(in)));
         }
-        const std::vector<std::uint8_t> list = TakeBytes(in);
-        static_cast<void>(memory->Write(ListScratch, list));
-        static_cast<void>(processor.Run(list));
+        if (Take<std::uint32_t>(in) == static_cast<std::uint32_t>(RasterStep::List)) {
+            const std::vector<std::uint8_t> list = TakeBytes(in);
+            static_cast<void>(memory->Write(ListScratch, list));
+            static_cast<void>(processor.Run(list));
+        } else {
+            gpu::GxCommandWords words{};
+            for (std::uint32_t& word : words) {
+                word = Take<std::uint32_t>(in);
+            }
+            RunGxCommand(*memory, words);
+        }
+        const auto window = Take<std::uint32_t>(in);
+        const auto window_size = Take<std::uint32_t>(in);
+
         const std::span<const std::uint8_t> vram =
             memory->Bytes(gpu::GpuMemory::VramBase, gpu::GpuMemory::VramSize);
         Put(out, Hash(vram));
+        const std::span<const std::uint8_t> watched = memory->Bytes(window, window_size);
+        Put(out, window != 0 && !watched.empty() ? Hash(watched) : std::uint64_t{0});
         if (wanted.contains(step)) {
             std::ofstream(directory / std::format("raster-vram-{}.hexlith.bin", step),
                           std::ios::binary)

@@ -4,9 +4,11 @@ hexlith_add_test(
     float24_test.cpp
     fragment_stage_test.cpp
     gpu_memory_test.cpp
+    memory_transfer_test.cpp
     rasterizer_test.cpp
     recording_index_test.cpp
     reference_renderer_test.cpp
+    screen_test.cpp
     shader_interpreter_test.cpp
     pixel_formats_test.cpp
     vertex_stage_test.cpp

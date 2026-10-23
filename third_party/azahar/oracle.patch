@@ -13,10 +13,10 @@ index 37eee4fc3..29a44b338 100644
      loader/3dsx.cpp
 diff --git a/src/core/hexlith_oracle.cpp b/src/core/hexlith_oracle.cpp
 new file mode 100644
-index 000000000..c25b8a61c
+index 000000000..ce6cb59f6
 --- /dev/null
 +++ b/src/core/hexlith_oracle.cpp
-@@ -0,0 +1,688 @@
+@@ -0,0 +1,709 @@
 +// Hexlith oracle hooks. Licensed as the rest of Azahar, GPLv2 or any later
 +// version.
 +//
@@ -52,6 +52,7 @@ index 000000000..c25b8a61c
 +
 +#include "core/core.h"
 +#include "core/hle/service/cam/y2r_u.h"
++#include "core/hle/service/gsp/gsp_command.h"
 +#include "core/hw/y2r.h"
 +#include "core/memory.h"
 +#include "video_core/gpu.h"
@@ -595,11 +596,16 @@ index 000000000..c25b8a61c
 +constexpr u32 FcramSize = 0x08000000;
 +
 +// raster-cases.bin: a word with the count of steps whose VRAM is wanted and
-+// their indices, then a word with the count of steps and each step as a step
-+// of pica-cases.bin has it. Unlike there, the PICA core draws: the software
-+// renderer rasterizes every triangle into memory, which starts all zero.
-+// raster-results.bin answers each step with the FNV-1a hash of VRAM after it;
-+// raster-vram-<step>.bin holds VRAM after each step asked for.
++// their indices, then a word with the count of steps. Each step writes its
++// memory blocks as a step of pica-cases.bin does, then does one thing, by a
++// word of kind: 1 runs a command list given as its length and bytes, and 2, 3
++// and 4 hand gsp::Gpu's GPU side a memory fill, display transfer or texture
++// copy command given as its eight words. Then come the physical address and
++// length of a window of memory to hash, or two zeros. Unlike pica-cases.bin,
++// the PICA core draws: the software renderer rasterizes every triangle into
++// memory, which starts all zero. raster-results.bin answers each step with the
++// FNV-1a hash of VRAM after it and that of the window; raster-vram-<step>.bin
++// holds VRAM after each step asked for.
 +void RunRaster(Core::System& system, const std::string& directory) {
 +    std::ifstream in(directory + "/raster-cases.bin", std::ios::binary);
 +    if (!in) {
@@ -629,12 +635,27 @@ index 000000000..c25b8a61c
 +                std::memcpy(target, bytes.data(), bytes.size());
 +            }
 +        }
-+        const std::vector<u8> list = TakeBytes(in);
-+        std::memcpy(memory.GetPhysicalPointer(ListScratch), list.data(), list.size());
-+        pica.ProcessCmdList(ListScratch, static_cast<u32>(list.size()), false);
++        const u32 kind = Take<u32>(in);
++        if (kind == 1) {
++            const std::vector<u8> list = TakeBytes(in);
++            std::memcpy(memory.GetPhysicalPointer(ListScratch), list.data(), list.size());
++            pica.ProcessCmdList(ListScratch, static_cast<u32>(list.size()), false);
++        } else {
++            Service::GSP::Command command{};
++            for (u32 w = 0; w < 8; ++w) {
++                const u32 word = Take<u32>(in);
++                std::memcpy(reinterpret_cast<u8*>(&command) + 4 * w, &word, sizeof(word));
++            }
++            system.GPU().Execute(command);
++        }
++        const u32 window = Take<u32>(in);
++        const u32 window_size = Take<u32>(in);
 +
 +        const u64 hash = Hash(vram, VramSize);
 +        out.write(reinterpret_cast<const char*>(&hash), sizeof(hash));
++        const u8* window_bytes = window != 0 ? memory.GetPhysicalPointer(window) : nullptr;
++        const u64 window_hash = window_bytes != nullptr ? Hash(window_bytes, window_size) : 0;
++        out.write(reinterpret_cast<const char*>(&window_hash), sizeof(window_hash));
 +        if (wanted.count(s) != 0) {
 +            std::ofstream(directory + "/raster-vram-" + std::to_string(s) + ".bin",
 +                          std::ios::binary)

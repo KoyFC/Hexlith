@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
-"""Compare Hexlith's reference rasterizer with Azahar's software renderer.
+"""Compare Hexlith's reference renderer and transfer engines with Azahar's.
 
 Both sides replay a GPU recording of the reference title from memory that is
-all zero and a PICA state reset as the command list comparison resets it:
-each step writes the pages the recording holds before a list, then runs the
-list, drawing every triangle into memory. After each step both report a hash
-of the whole of VRAM, where the title keeps its colour and depth buffers.
-Neither side carries out the memory fills and display transfers between the
-lists, so the buffers are never cleared, the same on both.
+all zero and a PICA state reset as the command list comparison resets it.
+A step writes the pages the recording holds before it, then either runs a
+command list, drawing every triangle into memory, or carries out a GX
+command's memory fills, display transfer or texture copy. After each step
+both report a hash of the whole of VRAM, where the title keeps its colour and
+depth buffers and the framebuffers its screens show, and a hash of a window
+of memory the step names, for a transfer that writes outside VRAM.
 
 The title leaves much of the fragment pipeline alone: it lights fragments
 with one light and no tables, and never fogs one or tests the stencil. So
 random steps are run too, each a list that sets every register a draw
 reads to random values, draws a few random triangles into a small colour and
 depth buffer of random formats and random contents, and samples random
-textures, with random lighting and fog tables.
+textures, with random lighting and fog tables. Random memory fills, display
+transfers and texture copies cover the transfer engines' formats and flags
+the title never sets.
 
 Hexlith samples textures as Azahar's software renderer does, the nearest
 texel of the base level (ADR 0019), so that the two can agree to the bit.
@@ -29,7 +32,7 @@ Usage:
     scripts/compare_pica_rasterizer.py --azahar <azahar> --image <cartridge> \\
         --tool <hexlith-oracle-run> --work <dir> \\
         --recording <work-dir>/<title>/gpu [--last-frame <n>]
-    scripts/compare_pica_rasterizer.py ... --random 2000
+    scripts/compare_pica_rasterizer.py ... --random 2000 --random-transfers 2000
 """
 
 import argparse
@@ -56,8 +59,36 @@ use_shader_jit\\default=false
 """
 
 
+def physical(virtual):
+    """The physical address behind a game's address in VRAM or a linear heap."""
+    if 0x1F000000 <= virtual < 0x1F600000:
+        return virtual - 0x1F000000 + VRAM
+    if 0x14000000 <= virtual < 0x1C000000:
+        return virtual - 0x14000000 + FCRAM
+    if 0x30000000 <= virtual < 0x38000000:
+        return virtual - 0x30000000 + FCRAM
+    return 0
+
+
+# The GX commands that change memory: memory fill, display transfer, texture
+# copy.
+GX_STEPS = (2, 3, 4)
+# How much of memory past a transfer's output to hash when it is outside VRAM.
+WINDOW = 0x100000
+
+
+def window_of(words):
+    """The window to hash after a GX command: a transfer's output outside VRAM."""
+    if words[0] & 0xFF in (3, 4):
+        output = physical(words[2])
+        if output >= FCRAM:
+            return output, WINDOW
+    return 0, 0
+
+
 def recording_steps(root, last_frame):
-    """Every list of a recording up to a frame, each after the pages before it."""
+    """Every list and every GX command that changes memory, in order, each
+    after the pages recorded before it."""
     steps = []
     blocks = []
     for line in (root / "recording.txt").read_text().splitlines()[1:]:
@@ -65,14 +96,13 @@ def recording_steps(root, last_frame):
         if last_frame is not None and int(fields[0]) > last_frame:
             break
         if fields[1] == "page":
-            virtual = int(fields[2], 16)
-            if 0x1F000000 <= virtual < 0x1F600000:
-                physical = virtual - 0x1F000000 + VRAM
-            else:
-                physical = virtual - (0x14000000 if virtual < 0x30000000 else 0x30000000) + FCRAM
-            blocks.append((physical, root / "pages" / (fields[3] + ".bin")))
+            blocks.append((physical(int(fields[2], 16)), root / "pages" / (fields[3] + ".bin")))
         elif fields[1] == "list":
-            steps.append((int(fields[0]), blocks, root / "lists" / fields[4]))
+            steps.append((int(fields[0]), blocks, root / "lists" / fields[4], (0, 0)))
+            blocks = []
+        elif fields[1] == "gx" and int(fields[2], 16) & 0xFF in GX_STEPS:
+            words = tuple(int(word, 16) for word in fields[2:10])
+            steps.append((int(fields[0]), blocks, words, window_of(words)))
             blocks = []
     return steps
 
@@ -314,7 +344,71 @@ def random_step(rng):
     out.write(0x228, count)
     out.write(0x22A, 0)
     out.write(0x22E, 1)
-    return blocks, out.bytes()
+    return blocks, out.bytes(), (0, 0)
+
+
+# Where a random fill or transfer reads and writes, as a game's addresses:
+# VRAM above the rasterizer's buffers, or the linear heap for an output.
+TRANSFER_INPUT = 0x1F300000
+TRANSFER_OUTPUT = 0x1F400000
+LINEAR_OUTPUT = 0x14100000
+FILL_AREA = 0x1F500000
+
+
+def random_fill(rng, blocks):
+    """A memory fill of one or both units, of any width, over random bytes."""
+    words = [0x02]
+    controls = 0
+    for unit in range(2):
+        if unit == 1 and rng.random() < 0.5:
+            words += [0, 0, 0]
+            continue
+        # Addresses are in 16-byte units in GBATEK and 8-byte units in
+        # Azahar; these round the same either way.
+        start = FILL_AREA + unit * 0x40000 + rng.randrange(0, 0x1000, 16)
+        length = rng.randrange(16, 0x8000, 16) + rng.randrange(8)
+        words += [start, rng.getrandbits(32), start + length]
+        controls |= (1 | (rng.randrange(4) << 8)) << (16 * unit)
+        blocks.append((physical(start), rng.randbytes(length + 8)))
+    words.append(controls)
+    return tuple(words)
+
+
+def random_display_transfer(rng, blocks):
+    """A display transfer of random formats, sizes and flags over random
+    pixels, into VRAM or the linear heap."""
+    output_width = rng.choice((8, 16, 32, 64, 128, 240))
+    output_height = rng.choice((8, 16, 32, 64, 128))
+    input_width = output_width + rng.choice((0, 0, 8, 16))
+    input_height = output_height + rng.choice((0, 0, 8))
+    input_format = rng.randrange(5)
+    output_format = rng.randrange(5)
+    flags = (rng.randrange(2) | (rng.randrange(2) << 1) | (rng.randrange(2) << 2)
+             | ((rng.random() < 0.2) << 5) | (input_format << 8) | (output_format << 12)
+             | (rng.choice((0, 0, 0, 1, 2, 3)) << 24))
+    output = TRANSFER_OUTPUT if rng.random() < 0.8 else LINEAR_OUTPUT
+    blocks.append((physical(TRANSFER_INPUT), rng.randbytes(input_width * input_height * 4)))
+    blocks.append((physical(output), rng.randbytes(0x80000)))
+    return (0x03, TRANSFER_INPUT, output, input_width | (input_height << 16),
+            output_width | (output_height << 16), flags, 0, 0)
+
+
+def random_texture_copy(rng, blocks):
+    """A texture copy of random lines and gaps over random bytes."""
+    size = rng.randrange(0, 0x10000, 16) + rng.choice((0, 0, 8))
+    widths = [rng.randrange(0, 64) | (rng.randrange(0, 5) << 16) for _ in range(2)]
+    flags = (1 << 3) | rng.getrandbits(3)
+    blocks.append((physical(TRANSFER_INPUT), rng.randbytes(0x60000)))
+    blocks.append((physical(TRANSFER_OUTPUT), rng.randbytes(0x60000)))
+    return (0x04, TRANSFER_INPUT, TRANSFER_OUTPUT, size, widths[0], widths[1], flags, 0)
+
+
+def random_transfer_step(rng):
+    """Blocks of memory and a GX command that fills or transfers."""
+    blocks = []
+    words = rng.choice((random_fill, random_display_transfer, random_display_transfer,
+                        random_texture_copy))(rng, blocks)
+    return blocks, words, window_of(words)
 
 
 def write_cases(path, steps, dumps):
@@ -323,20 +417,26 @@ def write_cases(path, steps, dumps):
         for step in dumps:
             out.write(struct.pack("<I", step))
         out.write(struct.pack("<I", len(steps)))
-        for _, blocks, list_data in steps:
+        for _, blocks, operation, window in steps:
             out.write(struct.pack("<I", len(blocks)))
             for address, page in blocks:
                 data = page if isinstance(page, bytes) else page.read_bytes()
                 out.write(struct.pack("<II", address, len(data)))
                 out.write(data)
-            data = list_data if isinstance(list_data, bytes) else list_data.read_bytes()
-            out.write(struct.pack("<I", len(data)))
-            out.write(data)
+            if isinstance(operation, tuple):
+                out.write(struct.pack("<I8I", operation[0] & 0xFF, *operation))
+            else:
+                data = operation if isinstance(operation, bytes) else operation.read_bytes()
+                out.write(struct.pack("<II", 1, len(data)))
+                out.write(data)
+            out.write(struct.pack("<II", *window))
 
 
 def read_hashes(path):
+    """Each step's two hashes, VRAM's and the window's, as a pair."""
     data = pathlib.Path(path).read_bytes()
-    return list(struct.unpack(f"<{len(data) // 8}Q", data))
+    hashes = struct.unpack(f"<{len(data) // 8}Q", data)
+    return list(zip(hashes[0::2], hashes[1::2]))
 
 
 def run_both(arguments, steps, dumps):
@@ -383,7 +483,9 @@ def main():
     parser.add_argument("--work", required=True, type=pathlib.Path)
     parser.add_argument("--recording", type=pathlib.Path, help="a GPU recording to run")
     parser.add_argument("--last-frame", type=int, help="the last frame of the recording to run")
-    parser.add_argument("--random", type=int, default=0, help="random steps to run after it")
+    parser.add_argument("--random", type=int, default=0, help="random lists to run after it")
+    parser.add_argument("--random-transfers", type=int, default=0,
+                        help="random fills and transfers to run after those")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--dumps", type=int, default=3,
                         help="differing steps whose VRAM to save and describe")
@@ -394,18 +496,20 @@ def main():
     steps = recording_steps(arguments.recording, arguments.last_frame) if arguments.recording else []
     rng = random.Random(arguments.seed)
     steps += [("random", *random_step(rng)) for _ in range(arguments.random)]
+    steps += [("random", *random_transfer_step(rng)) for _ in range(arguments.random_transfers)]
     if not steps:
         sys.exit("nothing to run: give a recording, random steps or both")
     ours, theirs = run_both(arguments, steps, [])
     if len(ours) != len(steps) or len(theirs) != len(steps):
         sys.exit(f"{len(steps)} steps, but Hexlith answered {len(ours)} and Azahar {len(theirs)}")
     differing = [index for index, (a, b) in enumerate(zip(ours, theirs)) if a != b]
-    print(f"{len(steps) - len(differing)} of {len(steps)} lists leave VRAM the same")
+    print(f"{len(steps) - len(differing)} of {len(steps)} steps leave memory the same")
     if differing and arguments.dumps > 0:
         wanted = differing[:arguments.dumps]
         run_both(arguments, steps[:wanted[-1] + 1], wanted)
         for step in wanted:
-            print(f"step {step} ({steps[step][0]}): {describe(arguments.work, step)}")
+            window = "" if ours[step][1] == theirs[step][1] else ", and the window differs"
+            print(f"step {step} ({steps[step][0]}): {describe(arguments.work, step)}{window}")
     return 0 if not differing else 1
 
 

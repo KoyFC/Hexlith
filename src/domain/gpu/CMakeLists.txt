@@ -6,6 +6,10 @@ target_sources(
             fragment_stage.h
             gpu_memory.cpp
             gpu_memory.h
+            gx_command.cpp
+            gx_command.h
+            memory_transfer.cpp
+            memory_transfer.h
             pica_registers.h
             pica_state.cpp
             pica_state.h
@@ -15,6 +19,8 @@ target_sources(
             recording_index.h
             reference_renderer.cpp
             reference_renderer.h
+            screen.cpp
+            screen.h
             shader_arithmetic.h
             shader_interpreter.cpp
             shader_interpreter.h
