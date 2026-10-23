@@ -9,6 +9,7 @@ hexlith_add_test(
     recording_index_test.cpp
     reference_renderer_test.cpp
     screen_test.cpp
+    shader_glsl_test.cpp
     shader_interpreter_test.cpp
     pixel_formats_test.cpp
     vertex_stage_test.cpp

@@ -23,9 +23,17 @@ NaN equals any other here: which operand's NaN a product or a sum passes on
 depends on the order the compiler puts the operands in, and the hardware's
 float24 has no payload to speak of.
 
+With --against vulkan the other side is not Azahar but the Vulkan backend's
+translation of each vertex shader program to GLSL (ADR 0020), run on the GPU
+as a compute shader by hexlith-oracle-run --vulkan; geometry shaders stay on
+the interpreter there, as in the backend. The translation is held to the
+interpreter, which is held to Azahar.
+
 Usage:
     scripts/compare_pica_shaders.py --azahar <azahar> --image <cartridge> \\
         --tool <hexlith-oracle-run> --work <dir> --single 100000 --programs 20000
+    scripts/compare_pica_shaders.py --against vulkan --tool <hexlith-oracle-run> \\
+        --work <dir> --single 20000 --programs 3000
 """
 
 import argparse
@@ -116,9 +124,12 @@ def random_program(rng, geometry, length):
     return code
 
 
-def random_case(rng, program=None, geometry=False):
+def random_case(rng, program=None, geometry=False, fill=None):
+    """A random state and program. Code memory around the program is random
+    words, or `fill`: the Vulkan translation covers every address a program
+    could reach, and random words around it make that all of them."""
     entry = rng.randrange(CODE_WORDS - 64)
-    code = [rng.getrandbits(32) for _ in range(CODE_WORDS)]
+    code = [rng.getrandbits(32) if fill is None else fill for _ in range(CODE_WORDS)]
     body = program if program is not None else [random_arithmetic(rng), END_WORD]
     for offset, word in enumerate(body):
         code[entry + offset] = word
@@ -191,6 +202,28 @@ def same_float(a, b):
     return a == b or (is_nan(a) and is_nan(b))
 
 
+def ordered(word):
+    """A float's bits as an integer that counts up with its value."""
+    return -(word & 0x7FFFFFFF) if word & 0x80000000 else word
+
+
+def is_denormal_or_zero(word):
+    return (word & 0x7F800000) == 0
+
+
+# What Vulkan lets a device's arithmetic be off by: 2.5 ULP for a division,
+# 2 for an inverse square root, 3 for exp2 and log2 (the Vulkan
+# specification, Precision and Operation of SPIR-V Instructions), and a
+# denormal flushed to zero by a device that does not promise to keep them.
+VULKAN_ULPS = 3
+
+
+def close_float(a, b):
+    if same_float(a, b) or (is_denormal_or_zero(a) and is_denormal_or_zero(b)):
+        return True
+    return not is_nan(a) and not is_nan(b) and abs(ordered(a) - ordered(b)) <= VULKAN_ULPS
+
+
 def same_primitive(mine, theirs):
     return mine[0] == theirs[0] and all(same_float(a, b) for a, b in zip(mine[1:], theirs[1:]))
 
@@ -230,8 +263,10 @@ def describe(case):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--azahar", required=True)
-    parser.add_argument("--image", required=True)
+    parser.add_argument("--against", choices=("azahar", "vulkan"), default="azahar")
+    parser.add_argument("--azahar")
+    parser.add_argument("--image")
+    parser.add_argument("--device", default="", help="part of the Vulkan device's name")
     parser.add_argument("--tool", required=True)
     parser.add_argument("--work", required=True, type=pathlib.Path)
     parser.add_argument("--single", type=int, default=0, help="single instructions")
@@ -241,16 +276,20 @@ def main():
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--timeout", type=int, default=1800)
     arguments = parser.parse_args()
+    if arguments.against == "azahar" and not (arguments.azahar and arguments.image):
+        parser.error("comparing with Azahar needs --azahar and --image")
+    other = "Azahar" if arguments.against == "azahar" else "Vulkan"
 
     rng = random.Random(arguments.seed)
     produced = [0]
 
     def generate():
         produced[0] += 1
+        fill = END_WORD if arguments.against == "vulkan" else None
         if produced[0] <= arguments.single:
-            return random_case(rng)
+            return random_case(rng, fill=fill)
         geometry = rng.random() < 0.4
-        return random_case(rng, random_program(rng, geometry, rng.randint(2, 40)), geometry)
+        return random_case(rng, random_program(rng, geometry, rng.randint(2, 40)), geometry, fill)
 
     arguments.work.mkdir(parents=True, exist_ok=True)
     for stale in ("y2r-cases.bin", "pica-cases.bin"):
@@ -263,9 +302,10 @@ def main():
         batches = [(min(BATCH, count - start), generate) for start in range(0, count, BATCH)]
 
     differing = 0
+    close = 0
     number = 0
     for size, generator in batches:
-        for stale in ("shader-results.bin", "shader-results.hexlith.bin"):
+        for stale in ("shader-results.bin", "shader-results.hexlith.bin", "shader-results.vulkan.bin"):
             (arguments.work / stale).unlink(missing_ok=True)
         if generator is None:
             (arguments.work / "shader-cases.bin").write_bytes(arguments.cases.read_bytes())
@@ -273,13 +313,23 @@ def main():
         else:
             descriptions = write_cases(arguments.work / "shader-cases.bin", size, generator)
         subprocess.run([arguments.tool, str(arguments.work)], check=True)
-        run_azahar(arguments.azahar, arguments.image, arguments.work, arguments.timeout)
+        if arguments.against == "azahar":
+            run_azahar(arguments.azahar, arguments.image, arguments.work, arguments.timeout)
+            theirs = read_results(arguments.work / "shader-results.bin", size)
+        else:
+            device = ["--device", arguments.device] if arguments.device else []
+            subprocess.run([arguments.tool, "--vulkan", *device, str(arguments.work)], check=True)
+            theirs = read_results(arguments.work / "shader-results.vulkan.bin", size)
         ours = read_results(arguments.work / "shader-results.hexlith.bin", size)
-        theirs = read_results(arguments.work / "shader-results.bin", size)
         for index, ((my_registers, my_primitives), (their_registers, their_primitives)) in enumerate(zip(ours, theirs)):
             problems = [f"{register_name(i)} {a:08X} against {b:08X}"
                         for i, (a, b) in enumerate(zip(my_registers, their_registers))
                         if not (same_float(a, b) if i < FLOAT_WORDS else a == b)]
+            if problems and arguments.against == "vulkan" and all(
+                    close_float(a, b) if i < FLOAT_WORDS else a == b
+                    for i, (a, b) in enumerate(zip(my_registers, their_registers))):
+                close += 1
+                problems = []
             if len(my_primitives) != len(their_primitives):
                 problems.append(f"{len(my_primitives)} primitives against {len(their_primitives)}")
             elif not all(same_primitive(a, b) for a, b in zip(my_primitives, their_primitives)):
@@ -288,10 +338,14 @@ def main():
                 differing += 1
                 if differing <= 10:
                     where = descriptions[index] if index < len(descriptions) else ""
-                    print(f"case {number + index} {where}: Hexlith against Azahar: " + "; ".join(problems[:4]))
+                    print(f"case {number + index} {where}: Hexlith against {other}: " + "; ".join(problems[:4]))
         number += size
     (arguments.work / "shader-cases.bin").unlink(missing_ok=True)
-    print(f"{count - differing} of {count} cases agree")
+    if arguments.against == "vulkan":
+        print(f"{count - differing - close} of {count} cases agree to the bit, "
+              f"{close} within the precision Vulkan allows, {differing} beyond it")
+    else:
+        print(f"{count - differing} of {count} cases agree")
     return 0 if differing == 0 else 1
 
 

@@ -9,3 +9,4 @@ target_link_libraries(hexlith_adapters PUBLIC Hexlith::Application Hexlith::Port
 target_link_libraries(hexlith_adapters PRIVATE Hexlith::Warnings)
 
 add_subdirectory(filesystem)
+add_subdirectory(vulkan)

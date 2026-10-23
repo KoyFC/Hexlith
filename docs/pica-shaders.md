@@ -48,3 +48,21 @@ Both keep one thing that looks like a fault of Azahar's own: when a LOOP starts,
 ## How much float24 would matter
 
 `ShaderPrecision::Float24` rounds every result to float24, to nearest even with denormals flushed. `hexlith-oracle-run --precision` runs every vertex shader state of the title's programs both ways and measures how far the position, o0 in all of them, moves once divided by w, in pixels of a screen 400 pixels wide. Over the 6,367 random inputs that land on the screen, the median move is 0.00003 pixels and the largest 0.0035. The rasterizer resolves sixteenths of a pixel, so float24 arithmetic, as GBATEK describes the format, would change which pixels a triangle covers only for an edge that passes within a few thousandths of a sample point. The hardware's approximate reciprocals are not part of this, since nobody has published them.
+
+## The GLSL translation, compared with the interpreter
+
+The Vulkan backend runs vertex shaders translated to GLSL ([ADR 0020](adr/0020-pica-shaders-become-glsl-compiled-by-glslang.md)), and the translation is held to the interpreter the way the interpreter is held to Azahar. `scripts/compare_pica_shaders.py --against vulkan` writes the same kinds of case, runs them through `RunShader` and, with `hexlith-oracle-run --vulkan`, through the translation as a compute shader on a Vulkan device, one dispatch per program; geometry shader cases stay on the interpreter, as they do in the backend. For these runs the code memory around a random program holds END rather than random words, since the translation gives a case to every instruction a program could reach.
+
+Differences are sorted three ways: to the bit; within what Vulkan lets a device be off by, 3 ULP, or a denormal against zero on a device that does not promise to keep denormals; and beyond.
+
+On 2026-10-23:
+
+| Cases | Device | To the bit | Within Vulkan's precision | Beyond |
+| --- | --- | --- | --- | --- |
+| 12,175 states of the title's programs | llvmpipe | all | | |
+| 12,175 states of the title's programs | Intel Lunar Lake | 9,247 | 2,691 | 237 |
+| 2,000 single instructions and 500 programs, seed 1 | Intel Lunar Lake | 2,466 | 34 | 0 |
+| 2,000 single instructions and 500 programs, seed 1 | llvmpipe | 2,425 | 47 | 28 |
+
+On llvmpipe, which computes in the host's floating point, the title's programs agree to the bit, which is what says the translation means what the interpreter means. The Intel GPU's differences within Vulkan's precision are all in RCP, RSQ and EX2, the operations Vulkan gives room. The 237 beyond it are those small differences carried through a program into a value that cancels or is normalised; 40 of them are a near-zero vector whose length one side finds to be a tiny positive number and the other a tiny negative one, so that its inverse square root is a NaN on one side only. None of them moves a vertex: over the 6,388 cases whose position lands on a screen 400 pixels wide, o0 is the same to the bit. llvmpipe's 28 beyond are all cases with a denormal operand, which it flushes to zero.
+

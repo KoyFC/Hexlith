@@ -22,6 +22,8 @@ target_sources(
             screen.cpp
             screen.h
             shader_arithmetic.h
+            shader_glsl.cpp
+            shader_glsl.h
             shader_interpreter.cpp
             shader_interpreter.h
             vertex_stage.cpp

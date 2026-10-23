@@ -31,6 +31,11 @@ option(HEXLITH_FETCH_GOOGLETEST
 # option, since the extractor cannot write a manifest without it. ADR 0009.
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 
+# The Vulkan backend draws with Vulkan and compiles the GLSL it generates
+# with glslang; both are hard requirements. ADR 0020.
+find_package(Vulkan REQUIRED)
+find_package(glslang CONFIG REQUIRED)
+
 include(HexlithCompilerCache)
 include(HexlithWarnings)
 

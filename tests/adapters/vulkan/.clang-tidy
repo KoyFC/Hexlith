@@ -1,0 +1,5 @@
+# These tests write shader programs in their instruction encodings, which are
+# bit positions from GBATEK, and give them plain numbers to compute with.
+# Naming each would hide what a line says. Every other check stays on.
+InheritParentConfig: true
+Checks: "-readability-magic-numbers"

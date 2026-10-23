@@ -1,4 +1,5 @@
 #include "adapters/filesystem/gpu_recording_files.h"
+#include "adapters/vulkan/shader_cases.h"
 #include "application/gpu_replay.h"
 #include "domain/gpu/command_processor.h"
 #include "domain/gpu/gpu_memory.h"
@@ -21,7 +22,9 @@
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <memory>
+#include <optional>
 #include <random>
 #include <set>
 #include <span>
@@ -52,6 +55,7 @@ constexpr std::string_view UsageText =
     "       hexlith-oracle-run --shader-cases-from <recording> <directory>\n"
     "       hexlith-oracle-run --precision <directory>\n"
     "       hexlith-oracle-run --texture-cases-from <recording> <directory>\n"
+    "       hexlith-oracle-run --vulkan [--device <name>] <directory>\n"
     "\n"
     "Runs every case file the directory holds and writes its results there, named\n"
     "as the Azahar oracle names them with .hexlith before the extension:\n"
@@ -72,6 +76,10 @@ constexpr std::string_view UsageText =
     "With --precision, it runs the vertex shader cases of shader-cases.bin in float32\n"
     "and again rounded to float24 (ADR 0018), and prints how far o0, the position in\n"
     "every program of the reference title, moves on a screen 400 pixels wide.\n"
+    "\n"
+    "With --vulkan, it runs shader-cases.bin again with the vertex shader cases\n"
+    "translated to GLSL and run on the GPU, and writes shader-results.vulkan.bin; it\n"
+    "fails if the Vulkan validation layer says anything.\n"
     "\n"
     "With --texture-cases-from, it writes texture-cases.bin from a GPU recording: each\n"
     "distinct texture a draw samples, every mipmap level of it, as memory held it.\n";
@@ -526,6 +534,98 @@ bool RunShaders(const fs::path& directory) {
     return static_cast<bool>(in) && static_cast<bool>(out);
 }
 
+// shader-cases.bin run again with every vertex shader case on the GPU, its
+// program translated to GLSL, and the geometry shader cases through the
+// interpreter, as the Vulkan backend runs them. The cases of one program run
+// in one dispatch.
+bool RunShadersOnVulkan(const fs::path& directory, const std::string& device) {
+    namespace vulkan = hexlith::adapters::vulkan;
+    std::ifstream in(directory / "shader-cases.bin", std::ios::binary);
+    if (!in) {
+        std::cerr << "hexlith-oracle-run: no shader-cases.bin in " << directory.string() << '\n';
+        return false;
+    }
+    auto context = vulkan::VulkanContext::Create({.device = device, .validation = true});
+    if (!context) {
+        std::cerr << "hexlith-oracle-run: " << context.Failure().Message() << '\n';
+        return false;
+    }
+
+    struct Program {
+        std::unique_ptr<gpu::ShaderUnitState> unit;
+        std::uint32_t entry = 0;
+        std::vector<std::size_t> cases;
+    };
+
+    std::map<std::uint64_t, Program> programs;
+    std::vector<vulkan::ShaderCaseState> states;
+    std::vector<std::optional<gpu::GeometryEmitter>> emitters;
+    auto unit = std::make_unique<gpu::ShaderUnitState>();
+    const auto count = Take<std::uint32_t>(in);
+    for (std::uint32_t index = 0; index < count && in; ++index) {
+        const ShaderCase header = ReadShaderUnit(in, *unit);
+        vulkan::ShaderCaseState state;
+        ReadRegisters(in, state.registers);
+        state.float_uniforms = unit->float_uniforms;
+        state.bool_uniforms = unit->bool_uniforms;
+        state.int_uniforms = unit->int_uniforms;
+        emitters.emplace_back();
+        if (header.geometry) {
+            gpu::GeometryEmitter& emitter = emitters.back().emplace(header.output_mask);
+            static_cast<void>(gpu::RunShader(
+                *unit, state.registers, {.entry = header.entry, .emitter = &emitter}));
+        } else {
+            const std::uint64_t key =
+                HashObject(unit->descriptors, HashObject(unit->code, HashStart ^ header.entry));
+            Program& program = programs[key];
+            if (!program.unit) {
+                program.unit = std::make_unique<gpu::ShaderUnitState>(*unit);
+                program.entry = header.entry;
+            }
+            program.cases.push_back(states.size());
+        }
+        states.push_back(state);
+    }
+    for (auto& [key, program] : programs) {
+        std::vector<vulkan::ShaderCaseState> batch;
+        batch.reserve(program.cases.size());
+        for (const std::size_t at : program.cases) {
+            batch.push_back(states.at(at));
+        }
+        const hexlith::core::Status ran =
+            vulkan::RunVertexShaderCases(*context.Value(),
+                                         *program.unit,
+                                         program.entry,
+                                         batch,
+                                         static_cast<std::uint32_t>(gpu::ShaderRun::DefaultLimit));
+        if (!ran) {
+            std::cerr << "hexlith-oracle-run: " << ran.Failure().Message() << '\n';
+            return false;
+        }
+        for (std::size_t at = 0; at < program.cases.size(); ++at) {
+            states.at(program.cases.at(at)) = batch.at(at);
+        }
+    }
+    std::ofstream out(directory / "shader-results.vulkan.bin", std::ios::binary);
+    for (std::size_t at = 0; at < states.size(); ++at) {
+        WriteRegisters(out, states.at(at).registers);
+        if (const std::optional<gpu::GeometryEmitter>& emitter = emitters.at(at);
+            emitter.has_value()) {
+            WritePrimitives(out, emitter.value());
+        } else {
+            Put(out, std::uint32_t{0});
+        }
+    }
+    std::cout << std::format("{} vertex shader programs on {}, {} validation messages{}\n",
+                             programs.size(),
+                             context.Value()->DeviceName(),
+                             context.Value()->ValidationMessages(),
+                             context.Value()->ValidationMessages() > 0
+                                 ? ", the first: " + context.Value()->FirstValidationMessage()
+                                 : std::string{});
+    return static_cast<bool>(out) && context.Value()->ValidationMessages() == 0;
+}
+
 // Writes a case for each distinct shader state the recording's draws run.
 class ShaderCaseWriter {
 public:
@@ -876,6 +976,18 @@ int WriteTextureCases(const fs::path& recording, const fs::path& directory) {
 }
 
 int Main(std::span<char* const> arguments) {
+    // --vulkan <directory>, or --vulkan --device <name> <directory>.
+    constexpr std::size_t VulkanArguments = 3;
+    constexpr std::size_t VulkanDeviceArguments = 5;
+    if ((arguments.size() == VulkanArguments || arguments.size() == VulkanDeviceArguments) &&
+        std::string_view{arguments[1]} == "--vulkan") {
+        const bool named = arguments.size() == VulkanDeviceArguments &&
+                           std::string_view{arguments[2]} == "--device";
+        return RunShadersOnVulkan(fs::path{arguments[arguments.size() - 1]},
+                                  named ? arguments[3] : "")
+                   ? Success
+                   : Failure;
+    }
     if (arguments.size() == 3 && std::string_view{arguments[1]} == "--precision") {
         return MeasurePrecision(fs::path{arguments[2]});
     }

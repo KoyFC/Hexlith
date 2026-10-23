@@ -40,10 +40,11 @@ It is not affiliated with or endorsed by Nintendo, Game Freak or The Pokémon Co
 
 ## Building
 
-Requires a C++20 compiler, CMake 3.25 or later, Ninja, OpenSSL and GoogleTest. On Fedora:
+Requires a C++20 compiler, CMake 3.25 or later, Ninja, OpenSSL, Vulkan, glslang and GoogleTest. On Fedora:
 
 ```sh
-sudo dnf install gcc-c++ cmake ninja-build gtest-devel openssl-devel ccache pre-commit
+sudo dnf install gcc-c++ cmake ninja-build gtest-devel openssl-devel ccache pre-commit \
+    vulkan-headers vulkan-loader-devel glslang-devel mesa-vulkan-drivers vulkan-validation-layers
 ```
 
 ```sh

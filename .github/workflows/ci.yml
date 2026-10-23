@@ -94,7 +94,9 @@ jobs:
       - name: Install the toolchain
         run: |
           dnf install -y --setopt=install_weak_deps=False \
-              gcc-c++ clang cmake ninja-build git gtest-devel openssl-devel
+              gcc-c++ clang cmake ninja-build git gtest-devel openssl-devel \
+              vulkan-headers vulkan-loader-devel glslang-devel \
+              mesa-vulkan-drivers vulkan-validation-layers
 
       - uses: actions/checkout@v4
 
