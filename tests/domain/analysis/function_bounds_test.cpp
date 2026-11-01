@@ -29,12 +29,33 @@ constexpr std::uint32_t ArmBranchBackTwo = 0xEAFFFFFC;
 // beq with a displacement of minus four words, the bottom of a loop.
 constexpr std::uint32_t ArmBranchBackThree = 0x0AFFFFFB;
 
+// beq one word beyond the next instruction, over a single word of data.
+constexpr std::uint32_t ArmBranchEqualOverOneWord = 0x0A000001;
+
+// A word that is neither an instruction the fixtures run nor an address.
+constexpr std::uint32_t PoolWord = 0x12345678;
+
+// Where the switch fixtures put the table and the cases after it.
+constexpr std::uint32_t SwitchTable = Base + 16;
+constexpr std::uint32_t FirstCase = Base + 28;
+constexpr std::uint32_t SecondCase = Base + 32;
+constexpr std::uint32_t TableBytes = 12;
+constexpr std::uint32_t CaseBytes = 12;
+constexpr std::uint32_t SwitchBytes = 40;
+
+constexpr std::uint32_t ArmCompareWithTwo = 0xE3500002;      // cmp r0, #2
+constexpr std::uint32_t ArmDispatchLessOrSame = 0x979FF100;  // ldrls pc, [pc, r0, lsl #2]
+
 class ImageBuilder {
 public:
     void Arm(std::uint32_t word) {
         for (unsigned index = 0; index < 4; ++index) {
             bytes_.push_back(static_cast<std::uint8_t>(word >> (8U * index)));
         }
+    }
+
+    void Word(std::uint32_t value) {
+        Arm(value);
     }
 
     [[nodiscard]] std::uint32_t AddressOfNext() const {
@@ -62,6 +83,14 @@ Region CodeRegion(std::uint32_t address, std::uint32_t size) {
                   .size = size,
                   .kind = RegionKind::Code,
                   .instruction_set = arm::InstructionSet::Arm,
+                  .source = Provenance::Heuristic};
+}
+
+Region DataRegion(std::uint32_t address, std::uint32_t size, RegionKind kind = RegionKind::Data) {
+    return Region{.address = address,
+                  .size = size,
+                  .kind = kind,
+                  .instruction_set = std::nullopt,
                   .source = Provenance::Heuristic};
 }
 
@@ -280,6 +309,97 @@ TEST(FindFunctionBounds, TakesTheInstructionSetFromTheRegion) {
 
     ASSERT_EQ(result.functions.size(), 1U);
     EXPECT_EQ(result.functions.front().instruction_set, arm::InstructionSet::Arm);
+}
+
+// A branch over a literal pool lands in code the walk reached as a region of its
+// own. The function is both, and its extent runs to the end of the second.
+TEST(FindFunctionBounds, CrossesALiteralPoolToTheCodeAfterIt) {
+    ImageBuilder image;
+    image.Arm(ArmPush);                    // 0x00100000
+    image.Arm(ArmBranchEqualOverOneWord);  // 0x00100004, to 0x00100010
+    image.Arm(ArmPop);                     // 0x00100008
+    image.Word(PoolWord);                  // 0x0010000C, the pool
+    image.Arm(ArmMove);                    // 0x00100010
+    image.Arm(ArmReturn);                  // 0x00100014
+
+    const std::vector<FunctionRange> entries = {Entry(Base)};
+    const std::vector<Region> regions = {
+        CodeRegion(Base, 12), DataRegion(Base + 12, 4), CodeRegion(Base + 16, 8)};
+    const BoundsResult result =
+        FindFunctionBounds(WalkImage{.bytes = image.Bytes(), .base = Base}, entries, regions);
+
+    ASSERT_NE(FunctionAt(result, Base), nullptr);
+    EXPECT_EQ(FunctionAt(result, Base)->size, 24U);
+}
+
+TEST(FindFunctionBounds, DoesNotCrossBytesTheWalkNeverReached) {
+    ImageBuilder image;
+    image.Arm(ArmPush);
+    image.Arm(ArmBranchEqualOverOneWord);
+    image.Arm(ArmPop);
+    image.Word(PoolWord);
+    image.Arm(ArmMove);
+    image.Arm(ArmReturn);
+
+    // The same, with nothing known about the word between the two pieces of
+    // code: a branch across a gap is how a measurement chains through tail
+    // calls into the rest of the program.
+    const std::vector<FunctionRange> entries = {Entry(Base)};
+    const std::vector<Region> regions = {CodeRegion(Base, 12), CodeRegion(Base + 16, 8)};
+    const BoundsResult result =
+        FindFunctionBounds(WalkImage{.bytes = image.Bytes(), .base = Base}, entries, regions);
+
+    ASSERT_NE(FunctionAt(result, Base), nullptr);
+    EXPECT_EQ(FunctionAt(result, Base)->size, 12U);
+}
+
+TEST(FindFunctionBounds, FollowsTheCasesOfASwitchPastItsTable) {
+    ImageBuilder image;
+    image.Arm(ArmPush);                // 0x00100000
+    image.Arm(ArmCompareWithTwo);      // 0x00100004
+    image.Arm(ArmDispatchLessOrSame);  // 0x00100008, table at 0x00100010
+    image.Arm(ArmPop);                 // 0x0010000C
+    image.Word(FirstCase);             // 0x00100010
+    image.Word(SecondCase);
+    image.Word(FirstCase);
+    image.Arm(ArmPop);     // 0x0010001C
+    image.Arm(ArmMove);    // 0x00100020
+    image.Arm(ArmReturn);  // 0x00100024
+
+    const std::vector<FunctionRange> entries = {Entry(Base)};
+    const std::vector<Region> regions = {CodeRegion(Base, 16),
+                                         DataRegion(SwitchTable, TableBytes, RegionKind::JumpTable),
+                                         CodeRegion(FirstCase, CaseBytes)};
+    const BoundsResult result =
+        FindFunctionBounds(WalkImage{.bytes = image.Bytes(), .base = Base}, entries, regions);
+
+    ASSERT_NE(FunctionAt(result, Base), nullptr);
+    EXPECT_EQ(FunctionAt(result, Base)->size, SwitchBytes) << "the cases are part of the function";
+}
+
+TEST(FindFunctionBounds, TakesACaseThatIsAnotherFunctionsEntryAsAWayInNotASecondFunction) {
+    ImageBuilder image;
+    image.Arm(ArmPush);
+    image.Arm(ArmCompareWithTwo);
+    image.Arm(ArmDispatchLessOrSame);
+    image.Arm(ArmPop);
+    image.Word(FirstCase);
+    image.Word(FirstCase);
+    image.Word(FirstCase);
+    image.Arm(ArmPop);
+    image.Arm(ArmMove);
+    image.Arm(ArmReturn);
+
+    const std::vector<FunctionRange> entries = {Entry(Base), Entry(FirstCase)};
+    const std::vector<Region> regions = {CodeRegion(Base, 16),
+                                         DataRegion(SwitchTable, TableBytes, RegionKind::JumpTable),
+                                         CodeRegion(FirstCase, CaseBytes)};
+    const BoundsResult result =
+        FindFunctionBounds(WalkImage{.bytes = image.Bytes(), .base = Base}, entries, regions);
+
+    ASSERT_NE(FunctionAt(result, Base), nullptr);
+    EXPECT_EQ(FunctionAt(result, Base)->alternate_entries, std::vector<std::uint32_t>{FirstCase});
+    EXPECT_EQ(FunctionAt(result, FirstCase), nullptr) << "folded into the switch's function";
 }
 
 TEST(FindFunctionBounds, ProducesATableTheWriterAccepts) {

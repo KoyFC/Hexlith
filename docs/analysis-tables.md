@@ -68,6 +68,8 @@ Two records may share an address. An alias is one reason, and a name an export t
 
 `jump-table` is not data that happens to sit in code. It is read by a PC-relative load followed by a computed branch, it lives in the middle of a function, and decoding it as instructions produces plausible nonsense, so it gets a kind of its own.
 
+A jump table region is exactly the table and nothing more. In ARM it starts eight bytes after the `ldr pc, [pc, rm, lsl #2]` that goes through it, which is what the program counter reads, and holds one absolute code address a word. The word between the load and the table is the branch to the default case and is code. [ADR 0023](adr/0023-switches-and-tables-of-functions-are-recognised-by-shape.md) has how the walk recognises one.
+
 ### `pointers.txt`
 
 | Field | Values |

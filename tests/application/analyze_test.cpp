@@ -333,8 +333,10 @@ TEST(RenderAnalyzeSummary, NamesTheNumbersWorthWatching) {
     report.text_bytes = TextBytes;
     report.code_bytes = CodeBytes;
     report.bounds.functions = Functions;
+    report.walk.jump_tables = 501;
 
     const std::string summary = RenderAnalyzeSummary(report);
+    EXPECT_NE(summary.find("501 jump table(s)"), std::string::npos);
     EXPECT_NE(summary.find("461"), std::string::npos);
     EXPECT_NE(summary.find("59.0%"), std::string::npos);
     EXPECT_NE(summary.find("11824"), std::string::npos);

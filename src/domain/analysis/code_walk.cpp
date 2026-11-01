@@ -1,5 +1,6 @@
 #include "domain/analysis/code_walk.h"
 
+#include "domain/analysis/jump_table.h"
 #include "domain/arm/decode_arm.h"
 #include "domain/arm/decode_thumb.h"
 
@@ -20,6 +21,7 @@ constexpr std::uint8_t MarkArm = 0x01;
 constexpr std::uint8_t MarkThumb = 0x02;
 constexpr std::uint8_t MarkInstructionStart = 0x04;
 constexpr std::uint8_t MarkData = 0x08;
+constexpr std::uint8_t MarkJumpTable = 0x10;
 
 constexpr std::uint8_t MarkFor(arm::InstructionSet set) {
     return set == arm::InstructionSet::Arm ? MarkArm : MarkThumb;
@@ -92,51 +94,102 @@ public:
     }
 
     // Sweeps a range of data for words that look like the address of a function.
-    // Only the ones pointing at something shaped like a prologue are taken, for
-    // the reason WalkOptions gives with the measurement behind it.
+    // A word is taken when it points at something shaped like a prologue, or when
+    // it sits in a run of such words: the table a virtual call goes through is a
+    // run of function addresses, and the functions in it are often leaves that
+    // start with no prologue at all. Both rules are in WalkOptions with the
+    // measurements behind them.
     void SweepForEntryPoints() {
         if (options_.pointer_scan_end <= options_.pointer_scan_begin) {
             return;
         }
 
+        std::vector<std::uint32_t> candidates;
         for (std::uint32_t at = options_.pointer_scan_begin; at + 4 <= options_.pointer_scan_end;
              at += 4) {
-            if (!image_.Contains(at) || !image_.Contains(at + 3)) {
-                continue;
+            if (image_.Contains(at) && image_.Contains(at + 3) && IsPlausiblePointer(at)) {
+                candidates.push_back(at);
             }
+        }
 
-            const std::uint32_t value = ReadWord(image_, at);
-            const arm::InstructionSet set =
-                (value & ThumbBit) != 0 ? arm::InstructionSet::Thumb : arm::InstructionSet::Arm;
-            const std::uint32_t pointed = value & ~ThumbBit;
-
-            const bool plausible = pointed >= options_.code_begin && pointed < options_.code_end &&
-                                   (pointed % arm::Alignment(set)) == 0;
-            if (!plausible) {
-                continue;
+        std::size_t index = 0;
+        while (index < candidates.size()) {
+            std::size_t end = index + 1;
+            while (end < candidates.size() && candidates.at(end) == candidates.at(end - 1) + 4) {
+                ++end;
             }
-
-            ++result_.report.words_in_range;
-            if (!LooksLikeAnEntryPoint(image_, pointed, set)) {
-                ++result_.report.words_without_a_prologue;
-                continue;
+            const bool is_table = end - index >= options_.minimum_pointer_run;
+            for (std::size_t each = index; each < end; ++each) {
+                TakePointer(candidates.at(each), is_table);
             }
-
-            result_.pointers.push_back(
-                CodePointer{.address = at, .target = pointed, .source = Provenance::Heuristic});
-            RecordFunction(pointed, set, Provenance::Heuristic);
-            Seed(WalkSeed{
-                .address = pointed, .instruction_set = set, .source = Provenance::Heuristic});
+            index = end;
         }
     }
 
-    void Run() {
-        SweepForEntryPoints();
+    [[nodiscard]] bool IsPlausiblePointer(std::uint32_t at) const {
+        const std::uint32_t value = ReadWord(image_, at);
+        const arm::InstructionSet set =
+            (value & ThumbBit) != 0 ? arm::InstructionSet::Thumb : arm::InstructionSet::Arm;
+        const std::uint32_t pointed = value & ~ThumbBit;
+        return pointed >= options_.code_begin && pointed < options_.code_end &&
+               (pointed % arm::Alignment(set)) == 0;
+    }
 
+    // Whether the walk has already decoded the byte, in either instruction set.
+    [[nodiscard]] bool IsWalked(std::uint32_t address) const {
+        return image_.Contains(address) &&
+               (marks_.at(address - image_.base) & (MarkArm | MarkThumb)) != 0;
+    }
+
+    void TakePointer(std::uint32_t at, bool in_a_table) {
+        const std::uint32_t value = ReadWord(image_, at);
+        const arm::InstructionSet set =
+            (value & ThumbBit) != 0 ? arm::InstructionSet::Thumb : arm::InstructionSet::Arm;
+        const std::uint32_t pointed = value & ~ThumbBit;
+
+        ++result_.report.words_in_range;
+        if (!in_a_table && !LooksLikeAnEntryPoint(image_, pointed, set)) {
+            ++result_.report.words_without_a_prologue;
+            return;
+        }
+        if (in_a_table && !LooksLikeAnEntryPoint(image_, pointed, set)) {
+            // Thumb is rare in this title and a Thumb address in a table of
+            // otherwise plain words is more often an integer than a pointer.
+            if (set == arm::InstructionSet::Thumb || IsWalked(pointed)) {
+                ++result_.report.words_into_walked_code;
+                return;
+            }
+            ++result_.report.words_taken_from_tables;
+        }
+
+        result_.pointers.push_back(
+            CodePointer{.address = at, .target = pointed, .source = Provenance::Heuristic});
+        RecordFunction(pointed, set, Provenance::Heuristic);
+        Seed(WalkSeed{.address = pointed, .instruction_set = set, .source = Provenance::Heuristic});
+    }
+
+    void Run() {
+        // Everything stated, and everything that follows from it, is walked
+        // before the sweep looks at data. What the sweep takes for an entry
+        // point without a prologue is judged against that: a word in a run of
+        // code addresses that points into code already walked is the address
+        // of a case or a label and not of a function, and only what points at
+        // bytes nothing has reached is one.
+        DrainWhile([](Confidence confidence) { return confidence != Confidence::Guessed; });
+        SweepForEntryPoints();
+        DrainWhile([](Confidence) { return true; });
+        result_.regions = BuildRegions();
+    }
+
+    template<class Wanted>
+    void DrainWhile(Wanted wanted) {
         for (std::optional<Pending> next = Pop(); next.has_value(); next = Pop()) {
+            if (!wanted(next->confidence)) {
+                Push(next->seed, next->confidence);
+                return;
+            }
             Follow(next->seed, next->confidence);
         }
-        result_.regions = BuildRegions();
     }
 
     WalkResult Take() {
@@ -222,6 +275,7 @@ private:
         }
 
         FollowBranch(decoded, address, seed, confidence);
+        FollowDispatch(decoded, address, seed, confidence);
         FollowLiteral(decoded, address, seed);
 
         if (!arm::ContinuesToTheNextInstruction(decoded)) {
@@ -258,11 +312,73 @@ private:
             return;
         }
 
-        if (arm::IsCall(decoded)) {
+        if (arm::IsCall(decoded) || IsTailCallToAPrologue(decoded, target, set)) {
             RecordFunction(target, set, Provenance::Heuristic);
         }
         Push(WalkSeed{.address = target, .instruction_set = set, .source = Provenance::Heuristic},
              FollowedFrom(confidence));
+    }
+
+    // An unconditional branch to a push. A prologue runs once, on the way in, so
+    // a branch to one is not a loop or a jump inside a function: it is a tail
+    // call, and what it reaches is a function that nothing calls and so
+    // nothing else names.
+    [[nodiscard]] bool IsTailCallToAPrologue(const arm::Instruction& decoded,
+                                             std::uint32_t target,
+                                             arm::InstructionSet set) const {
+        if (decoded.operation != arm::Operation::Branch ||
+            decoded.condition != arm::Condition::Always) {
+            return false;
+        }
+        const arm::Instruction first = DecodeAt(image_, target, set);
+        return first.operation == arm::Operation::StoreMultiple &&
+               first.first == arm::StackPointer && first.writes_back;
+    }
+
+    // A switch compiled to a table: the words after the load are data, and each
+    // one is the address of a case, which is code reached by this path.
+    void FollowDispatch(const arm::Instruction& decoded,
+                        std::uint32_t address,
+                        const WalkSeed& seed,
+                        Confidence confidence) {
+        if (!IsTableDispatch(decoded)) {
+            return;
+        }
+
+        const std::optional<JumpTable> table =
+            ReadJumpTable(image_, address, decoded, options_.code_begin, options_.code_end);
+        if (!table.has_value() || TableOverlapsCode(*table)) {
+            ++result_.report.jump_tables_rejected;
+            return;
+        }
+
+        ++result_.report.jump_tables;
+        result_.report.jump_table_entries += table->targets.size();
+
+        const std::size_t first = table->address - image_.base;
+        for (std::size_t byte = 0; byte < table->targets.size() * 4; ++byte) {
+            std::uint8_t& mark = marks_.at(first + byte);
+            mark = static_cast<std::uint8_t>(mark | MarkJumpTable);
+        }
+
+        for (const std::uint32_t target : table->targets) {
+            Push(WalkSeed{.address = target,
+                          .instruction_set = seed.instruction_set,
+                          .source = Provenance::Heuristic},
+                 FollowedFrom(confidence));
+        }
+    }
+
+    // Whether any byte of the table has already been decoded as an instruction,
+    // which would make the words after the load code and not a table.
+    [[nodiscard]] bool TableOverlapsCode(const JumpTable& table) const {
+        const std::size_t first = table.address - image_.base;
+        for (std::size_t byte = 0; byte < table.targets.size() * 4; ++byte) {
+            if ((marks_.at(first + byte) & (MarkArm | MarkThumb)) != 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // A read from a literal pool is two facts at once: those four bytes are data
@@ -344,7 +460,7 @@ private:
         // of the comparison. It differs between the first byte of an instruction
         // and the rest of it, so including it would end a region at every
         // instruction boundary and produce one region per two bytes.
-        constexpr std::uint8_t KindMarks = MarkArm | MarkThumb | MarkData;
+        constexpr std::uint8_t KindMarks = MarkArm | MarkThumb | MarkData | MarkJumpTable;
 
         std::size_t index = 0;
         while (index < marks_.size()) {
@@ -370,6 +486,8 @@ private:
                 region.kind = RegionKind::Code;
                 region.instruction_set =
                     (mark & MarkArm) != 0 ? arm::InstructionSet::Arm : arm::InstructionSet::Thumb;
+            } else if ((mark & MarkJumpTable) != 0) {
+                region.kind = RegionKind::JumpTable;
             } else {
                 region.kind = RegionKind::Data;
             }

@@ -266,13 +266,44 @@ Between them the two call 92.7 percent of the text code, so most of what each mi
 
 Ghidra agreeing with one side does not settle a conflict, and `0x00100184` shows why. A module imports that position as ARM. Decoded as ARM, the bytes there are a complete function, a push of r4 and lr, moves, a load, an add and the matching pop, then a short tail ending in a `bx`. Decoded as Thumb, the second halfword is undefined. So the import is right, and the guessed path and Ghidra are both wrong in the same way. The table used to record the address with `isa=thumb` and `source=relocation`, which is how the order of the walk came to light. The other nineteen have not been read yet.
 
+## Switches, tail calls and tables of functions
+
+What the walk of the sections above left, and what [ADR 0023](adr/0023-switches-and-tables-of-functions-are-recognised-by-shape.md) did about it. Three additions, each measured on its own against the executed instructions of the boot to the title (`scripts/executed_coverage.py`) and against Ghidra:
+
+| | Phase 4 tables | Switches, extents across pools | And tail calls to a push | And runs of code addresses |
+| --- | --- | --- | --- | --- |
+| Text segment reached | 80.3 percent | 88.3 percent | 88.3 percent | 92.2 percent |
+| Functions | 17,309 | 18,065 | 18,418 | 22,489 |
+| Executed instructions in a function extent | 93.53 percent | 95.30 percent | 97.83 percent | 99.84 percent |
+| Overlapping functions | 8 | 65 | 18 | 54 |
+
+The first column's reach is the figure the sections above give. In the second, 501 switches are read, 5,619 entries in all, and a function's extent follows a branch across a literal pool or a table into the code after it. Letting an extent cross into code the walk had reached anywhere, before the run of regions was made the limit, measured a function of 2 MB and 282 overlaps.
+
+The tail calls are 353 functions that nothing calls and that an unconditional branch to a push names. They also shrank the overlaps from 65 to 18, because a tail call that is a known entry is no longer followed into.
+
+The runs of code addresses are the table a virtual call goes through. 6,674 words were taken from them that the prologue test would have dropped, 2,891 more were left alone for pointing into code already walked, and the Thumb ones were left to the prologue test, without which the conflicts rose from 33 to 947 and with the rest of the rule to 535.
+
+Against Ghidra, with its export from 2026-10-17:
+
+| | Before | After |
+| --- | --- | --- |
+| Jump tables Ghidra resolved | 450 | 450 |
+| Their targets Hexlith had not reached | 3,019 of 3,227 | 8 |
+| Code to Hexlith only | 364,240 bytes | 381,440 bytes |
+| Code to Ghidra only | 547,174 bytes | 37,816 bytes |
+| Code to both, different instruction set | 80 bytes | 12 bytes |
+| Entries only Hexlith found | 4,021 | 8,382 |
+| Entries only Ghidra found | 1,572 | 753 |
+
+Of the 8,382 entries only Hexlith found, Ghidra has 4,879 as code and 3,503 as not. The boot to the title executed 481 of them, which settles those and none of the others. They are guesses of the same kind the walk always made, and a wrong one costs an instruction run by the interpreter and not a wrong result.
+
 ## What is not done yet
 
-**The 20 percent the walk does not reach.** Some of it is code reached through a dispatch the analysis cannot follow, some is data, and nothing here can say which without more work. The honest form of that is a gap in the tables.
+**The rest of the unreached text.** 7.8 percent of the text segment is still in no region. What the run executes outside a function extent is now 0.16 percent, 65,348 instructions, so most of what is left is code the title does not run during a boot, or data.
 
-**Jump tables.** A computed branch through a table ends a path. The tables are not found, the entries are not followed, and no region is marked as one. Ghidra's 450, with 3,019 targets Hexlith does not reach, put a number on it. This is the largest single gap and the hardest case, which is why [ADR 0006](adr/0006-analysis-layer-format.md) gave `jump-table` a region kind of its own before anything could produce one.
+**Switches the shape misses.** A computed `add pc`, two of them in the main executable, and a load from data followed by a branch through a register are not recognised. The 8 targets of Ghidra's tables that Hexlith has not reached are the other kind to look at. The modules have no jump tables found at all, because their table entries are written by relocation and the analysis reads the file before that.
 
-**The conflicts, overlaps and stops of the main executable.** 33 conflict reports at 20 addresses, of which one has been read, and 12 stops. Each is a place where two paths disagree, about an encoding or about which function owns a byte, and each is worth reading rather than counting. The modules have no conflicts and no stops.
+**The conflicts, overlaps and stops of the main executable.** 36 conflict reports and 10 stops. Each is a place where two paths disagree, about an encoding or about which function owns a byte, and each is worth reading rather than counting. The modules have no conflicts and no stops.
 
 ## What a run executes
 
@@ -292,3 +323,12 @@ From a new game to the first frame after the title appears (`--stop-after frame:
 | Functions executed | 2,072 of 17,308 |
 
 The instructions outside every extent are code the game runs and the tables do not place in a function. Seven percent is not a rounding error, and it does not stop a lifter that falls back to the interpreter, but it is the part of the analysis that is wrong in a way the static reach hides.
+
+After the work above, with the tables regenerated, the same run:
+
+| | |
+| --- | --- |
+| In a region classified as code | 99.87 percent |
+| Within the extent of a function | 99.84 percent |
+| Outside every function extent | 65,348 instructions, 11,920 addresses |
+| Functions executed | 2,472 of 22,487 |

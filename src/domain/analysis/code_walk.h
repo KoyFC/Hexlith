@@ -85,6 +85,12 @@ struct WalkOptions {
     // two do not deserve the same treatment.
     std::uint32_t pointer_scan_begin = 0;
     std::uint32_t pointer_scan_end = 0;
+
+    // How many consecutive words in the swept range have to look like code
+    // addresses for each of them to be taken without the prologue test. Three is
+    // the shortest run that is plausibly a table and not two integers that
+    // happen to be near each other.
+    std::size_t minimum_pointer_run = 3;
 };
 
 // Whether the instruction at an address looks like the first one of a function:
@@ -128,6 +134,12 @@ struct WalkReport {
     // wrong. An address appears once per path that ran into it.
     std::vector<std::uint32_t> instruction_set_conflicts;
 
+    // Switches compiled to a table of code addresses: the tables read, how many
+    // entries they held, and the loads that looked like one and were not.
+    std::size_t jump_tables = 0;
+    std::size_t jump_table_entries = 0;
+    std::size_t jump_tables_rejected = 0;
+
     std::size_t literal_pool_words = 0;
     std::size_t pointers_followed = 0;
     std::size_t pointers_ignored = 0;
@@ -137,6 +149,15 @@ struct WalkReport {
     // shaped like the start of a function.
     std::size_t words_in_range = 0;
     std::size_t words_without_a_prologue = 0;
+
+    // Words taken for being part of a run of code addresses that the prologue
+    // test alone would have dropped.
+    std::size_t words_taken_from_tables = 0;
+
+    // Words in such a run that were left alone for pointing into code the walk
+    // had already decoded, which is where a case label points and a function
+    // does not.
+    std::size_t words_into_walked_code = 0;
 };
 
 struct WalkResult {

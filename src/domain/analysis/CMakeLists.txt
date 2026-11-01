@@ -6,6 +6,8 @@ target_sources(
             export_seed.h
             function_bounds.cpp
             function_bounds.h
+            jump_table.cpp
+            jump_table.h
             merge.h
             module_analysis.cpp
             module_analysis.h

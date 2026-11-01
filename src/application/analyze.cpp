@@ -211,9 +211,17 @@ std::string RenderAnalyzeSummary(const AnalyzeReport& report) {
                             report.walk.instruction_set_conflicts.size(),
                             report.walk.undefined_stops));
     text.append(RenderConflicts(report.walk.instruction_set_conflicts));
-    text.append(std::format("{} pointer(s) in data, {} word(s) swept without a prologue\n",
+    text.append(std::format("{} jump table(s) of {} entries, {} dispatch(es) refused\n",
+                            report.walk.jump_tables,
+                            report.walk.jump_table_entries,
+                            report.walk.jump_tables_rejected));
+    text.append(std::format("{} pointer(s) in data, {} word(s) swept without a prologue, "
+                            "{} taken from runs of addresses, {} left alone for pointing into "
+                            "walked code\n",
                             report.tables.pointers,
-                            report.walk.words_without_a_prologue));
+                            report.walk.words_without_a_prologue,
+                            report.walk.words_taken_from_tables,
+                            report.walk.words_into_walked_code));
     text.append(std::format("wrote {} symbol(s), {} function(s), {} region(s), {} pointer(s)\n",
                             report.tables.symbols,
                             report.tables.functions,

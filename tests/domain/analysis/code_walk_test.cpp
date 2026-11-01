@@ -54,6 +54,13 @@ constexpr std::uint32_t ArmAdjustStack = 0xE24DD008;
 // bl a long way back, which lands outside any image a test builds.
 constexpr std::uint32_t ArmCallFarBack = 0xEBFFF000;
 
+// Encodings for the switch tests, checked against an independent disassembler.
+constexpr std::uint32_t ArmCompareWithTwo = 0xE3500002;      // cmp r0, #2
+constexpr std::uint32_t ArmDispatchLessOrSame = 0x979FF100;  // ldrls pc, [pc, r0, lsl #2]
+constexpr std::uint32_t ArmPushPair = 0xE92D0030;            // push {r4, r5}
+constexpr std::uint32_t ArmLoadField = 0xE5900008;           // ldr r0, [r0, #8]
+constexpr std::uint32_t ArmBranchToThirdWord = 0xEA000000;   // b, two instructions on
+
 class ImageBuilder {
 public:
     void Arm(std::uint32_t word) {
@@ -382,6 +389,196 @@ TEST(LooksLikeAnEntryPoint, RecognisesTheShapesAFunctionStartsWith) {
     EXPECT_FALSE(LooksLikeAnEntryPoint(walked, Base + 2, arm::InstructionSet::Arm))
         << "an ARM function cannot start at an address that is not a multiple of four";
     EXPECT_FALSE(LooksLikeAnEntryPoint(walked, Base + PastTheEnd, arm::InstructionSet::Arm));
+}
+
+// Where the pieces of the switch below land, as offsets from the start of the
+// image: the table, the first and second cases after it.
+constexpr std::uint32_t SwitchTable = Base + 16;
+constexpr std::uint32_t FirstCase = Base + 28;
+constexpr std::uint32_t SecondCase = Base + 32;
+constexpr std::uint32_t CaseBytes = 12;
+constexpr std::uint32_t TableBytes = 12;
+
+// The leaves of the table-of-functions fixtures, and where the table of
+// pointers to them begins.
+constexpr std::uint32_t FirstLeaf = Base + 8;
+constexpr std::uint32_t SecondLeaf = Base + 16;
+constexpr std::uint32_t ThirdLeaf = Base + 24;
+constexpr std::size_t LeafTableOffset = 32;
+
+// cmp, the dispatch, the word the default case branches from, three entries,
+// and the cases right after them, as a compiler lays a switch out.
+ImageBuilder SwitchImage(std::uint32_t dispatch) {
+    ImageBuilder image;
+    image.Arm(ArmPush);            // 0x00100000
+    image.Arm(ArmCompareWithTwo);  // 0x00100004
+    image.Arm(dispatch);           // 0x00100008, the table starts at 0x00100010
+    image.Arm(ArmPop);             // 0x0010000C, the default case
+    image.Word(FirstCase);         // 0x00100010, case 0
+    image.Word(SecondCase);        // 0x00100014, case 1
+    image.Word(FirstCase);         // 0x00100018, case 2 shares case 0
+    image.Arm(ArmPop);             // 0x0010001C
+    image.Arm(ArmMove);            // 0x00100020
+    image.Arm(ArmReturn);          // 0x00100024
+    return image;
+}
+
+TEST(WalkCode, ReadsASwitchTableAndFollowsEachCase) {
+    const ImageBuilder image = SwitchImage(ArmDispatchLessOrSame);
+    const std::vector<WalkSeed> seeds = {ArmSeed(Base)};
+    const WalkResult result =
+        WalkCode(WalkImage{.bytes = image.Bytes(), .base = Base}, seeds, Options(image));
+
+    EXPECT_EQ(result.report.jump_tables, 1U);
+    EXPECT_EQ(result.report.jump_table_entries, 3U);
+
+    const Region* table = RegionAt(result, SwitchTable);
+    ASSERT_NE(table, nullptr);
+    EXPECT_EQ(table->kind, RegionKind::JumpTable);
+    EXPECT_EQ(table->size, TableBytes);
+
+    const Region* cases = RegionAt(result, FirstCase);
+    ASSERT_NE(cases, nullptr) << "the cases are code the instruction stream never reaches";
+    EXPECT_EQ(cases->kind, RegionKind::Code);
+    EXPECT_EQ(cases->size, CaseBytes);
+}
+
+TEST(WalkCode, DoesNotMakeTheCasesOfASwitchIntoFunctions) {
+    const ImageBuilder image = SwitchImage(ArmDispatchLessOrSame);
+    const std::vector<WalkSeed> seeds = {ArmSeed(Base)};
+    const WalkResult result =
+        WalkCode(WalkImage{.bytes = image.Bytes(), .base = Base}, seeds, Options(image));
+
+    EXPECT_FALSE(HasFunction(result, FirstCase, arm::InstructionSet::Arm));
+    EXPECT_FALSE(HasFunction(result, SecondCase, arm::InstructionSet::Arm));
+}
+
+TEST(WalkCode, LeavesWordsThatAreNotATableAsCode) {
+    // The same bytes behind a load that is not a table dispatch.
+    ImageBuilder image;
+    image.Arm(ArmPush);
+    image.Arm(ArmCompareWithTwo);
+    image.Arm(ArmNop);
+    image.Arm(ArmPop);
+    image.Word(SixthWord);
+    image.Arm(ArmPop);
+    const std::vector<WalkSeed> seeds = {ArmSeed(Base)};
+    const WalkResult result =
+        WalkCode(WalkImage{.bytes = image.Bytes(), .base = Base}, seeds, Options(image));
+    EXPECT_EQ(result.report.jump_tables, 0U);
+    EXPECT_EQ(result.report.jump_tables_rejected, 0U);
+}
+
+TEST(WalkCode, RejectsALoadThatLooksLikeADispatchWithNoTableBehindIt) {
+    ImageBuilder image;
+    image.Arm(ArmPush);
+    image.Arm(ArmCompareWithTwo);
+    image.Arm(ArmDispatchLessOrSame);
+    image.Arm(ArmPop);
+    image.Word(NotAnAddress);
+    image.Word(NotAnAddress);
+    image.Word(NotAnAddress);
+    const std::vector<WalkSeed> seeds = {ArmSeed(Base)};
+    const WalkResult result =
+        WalkCode(WalkImage{.bytes = image.Bytes(), .base = Base}, seeds, Options(image));
+    EXPECT_EQ(result.report.jump_tables, 0U);
+    EXPECT_EQ(result.report.jump_tables_rejected, 1U);
+    EXPECT_EQ(RegionAt(result, SwitchTable), nullptr) << "the words are left unclaimed";
+}
+
+TEST(WalkCode, TakesAnUnconditionalBranchToAPushForAFunction) {
+    ImageBuilder image;
+    image.Arm(ArmBranchToThirdWord);  // 0x00100000
+    image.Arm(ArmNop);                // 0x00100004
+    image.Arm(ArmPushPair);           // 0x00100008
+    image.Arm(ArmReturn);             // 0x0010000C
+    const std::vector<WalkSeed> seeds = {ArmSeed(Base)};
+    const WalkResult result =
+        WalkCode(WalkImage{.bytes = image.Bytes(), .base = Base}, seeds, Options(image));
+    EXPECT_TRUE(HasFunction(result, ThirdWord, arm::InstructionSet::Arm));
+}
+
+TEST(WalkCode, LeavesABranchToAnythingElseAsAJump) {
+    ImageBuilder image;
+    image.Arm(ArmBranchToThirdWord);  // 0x00100000
+    image.Arm(ArmNop);                // 0x00100004
+    image.Arm(ArmMove);               // 0x00100008, not a prologue
+    image.Arm(ArmReturn);             // 0x0010000C
+    const std::vector<WalkSeed> seeds = {ArmSeed(Base)};
+    const WalkResult result =
+        WalkCode(WalkImage{.bytes = image.Bytes(), .base = Base}, seeds, Options(image));
+    EXPECT_FALSE(HasFunction(result, ThirdWord, arm::InstructionSet::Arm));
+}
+
+// A function nothing walks to, then a table of three pointers to leaf functions
+// with no prologue among them.
+ImageBuilder LeavesAndTable(std::uint32_t entry_flag) {
+    ImageBuilder image;
+    image.Arm(ArmPush);  // 0x00100000
+    image.Arm(ArmPop);   // 0x00100004
+    for (unsigned leaf = 0; leaf < 3; ++leaf) {
+        image.Arm(ArmLoadField);  // a leaf: no prologue
+        image.Arm(ArmReturn);
+    }
+    image.Word(FirstLeaf | entry_flag);
+    image.Word(SecondLeaf | entry_flag);
+    image.Word(ThirdLeaf | entry_flag);
+    return image;
+}
+
+WalkOptions SweepOptions(const ImageBuilder& image, std::size_t table_start) {
+    WalkOptions options = Options(image);
+    options.pointer_scan_begin = static_cast<std::uint32_t>(Base + table_start);
+    options.pointer_scan_end = static_cast<std::uint32_t>(Base + image.Bytes().size());
+    return options;
+}
+
+TEST(WalkCode, TakesEveryPointerInARunOfCodeAddressesEvenWithoutAPrologue) {
+    const ImageBuilder image = LeavesAndTable(0);
+    const WalkResult result = WalkCode(WalkImage{.bytes = image.Bytes(), .base = Base},
+                                       std::vector<WalkSeed>{ArmSeed(Base)},
+                                       SweepOptions(image, LeafTableOffset));
+    EXPECT_EQ(result.report.words_taken_from_tables, 3U);
+    EXPECT_TRUE(HasFunction(result, FirstLeaf, arm::InstructionSet::Arm));
+    EXPECT_TRUE(HasFunction(result, SecondLeaf, arm::InstructionSet::Arm));
+    EXPECT_TRUE(HasFunction(result, ThirdLeaf, arm::InstructionSet::Arm));
+}
+
+TEST(WalkCode, WantsThreeConsecutiveAddressesBeforeTrustingARun) {
+    const ImageBuilder image = LeavesAndTable(0);
+    WalkOptions options = SweepOptions(image, LeafTableOffset);
+    options.minimum_pointer_run = 4;
+    const WalkResult result = WalkCode(WalkImage{.bytes = image.Bytes(), .base = Base},
+                                       std::vector<WalkSeed>{ArmSeed(Base)},
+                                       options);
+    EXPECT_EQ(result.report.words_taken_from_tables, 0U);
+    EXPECT_FALSE(HasFunction(result, FirstLeaf, arm::InstructionSet::Arm));
+}
+
+TEST(WalkCode, IgnoresARunThatPointsIntoCodeAlreadyWalked) {
+    // A seed function of moves, and a table whose entries point at the middle
+    // of it: where a case label points, not a function.
+    ImageBuilder image;
+    image.Arm(ArmMove);    // 0x00100000
+    image.Arm(ArmMove);    // 0x00100004
+    image.Arm(ArmMove);    // 0x00100008
+    image.Arm(ArmReturn);  // 0x0010000C
+    image.Word(Base + 4);
+    image.Word(Base + 8);
+    image.Word(Base + 4);
+    const WalkResult result = WalkCode(WalkImage{.bytes = image.Bytes(), .base = Base},
+                                       std::vector<WalkSeed>{ArmSeed(Base)},
+                                       SweepOptions(image, 16));
+    EXPECT_EQ(result.report.words_into_walked_code, 3U);
+    EXPECT_FALSE(HasFunction(result, Base + 4, arm::InstructionSet::Arm));
+}
+
+TEST(WalkCode, IgnoresAThumbAddressInARunWithoutAPrologue) {
+    const ImageBuilder image = LeavesAndTable(1);
+    const WalkResult result = WalkCode(WalkImage{.bytes = image.Bytes(), .base = Base},
+                                       std::vector<WalkSeed>{ArmSeed(Base)},
+                                       SweepOptions(image, LeafTableOffset));
+    EXPECT_EQ(result.report.words_taken_from_tables, 0U);
 }
 
 TEST(WalkCode, ProducesTablesTheWritersAccept) {
