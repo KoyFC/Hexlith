@@ -71,6 +71,23 @@ struct Stop {
     }
 };
 
+// Told, before each instruction runs, where it is and which instruction set it
+// is in. For measuring what a run executes; it is never part of what a run
+// computes. A virtual call per instruction is acceptable here because nothing
+// that needs speed passes an observer.
+class ExecutionObserver {
+public:
+    ExecutionObserver() = default;
+    virtual ~ExecutionObserver() = default;
+
+    ExecutionObserver(const ExecutionObserver&) = delete;
+    ExecutionObserver& operator=(const ExecutionObserver&) = delete;
+    ExecutionObserver(ExecutionObserver&&) = delete;
+    ExecutionObserver& operator=(ExecutionObserver&&) = delete;
+
+    virtual void BeforeInstruction(std::uint32_t address, bool thumb) = 0;
+};
+
 // Executes the one instruction at r15.
 //
 // The interpreter is the executable reference of ADR 0003: every operation goes
@@ -93,6 +110,15 @@ Stop Run(CpuState& state, Memory& memory, std::uint64_t limit);
 template<memory::GuestMemory Memory>
 Stop Run(CpuState& state, Memory& memory, std::uint64_t limit, std::uint64_t& executed);
 
+// The same, telling an observer about every instruction before it runs,
+// including one that then stops the run.
+template<memory::GuestMemory Memory>
+Stop Run(CpuState& state,
+         Memory& memory,
+         std::uint64_t limit,
+         std::uint64_t& executed,
+         ExecutionObserver& observer);
+
 // The interpreter is compiled once, in interpreter.cpp, for each memory it runs
 // against, rather than in every file that calls it.
 extern template Stop Step<memory::PagedMemory>(CpuState&, memory::PagedMemory&);
@@ -103,6 +129,11 @@ extern template Stop
 Run<memory::PagedMemory>(CpuState&, memory::PagedMemory&, std::uint64_t, std::uint64_t&);
 extern template Stop
 Run<memory::ProcessMemory>(CpuState&, memory::ProcessMemory&, std::uint64_t, std::uint64_t&);
+
+extern template Stop Run<memory::PagedMemory>(
+    CpuState&, memory::PagedMemory&, std::uint64_t, std::uint64_t&, ExecutionObserver&);
+extern template Stop Run<memory::ProcessMemory>(
+    CpuState&, memory::ProcessMemory&, std::uint64_t, std::uint64_t&, ExecutionObserver&);
 
 }  // namespace hexlith::domain::arm
 

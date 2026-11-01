@@ -150,6 +150,13 @@ public:
     // Runs the game's threads for up to a number of instructions.
     KernelStop Run(std::uint64_t instructions);
 
+    // Tells an observer about every instruction the game's threads run, before
+    // it runs. Null stops. The observer must outlive the run, and slows it by
+    // a virtual call per instruction.
+    void ObserveExecution(arm::ExecutionObserver* observer) {
+        execution_observer_ = observer;
+    }
+
     // Every instruction run so far, which is also the clock in ticks.
     [[nodiscard]] std::uint64_t Executed() const {
         return executed_;
@@ -324,6 +331,7 @@ private:
 
     std::uint64_t executed_ = 0;
     Thread* last_run_ = nullptr;
+    arm::ExecutionObserver* execution_observer_ = nullptr;
     Outcome outcome_ = Outcome::Continue;
     std::uint32_t break_reason_ = 0;
     std::string unimplemented_service_;

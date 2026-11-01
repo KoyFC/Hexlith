@@ -95,6 +95,11 @@ struct BootOptions {
     // docs/formats/gpu-recording.md describes.
     bool record_gpu = false;
 
+    // Counts every instruction the run executes by address and writes the table
+    // under <work-dir>/<title>/observed, as docs/analysis-tables.md describes.
+    // Slows the run by a virtual call per instruction.
+    bool record_executed = false;
+
     bool help = false;
 };
 

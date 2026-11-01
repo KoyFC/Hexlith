@@ -10,6 +10,8 @@ add_library(
     boot.h
     command_line.cpp
     command_line.h
+    executed_table.cpp
+    executed_table.h
     extract.cpp
     extract.h
     golden_trace.cpp

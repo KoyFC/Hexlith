@@ -98,3 +98,18 @@ Three properties hold, and the tests hold them.
 Records are sorted by address, then by the rest of the record, so that output does not depend on the order the analysis found things in. Numbers are fixed width. A file written twice from the same facts is identical byte for byte.
 
 The point is the diff. A pass over two million instructions that reshuffled its own output would make version control useless for reviewing what the pass did, and reviewing what it did is the only way to tell an improvement from a regression.
+
+## What a run observed
+
+The four tables are what the analysis concluded. `hexlith-boot --record-executed` writes a fifth file that is not a conclusion but an observation: `observed/executed.txt` beside the extraction, one record per instruction the run executed in the main executable's text segment.
+
+```
+format version=1
+0x00100000 isa=arm count=3
+```
+
+`isa` is the instruction set the processor was in when it executed the address, and `count` is how many times. A run that executes the same address in both instruction sets has two records. The file is derived from a run and not edited by hand, and two runs of the same input give the same file.
+
+Only the main executable is written. A module's addresses depend on where the game had it loaded, so the instructions a run executed in one are not comparable with another run's.
+
+`scripts/executed_coverage.py` sets the file against `functions.txt` and `regions.txt`. It answers a different question from the static reach: of the instructions the game executed, how many did the analysis account for.

@@ -45,4 +45,9 @@ Run<memory::PagedMemory>(CpuState&, memory::PagedMemory&, std::uint64_t, std::ui
 template Stop
 Run<memory::ProcessMemory>(CpuState&, memory::ProcessMemory&, std::uint64_t, std::uint64_t&);
 
+template Stop Run<memory::PagedMemory>(
+    CpuState&, memory::PagedMemory&, std::uint64_t, std::uint64_t&, ExecutionObserver&);
+template Stop Run<memory::ProcessMemory>(
+    CpuState&, memory::ProcessMemory&, std::uint64_t, std::uint64_t&, ExecutionObserver&);
+
 }  // namespace hexlith::domain::arm

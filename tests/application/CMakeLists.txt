@@ -4,6 +4,7 @@ hexlith_add_test(
     analyze_test.cpp
     boot_test.cpp
     command_line_test.cpp
+    executed_table_test.cpp
     extract_test.cpp
     golden_trace_test.cpp
     gpu_recording_test.cpp

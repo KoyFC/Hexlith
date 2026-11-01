@@ -78,7 +78,10 @@ KernelStop Kernel::Run(std::uint64_t instructions) {
         }
 
         std::uint64_t executed = 0;
-        const arm::Stop stop = arm::Run(thread->context, space_.Memory(), slice, executed);
+        const arm::Stop stop =
+            execution_observer_ == nullptr
+                ? arm::Run(thread->context, space_.Memory(), slice, executed)
+                : arm::Run(thread->context, space_.Memory(), slice, executed, *execution_observer_);
         done += executed;
         executed_ += executed;
         scheduler_.Advance(executed);

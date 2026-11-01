@@ -61,6 +61,14 @@ repos:
         files: '^scripts/compare_golden_trace\.py$'
         stages: [pre-commit]
 
+      - id: executed-coverage-self-test
+        name: Executed coverage self-test
+        entry: scripts/executed_coverage.py --self-test
+        language: system
+        pass_filenames: false
+        files: '^scripts/executed_coverage\.py$'
+        stages: [pre-commit]
+
       - id: commit-message
         name: Check commit message
         entry: scripts/check_commit_message.py

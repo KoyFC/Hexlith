@@ -1,4 +1,5 @@
 hexlith_add_test(hexlith_domain_arm_test decode_arm_test.cpp decode_thumb_test.cpp decode_vfp_test.cpp
+                 executed_addresses_test.cpp
                  instruction_test.cpp integer_primitives_test.cpp
                  semantics_primitives_test.cpp
                  vfp_primitives_test.cpp interpreter_test.cpp)

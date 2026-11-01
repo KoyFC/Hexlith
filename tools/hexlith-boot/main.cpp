@@ -1,4 +1,5 @@
 #include "adapters/filesystem/cartridge_image.h"
+#include "adapters/filesystem/directory_blob_sink.h"
 #include "adapters/filesystem/directory_tree_store.h"
 #include "adapters/filesystem/file_rom_source.h"
 #include "adapters/filesystem/gpu_recording_directory.h"
@@ -6,10 +7,12 @@
 #include "adapters/filesystem/workspace_locator.h"
 #include "application/boot.h"
 #include "application/command_line.h"
+#include "application/executed_table.h"
 #include "application/golden_trace.h"
 #include "application/gpu_recording.h"
 #include "application/save_storage.h"
 #include "application/workspace.h"
+#include "domain/arm/interpreter/executed_addresses.h"
 #include "domain/profile/game_profile.h"
 #include "domain/profile/registry.h"
 
@@ -309,6 +312,33 @@ bool AttachSaves(const application::BootOptions& options,
     return true;
 }
 
+// The main executable's share of what the run executed, written beside the
+// other things derived from the title.
+core::Status WriteExecuted(const application::Workspace& workspace,
+                           const profile::GameProfile& target,
+                           application::BootedTitle& title,
+                           const hexlith::domain::arm::ExecutedAddresses& executed) {
+    adapters::DirectoryBlobSink sink{workspace.work_directory.path /
+                                     profile::WorkspaceDirectoryName(target) /
+                                     application::ObservedDirectory};
+    if (const core::Status prepared = sink.Prepare(); !prepared) {
+        return prepared;
+    }
+    const auto& text = title.Header().text;
+    const std::string table = application::RenderExecutedTable(
+        executed,
+        text.address,
+        text.address + static_cast<std::uint32_t>(text.PhysicalRegionSize()));
+    const core::Status written = sink.WriteText(application::ExecutedTableName, table);
+    if (written) {
+        std::cout << std::format("executed {}/{}, {} instructions\n",
+                                 sink.Describe(),
+                                 application::ExecutedTableName,
+                                 executed.Total());
+    }
+    return written;
+}
+
 int Run(const application::BootOptions& options) {
     const profile::GameProfile* target = OnlyProfile();
     if (target == nullptr) {
@@ -369,6 +399,11 @@ int Run(const application::BootOptions& options) {
         recording = std::make_unique<application::GpuRecording>(title, gpu);
     }
 
+    hexlith::domain::arm::ExecutedAddresses executed;
+    if (options.record_executed) {
+        running.ObserveExecution(&executed);
+    }
+
     const auto began = std::chrono::steady_clock::now();
     const kernel::KernelStop stop = running.Run(options.instruction_limit);
     const double seconds =
@@ -382,6 +417,12 @@ int Run(const application::BootOptions& options) {
             Report(finished.Failure().Message());
         }
         PrintRecording(recording->Summary(), gpu.Describe());
+    }
+    if (options.record_executed) {
+        const core::Status written = WriteExecuted(workspace.Value(), *target, title, executed);
+        if (!written) {
+            Report(written.Failure().Message());
+        }
     }
     if (!options.new_game) {
         StoreSaves(saves, title);

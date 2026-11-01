@@ -1,5 +1,6 @@
 #include "application/boot.h"
 #include "application/command_line.h"
+#include "domain/arm/interpreter/executed_addresses.h"
 
 #include "support/synthetic_ctr_image.h"
 #include "support/synthetic_romfs.h"
@@ -42,6 +43,21 @@ TEST(BootedTitle, StartsAtTheEntryPointAndRunsUntilTheTitleExits) {
     EXPECT_EQ(stop.reason, kernel::KernelStopReason::ProcessExited);
     EXPECT_EQ(title.Value()->Kernel().Executed(), 1U);
     EXPECT_EQ(title.Value()->Loader().Linked(), nullptr) << "nothing has asked for a module";
+}
+
+TEST(BootedTitle, TellsAnObserverWhichInstructionsTheGameRan) {
+    const std::vector<std::uint8_t> image = ExitingTitle();
+    core::Result<std::unique_ptr<BootedTitle>> title =
+        BootedTitle::FromCartridge(image, ExecutablePartition);
+    ASSERT_TRUE(title.Ok()) << title.Failure().Message();
+
+    domain::arm::ExecutedAddresses executed;
+    title.Value()->Kernel().ObserveExecution(&executed);
+    const kernel::KernelStop stop = title.Value()->Kernel().Run(Page);
+
+    EXPECT_EQ(stop.reason, kernel::KernelStopReason::ProcessExited);
+    ASSERT_EQ(executed.Total(), 1U);
+    EXPECT_EQ(executed.Entries().front().address, title.Value()->Header().text.address);
 }
 
 TEST(BootedTitle, RefusesAnImageWithoutAnExecutable) {
@@ -109,6 +125,14 @@ TEST(ParseBootCommandLine, RunsLongEnoughByDefault) {
     const core::Result<BootOptions> options = ParseBootCommandLine({});
     ASSERT_TRUE(options.Ok());
     EXPECT_EQ(options.Value().instruction_limit, DefaultBootInstructionLimit);
+}
+
+TEST(ParseBootCommandLine, RecordsTheExecutedInstructionsWhenAsked) {
+    EXPECT_FALSE(ParseBootCommandLine({}).Value().record_executed);
+    const std::vector<std::string_view> arguments = {"--record-executed"};
+    const core::Result<BootOptions> options = ParseBootCommandLine(arguments);
+    ASSERT_TRUE(options.Ok());
+    EXPECT_TRUE(options.Value().record_executed);
 }
 
 TEST(ParseBootCommandLine, StopsAtAFrame) {

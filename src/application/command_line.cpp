@@ -23,6 +23,7 @@ constexpr std::string_view GoldenOption = "--golden";
 constexpr std::string_view InputOption = "--input";
 constexpr std::string_view StopAfterOption = "--stop-after";
 constexpr std::string_view RecordGpuOption = "--record-gpu";
+constexpr std::string_view RecordExecutedOption = "--record-executed";
 
 constexpr std::string_view LoadEvent = "cro-load:";
 constexpr std::string_view UnloadEvent = "cro-unload:";
@@ -255,6 +256,9 @@ bool* BootFlag(BootOptions& options, std::string_view argument) {
     if (argument == RecordGpuOption) {
         return &options.record_gpu;
     }
+    if (argument == RecordExecutedOption) {
+        return &options.record_executed;
+    }
     return nullptr;
 }
 
@@ -330,6 +334,7 @@ std::string BootUsage() {
         "  {} <event>  stop once ldr:ro has done cro-load:<module> or cro-unload:<module>,\n"
         "                       or once frame:<number> has begun\n"
         "  {}         record the GPU's work under <work-dir>/<title>/gpu\n"
+        "  {}   count the instructions executed, by address, under <work-dir>/<title>/observed\n"
         "  {}               this text\n"
         "\n"
         "Without {} the save data under <work-dir>/<title>/save is read at the start and\n"
@@ -349,6 +354,7 @@ std::string BootUsage() {
         InputOption,
         StopAfterOption,
         RecordGpuOption,
+        RecordExecutedOption,
         HelpOption,
         NewGameOption,
         RomDirectoryVariable,

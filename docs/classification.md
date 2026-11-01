@@ -274,3 +274,21 @@ Ghidra agreeing with one side does not settle a conflict, and `0x00100184` shows
 
 **The conflicts, overlaps and stops of the main executable.** 33 conflict reports at 20 addresses, of which one has been read, and 12 stops. Each is a place where two paths disagree, about an encoding or about which function owns a byte, and each is worth reading rather than counting. The modules have no conflicts and no stops.
 
+## What a run executes
+
+The reach above is a share of the bytes. Most of the bytes never run during a boot, so the number that says how well the tables describe the game is the share of the instructions executed. `hexlith-boot --record-executed` counts them and `scripts/executed_coverage.py` compares the count with the tables.
+
+From a new game to the first frame after the title appears (`--stop-after frame:227` with the input script `100 tap a`, `200 tap a`), measured on 2026-11-01 against the tables as they stood after Phase 4:
+
+| | |
+| --- | --- |
+| Instructions executed in the main executable | 41,947,687 |
+| Of all instructions executed, in the main executable | 99.94 percent |
+| Distinct addresses | 86,127 |
+| In a region classified as code | 96.99 percent |
+| Within the extent of a function | 93.53 percent |
+| Outside every function extent | 2,713,153 instructions, 20,424 addresses, 1,161 runs |
+| Runs that start exactly where a function's measured extent ends | 144 |
+| Functions executed | 2,072 of 17,308 |
+
+The instructions outside every extent are code the game runs and the tables do not place in a function. Seven percent is not a rounding error, and it does not stop a lifter that falls back to the interpreter, but it is the part of the analysis that is wrong in a way the static reach hides.

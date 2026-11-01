@@ -228,10 +228,18 @@ Stop Step(CpuState& state, Memory& memory) {
     return Completed();
 }
 
-template<memory::GuestMemory Memory>
-Stop Run(CpuState& state, Memory& memory, std::uint64_t limit, std::uint64_t& executed) {
+// The loop all the Run overloads share. `before` is called with the address and
+// instruction set of each instruction about to run, and for the overloads that
+// have no observer it is a function that does nothing and is compiled away.
+template<memory::GuestMemory Memory, class Before>
+Stop RunLoop(CpuState& state,
+             Memory& memory,
+             std::uint64_t limit,
+             std::uint64_t& executed,
+             Before&& before) {
     executed = 0;
     while (executed < limit) {
+        before(state.registers.at(ProgramCounter), state.thumb);
         const Stop stop = Step(state, memory);
         if (stop.Stopped()) {
             // A supervisor call has completed: r15 is already past it.
@@ -243,6 +251,22 @@ Stop Run(CpuState& state, Memory& memory, std::uint64_t limit, std::uint64_t& ex
         ++executed;
     }
     return Stop{.reason = StopReason::StepLimit, .detail = 0};
+}
+
+template<memory::GuestMemory Memory>
+Stop Run(CpuState& state, Memory& memory, std::uint64_t limit, std::uint64_t& executed) {
+    return RunLoop(state, memory, limit, executed, [](std::uint32_t, bool) {});
+}
+
+template<memory::GuestMemory Memory>
+Stop Run(CpuState& state,
+         Memory& memory,
+         std::uint64_t limit,
+         std::uint64_t& executed,
+         ExecutionObserver& observer) {
+    return RunLoop(state, memory, limit, executed, [&observer](std::uint32_t address, bool thumb) {
+        observer.BeforeInstruction(address, thumb);
+    });
 }
 
 template<memory::GuestMemory Memory>
