@@ -23,11 +23,16 @@ target_sources(
             interpreter/step.h
             operation.cpp
             operation.h
+            primitives/alu.h
+            primitives/branch.h
             primitives/integer.h
+            primitives/media.h
             primitives/multiply.h
             primitives/packing.h
             primitives/parallel.h
             primitives/saturate.h
+            primitives/transfer.h
+            primitives/unpredictable.h
             primitives/vfp.h
             registers.cpp
             registers.h

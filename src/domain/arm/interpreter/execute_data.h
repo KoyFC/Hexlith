@@ -4,11 +4,14 @@
 #include "domain/arm/cpu_state.h"
 #include "domain/arm/instruction.h"
 #include "domain/arm/interpreter/execution.h"
+#include "domain/arm/primitives/alu.h"
 #include "domain/arm/primitives/integer.h"
+#include "domain/arm/primitives/media.h"
 #include "domain/arm/primitives/multiply.h"
 #include "domain/arm/primitives/packing.h"
 #include "domain/arm/primitives/parallel.h"
 #include "domain/arm/primitives/saturate.h"
+#include "domain/arm/primitives/unpredictable.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -27,13 +30,6 @@ primitives::ConditionFlags Flags(const Execution<Memory>& execution) {
             .zero = execution.state->zero,
             .carry = execution.state->carry,
             .overflow = execution.state->overflow};
-}
-
-// Whether any of the registers is r15, for the instructions where reading or
-// writing it is unpredictable.
-inline bool AnyIsProgramCounter(std::initializer_list<RegisterIndex> registers) {
-    return std::ranges::any_of(registers,
-                               [](RegisterIndex index) { return index == ProgramCounter; });
 }
 
 // The second operand of a data-processing instruction and the carry the
@@ -67,83 +63,9 @@ primitives::ShiftResult ShifterOperand(const Execution<Memory>& execution) {
     return {.value = 0, .carry = carry};
 }
 
-struct AluResult {
-    std::uint32_t value = 0;
-    bool carry = false;
-    bool overflow = false;
-
-    // Logical operations leave V alone and set C from the shifter.
-    bool arithmetic = false;
-};
-
-inline AluResult Arithmetic(primitives::AddResult sum) {
-    return {.value = sum.value, .carry = sum.carry, .overflow = sum.overflow, .arithmetic = true};
-}
-
-inline AluResult Logical(std::uint32_t value, bool shifter_carry) {
-    return {.value = value, .carry = shifter_carry, .overflow = false, .arithmetic = false};
-}
-
-inline AluResult
-Compute(Operation operation, std::uint32_t first, primitives::ShiftResult second, bool carry) {
-    using primitives::AddWithCarry;
-    const std::uint32_t operand = second.value;
-
-    switch (operation) {
-    case Operation::And:
-    case Operation::Tst:
-        return Logical(first & operand, second.carry);
-    case Operation::Eor:
-    case Operation::Teq:
-        return Logical(first ^ operand, second.carry);
-    case Operation::Orr:
-        return Logical(first | operand, second.carry);
-    case Operation::Bic:
-        return Logical(first & ~operand, second.carry);
-    case Operation::Mov:
-        return Logical(operand, second.carry);
-    case Operation::Mvn:
-        return Logical(~operand, second.carry);
-    case Operation::Sub:
-    case Operation::Cmp:
-        return Arithmetic(AddWithCarry(first, ~operand, true));
-    case Operation::Rsb:
-        return Arithmetic(AddWithCarry(operand, ~first, true));
-    case Operation::Add:
-    case Operation::Cmn:
-        return Arithmetic(AddWithCarry(first, operand, false));
-    case Operation::Adc:
-        return Arithmetic(AddWithCarry(first, operand, carry));
-    case Operation::Sbc:
-        return Arithmetic(AddWithCarry(first, ~operand, carry));
-    case Operation::Rsc:
-        return Arithmetic(AddWithCarry(operand, ~first, carry));
-    default:
-        break;
-    }
-    return {};
-}
-
 template<class Memory>
 Stop ExecuteDataProcessing(Execution<Memory>& execution) {
     const Instruction& instruction = execution.instruction;
-
-    // A shift by a register reads r15 as twelve bytes ahead on some cores and
-    // eight on others, and the architecture calls it unpredictable.
-    if (instruction.shift_register != NoRegister &&
-        AnyIsProgramCounter({instruction.destination,
-                             instruction.first,
-                             instruction.second,
-                             instruction.shift_register})) {
-        return Halt(execution, StopReason::Unpredictable);
-    }
-
-    // With the S bit, a write to r15 also copies the saved status register into
-    // the CPSR. That is how an exception handler returns, and user mode has no
-    // saved status register to copy.
-    if (instruction.destination == ProgramCounter && instruction.updates_flags) {
-        return Halt(execution, StopReason::Unpredictable);
-    }
 
     // Thumb's `add rd, pc, #imm` takes an address, and reads r15 rounded down
     // to a word the way a literal load does. Every other read of r15 is plain.
@@ -153,8 +75,8 @@ Stop ExecuteDataProcessing(Execution<Memory>& execution) {
         first = takes_address ? ReadAligned(execution, instruction.first)
                               : Read(execution, instruction.first);
     }
-    const AluResult result =
-        Compute(instruction.operation, first, ShifterOperand(execution), execution.state->carry);
+    const primitives::AluResult result = primitives::ComputeAlu(
+        instruction.operation, first, ShifterOperand(execution), execution.state->carry);
 
     if (instruction.destination != NoRegister) {
         const Stop written = Write(execution, instruction.destination, result.value);
@@ -179,11 +101,6 @@ Stop ExecuteDataProcessing(Execution<Memory>& execution) {
 template<class Memory>
 Stop ExecuteMultiply(Execution<Memory>& execution) {
     const Instruction& instruction = execution.instruction;
-    if (AnyIsProgramCounter(
-            {instruction.destination, instruction.first, instruction.second, instruction.third})) {
-        return Halt(execution, StopReason::Unpredictable);
-    }
-
     const std::uint32_t x = Read(execution, instruction.second);
     const std::uint32_t y = Read(execution, instruction.third);
     std::uint32_t product = x * y;
@@ -203,37 +120,13 @@ Stop ExecuteLongMultiply(Execution<Memory>& execution) {
     const Instruction& instruction = execution.instruction;
     const RegisterIndex low = instruction.destination;
     const RegisterIndex high = instruction.destination_high;
-    if (AnyIsProgramCounter({low, high, instruction.second, instruction.third}) || low == high) {
-        return Halt(execution, StopReason::Unpredictable);
-    }
-
     const std::uint32_t x = Read(execution, instruction.second);
     const std::uint32_t y = Read(execution, instruction.third);
     const std::uint64_t accumulator =
         (static_cast<std::uint64_t>(Read(execution, high)) << 32U) | Read(execution, low);
 
-    std::uint64_t result = 0;
-    switch (instruction.operation) {
-    case Operation::Umull:
-        result = static_cast<std::uint64_t>(x) * y;
-        break;
-    case Operation::Umlal:
-        result = (static_cast<std::uint64_t>(x) * y) + accumulator;
-        break;
-    case Operation::Smull:
-        result = static_cast<std::uint64_t>(primitives::Signed(x) * primitives::Signed(y));
-        break;
-    case Operation::Smlal:
-        result =
-            static_cast<std::uint64_t>(primitives::Signed(x) * primitives::Signed(y)) + accumulator;
-        break;
-    case Operation::Umaal:
-        result = primitives::MultiplyAccumulateAccumulate(
-            x, y, Read(execution, low), Read(execution, high));
-        break;
-    default:
-        return Halt(execution, StopReason::UndefinedInstruction);
-    }
+    const std::uint64_t result = primitives::LongMultiply(
+        instruction.operation, x, y, accumulator, Read(execution, low), Read(execution, high));
 
     execution.state->registers.at(low) = static_cast<std::uint32_t>(result);
     execution.state->registers.at(high) = static_cast<std::uint32_t>(result >> 32U);
@@ -259,14 +152,6 @@ Stop WriteReportingQ(Execution<Memory>& execution, std::uint32_t value, bool set
 template<class Memory>
 Stop ExecuteHalfwordMultiply(Execution<Memory>& execution) {
     const Instruction& instruction = execution.instruction;
-    if (AnyIsProgramCounter({instruction.destination,
-                             instruction.destination_high,
-                             instruction.first,
-                             instruction.second,
-                             instruction.third})) {
-        return Halt(execution, StopReason::Unpredictable);
-    }
-
     const std::uint32_t x = Read(execution, instruction.second);
     const std::uint32_t y = Read(execution, instruction.third);
     const bool x_high = instruction.right_half_high;
@@ -290,9 +175,6 @@ Stop ExecuteHalfwordMultiply(Execution<Memory>& execution) {
     case Operation::SmlalHalf: {
         const RegisterIndex low = instruction.destination;
         const RegisterIndex high = instruction.destination_high;
-        if (low == high) {
-            return Halt(execution, StopReason::Unpredictable);
-        }
         const std::uint64_t accumulator =
             (static_cast<std::uint64_t>(Read(execution, high)) << 32U) | Read(execution, low);
         const std::uint64_t result =
@@ -312,14 +194,6 @@ Stop ExecuteHalfwordMultiply(Execution<Memory>& execution) {
 template<class Memory>
 Stop ExecuteSignedMultiply(Execution<Memory>& execution) {
     const Instruction& instruction = execution.instruction;
-    if (AnyIsProgramCounter({instruction.destination,
-                             instruction.destination_high,
-                             instruction.first,
-                             instruction.second,
-                             instruction.third})) {
-        return Halt(execution, StopReason::Unpredictable);
-    }
-
     const bool bit5 = ((instruction.encoding >> 5U) & 1U) != 0;
     const std::uint32_t x = Read(execution, instruction.second);
     const std::uint32_t y = Read(execution, instruction.third);
@@ -341,9 +215,6 @@ Stop ExecuteSignedMultiply(Execution<Memory>& execution) {
     case Operation::Smlsld: {
         const RegisterIndex low = instruction.destination;
         const RegisterIndex high = instruction.destination_high;
-        if (low == high) {
-            return Halt(execution, StopReason::Unpredictable);
-        }
         const std::uint64_t wide =
             (static_cast<std::uint64_t>(Read(execution, high)) << 32U) | Read(execution, low);
         const std::uint64_t result = instruction.operation == Operation::Smlald
@@ -372,10 +243,6 @@ Stop ExecuteSignedMultiply(Execution<Memory>& execution) {
 template<class Memory>
 Stop ExecuteSaturatingArithmetic(Execution<Memory>& execution) {
     const Instruction& instruction = execution.instruction;
-    if (AnyIsProgramCounter({instruction.destination, instruction.first, instruction.second})) {
-        return Halt(execution, StopReason::Unpredictable);
-    }
-
     const std::uint32_t x = Read(execution, instruction.second);
     const std::uint32_t y = Read(execution, instruction.first);
     primitives::SaturateResult result;
@@ -403,23 +270,14 @@ Stop ExecuteSaturatingArithmetic(Execution<Memory>& execution) {
 template<class Memory>
 Stop ExecuteSaturate(Execution<Memory>& execution) {
     const Instruction& instruction = execution.instruction;
-    if (AnyIsProgramCounter({instruction.destination, instruction.second})) {
-        return Halt(execution, StopReason::Unpredictable);
-    }
-
     const std::uint32_t value = Read(execution, instruction.second);
     const unsigned field = instruction.immediate;
 
     switch (instruction.operation) {
     case Operation::Ssat:
     case Operation::Usat: {
-        // An arithmetic shift right by zero means by thirty-two here too.
-        constexpr std::uint32_t FullShift = 32;
-        const bool right = instruction.shift == ShiftKind::ArithmeticRight;
-        const std::uint32_t amount =
-            right && instruction.shift_amount == 0 ? FullShift : instruction.shift_amount;
         const std::int64_t operand =
-            primitives::Signed(primitives::Shift(instruction.shift, value, amount, false).value);
+            primitives::SaturationOperand(instruction.shift, value, instruction.shift_amount);
         const primitives::SaturateResult result =
             instruction.operation == Operation::Ssat
                 ? primitives::SignedSaturate(operand, field + 1)
@@ -445,45 +303,12 @@ template<class Memory>
 Stop ExecuteExtension(Execution<Memory>& execution) {
     namespace p = primitives;
     const Instruction& instruction = execution.instruction;
-    if (AnyIsProgramCounter({instruction.destination, instruction.second}) ||
-        (instruction.first == ProgramCounter)) {
-        return Halt(execution, StopReason::Unpredictable);
-    }
-
     const std::uint32_t rotated =
         p::Rotate(Read(execution, instruction.second), instruction.shift_amount);
     const std::uint32_t addend =
         instruction.first == NoRegister ? 0 : Read(execution, instruction.first);
 
-    std::uint32_t result = 0;
-    switch (instruction.operation) {
-    case Operation::Sxtb:
-    case Operation::Sxtab:
-        result = addend + p::SignExtendByte(rotated);
-        break;
-    case Operation::Sxth:
-    case Operation::Sxtah:
-        result = addend + p::SignExtendHalf(rotated);
-        break;
-    case Operation::Uxtb:
-    case Operation::Uxtab:
-        result = addend + p::ZeroExtendByte(rotated);
-        break;
-    case Operation::Uxth:
-    case Operation::Uxtah:
-        result = addend + p::ZeroExtendHalf(rotated);
-        break;
-    case Operation::Sxtb16:
-    case Operation::Sxtab16:
-        result = p::AddHalves(addend, p::SignExtendBytePair(rotated));
-        break;
-    case Operation::Uxtb16:
-    case Operation::Uxtab16:
-        result = p::AddHalves(addend, p::ZeroExtendBytePair(rotated));
-        break;
-    default:
-        return Halt(execution, StopReason::UndefinedInstruction);
-    }
+    const std::uint32_t result = p::Extend(instruction.operation, rotated, addend);
     execution.state->registers.at(instruction.destination) = result;
     return Completed();
 }
@@ -495,11 +320,6 @@ template<class Memory>
 Stop ExecuteMedia(Execution<Memory>& execution) {
     namespace p = primitives;
     const Instruction& instruction = execution.instruction;
-    if (AnyIsProgramCounter(
-            {instruction.destination, instruction.first, instruction.second, instruction.third})) {
-        return Halt(execution, StopReason::Unpredictable);
-    }
-
     const auto operand = [&execution](RegisterIndex index) {
         return index == NoRegister ? 0U : Read(execution, index);
     };
@@ -513,10 +333,7 @@ Stop ExecuteMedia(Execution<Memory>& execution) {
             first, p::Shift(ShiftKind::LogicalLeft, second, instruction.shift_amount, false).value);
         break;
     case Operation::Pkhtb: {
-        // An arithmetic shift by zero means by thirty-two, as elsewhere.
-        constexpr std::uint32_t FullShift = 32;
-        const std::uint32_t amount =
-            instruction.shift_amount == 0 ? FullShift : instruction.shift_amount;
+        const std::uint32_t amount = p::ArithmeticShiftAmount(instruction.shift_amount);
         result = p::PackTopBottom(
             first, p::Shift(ShiftKind::ArithmeticRight, second, amount, false).value);
         break;
@@ -564,14 +381,7 @@ Stop ExecuteMedia(Execution<Memory>& execution) {
 template<class Memory>
 Stop ExecuteStatusRegister(Execution<Memory>& execution) {
     const Instruction& instruction = execution.instruction;
-    if (instruction.saved_status) {
-        return Halt(execution, StopReason::Unpredictable);
-    }
-
     if (instruction.operation == Operation::MoveFromStatus) {
-        if (instruction.destination == ProgramCounter) {
-            return Halt(execution, StopReason::Unpredictable);
-        }
         execution.state->registers.at(instruction.destination) = PackCpsr(*execution.state);
         return Completed();
     }
@@ -579,9 +389,6 @@ Stop ExecuteStatusRegister(Execution<Memory>& execution) {
     // The register form keeps the field mask in the immediate; the immediate
     // form needs the immediate for the value and keeps the mask in `third`.
     const bool immediate = instruction.operand == OperandForm::Immediate;
-    if (!immediate && instruction.second == ProgramCounter) {
-        return Halt(execution, StopReason::Unpredictable);
-    }
     const std::uint32_t mask = immediate ? instruction.third : instruction.immediate;
     const std::uint32_t value =
         immediate ? instruction.immediate : Read(execution, instruction.second);
@@ -611,9 +418,6 @@ Stop ExecuteBranch(Execution<Memory>& execution) {
     case Operation::BranchExchange:
         return ExchangeTo(execution, Read(execution, instruction.second));
     case Operation::BranchLinkExchangeRegister: {
-        if (instruction.second == ProgramCounter) {
-            return Halt(execution, StopReason::Unpredictable);
-        }
         // The target is read before the link register is written, because the
         // target may be the link register.
         const std::uint32_t target = Read(execution, instruction.second);

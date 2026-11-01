@@ -6,6 +6,8 @@
 #include "domain/arm/interpreter/execution.h"
 #include "domain/arm/primitives/integer.h"
 #include "domain/arm/primitives/packing.h"
+#include "domain/arm/primitives/transfer.h"
+#include "domain/arm/primitives/unpredictable.h"
 
 #include <array>
 #include <bit>
@@ -30,11 +32,11 @@
 // Internal to the interpreter.
 namespace hexlith::domain::arm::interpreter {
 
-constexpr std::uint32_t WordSize = 4;
-
-inline bool IsAligned(std::uint32_t address, std::uint32_t size) {
-    return (address % size) == 0;
-}
+using primitives::Addressing;
+using primitives::IsAligned;
+using primitives::StoreValue;
+using primitives::Width;
+using primitives::WordSize;
 
 // The base of a transfer as the instruction reads it. A literal load in Thumb
 // reads r15 rounded down to a word.
@@ -65,98 +67,12 @@ std::uint32_t TransferOffset(const Execution<Memory>& execution) {
     return 0;
 }
 
-struct Addressing {
-    // Where the transfer happens.
-    std::uint32_t address = 0;
-
-    // What the base register holds afterwards when the instruction writes back.
-    std::uint32_t written_back = 0;
-};
-
 template<class Memory>
 Addressing SingleAddressing(const Execution<Memory>& execution) {
     const Instruction& instruction = execution.instruction;
     const std::uint32_t base = TransferBase(execution);
     const std::uint32_t offset = TransferOffset(execution);
-    const std::uint32_t offset_address = instruction.add_offset ? base + offset : base - offset;
-    return {.address = instruction.preindexed ? offset_address : base,
-            .written_back = offset_address};
-}
-
-// What the ARMv6 reference manual calls unpredictable about a single transfer's
-// registers: an offset register of r15, writing back into r15, and writing back
-// into the register the transfer loads or stores.
-template<class Memory>
-bool UnpredictableSingle(const Execution<Memory>& execution) {
-    const Instruction& instruction = execution.instruction;
-    if (instruction.operand != OperandForm::Immediate && instruction.second == ProgramCounter) {
-        return true;
-    }
-    if (!instruction.writes_back) {
-        return false;
-    }
-    return instruction.first == ProgramCounter || instruction.first == instruction.destination;
-}
-
-enum class Width : std::uint8_t { Byte, SignedByte, Half, SignedHalf, Word };
-
-inline Width WidthOf(Operation operation) {
-    switch (operation) {
-    case Operation::LoadByte:
-    case Operation::StoreByte:
-    case Operation::LoadByteUnprivileged:
-    case Operation::StoreByteUnprivileged:
-        return Width::Byte;
-    case Operation::LoadSignedByte:
-        return Width::SignedByte;
-    case Operation::LoadHalf:
-    case Operation::StoreHalf:
-        return Width::Half;
-    case Operation::LoadSignedHalf:
-        return Width::SignedHalf;
-    default:
-        return Width::Word;
-    }
-}
-
-template<class Memory>
-std::optional<std::uint32_t> Load(const Memory& memory, std::uint32_t address, Width width) {
-    switch (width) {
-    case Width::Byte:
-    case Width::SignedByte: {
-        const std::optional<std::uint8_t> value = memory.Read8(address);
-        if (!value.has_value()) {
-            return std::nullopt;
-        }
-        return width == Width::Byte ? value.value() : primitives::SignExtendByte(value.value());
-    }
-    case Width::Half:
-    case Width::SignedHalf: {
-        const std::optional<std::uint16_t> value = memory.Read16(address);
-        if (!value.has_value()) {
-            return std::nullopt;
-        }
-        return width == Width::Half ? value.value() : primitives::SignExtendHalf(value.value());
-    }
-    case Width::Word:
-        return memory.Read32(address);
-    }
-    return std::nullopt;
-}
-
-template<class Memory>
-bool StoreValue(Memory& memory, std::uint32_t address, std::uint32_t value, Width width) {
-    switch (width) {
-    case Width::Byte:
-    case Width::SignedByte:
-        return memory.Write8(address, static_cast<std::uint8_t>(value));
-    case Width::Half:
-    case Width::SignedHalf:
-        return memory.Write16(address, static_cast<std::uint16_t>(value));
-    case Width::Word:
-        return memory.Write32(address, value);
-    }
-    return false;
+    return primitives::SingleAddress(base, offset, instruction.add_offset, instruction.preindexed);
 }
 
 template<class Memory>
@@ -172,17 +88,14 @@ void WriteBack(Execution<Memory>& execution, std::uint32_t value) {
 template<class Memory>
 Stop ExecuteLoad(Execution<Memory>& execution) {
     const Instruction& instruction = execution.instruction;
-    if (UnpredictableSingle(execution)) {
-        return Halt(execution, StopReason::Unpredictable);
-    }
-
     const Addressing addressing = SingleAddressing(execution);
-    const Width width = WidthOf(instruction.operation);
+    const Width width = primitives::WidthOf(instruction.operation);
     if (instruction.destination == ProgramCounter && !IsAligned(addressing.address, WordSize)) {
         return Halt(execution, StopReason::Unpredictable);
     }
 
-    const std::optional<std::uint32_t> value = Load(*execution.memory, addressing.address, width);
+    const std::optional<std::uint32_t> value =
+        primitives::LoadValue(*execution.memory, addressing.address, width);
     if (!value.has_value()) {
         return Halt(StopReason::ReadFault, addressing.address);
     }
@@ -207,13 +120,12 @@ Stop ExecuteLoad(Execution<Memory>& execution) {
 template<class Memory>
 Stop ExecuteStore(Execution<Memory>& execution) {
     const Instruction& instruction = execution.instruction;
-    if (UnpredictableSingle(execution)) {
-        return Halt(execution, StopReason::Unpredictable);
-    }
-
     const Addressing addressing = SingleAddressing(execution);
     const std::uint32_t value = Read(execution, instruction.destination);
-    if (!StoreValue(*execution.memory, addressing.address, value, WidthOf(instruction.operation))) {
+    if (!StoreValue(*execution.memory,
+                    addressing.address,
+                    value,
+                    primitives::WidthOf(instruction.operation))) {
         return Halt(StopReason::WriteFault, addressing.address);
     }
     WriteBack(execution, addressing.written_back);
@@ -228,16 +140,6 @@ Stop ExecuteDoubleTransfer(Execution<Memory>& execution) {
     const RegisterIndex low = instruction.destination;
     const auto high = static_cast<RegisterIndex>(low + 1);
     const bool load = instruction.operation == Operation::LoadDouble;
-
-    const bool register_offset = instruction.operand == OperandForm::Register;
-    if (high == ProgramCounter ||
-        (register_offset &&
-         (instruction.second == ProgramCounter ||
-          (load && (instruction.second == low || instruction.second == high)))) ||
-        (instruction.writes_back && (instruction.first == ProgramCounter ||
-                                     instruction.first == low || instruction.first == high))) {
-        return Halt(execution, StopReason::Unpredictable);
-    }
 
     const Addressing addressing = SingleAddressing(execution);
     if (!IsAligned(addressing.address, WordSize)) {
@@ -268,24 +170,6 @@ Stop ExecuteDoubleTransfer(Execution<Memory>& execution) {
     return Completed();
 }
 
-// The lowest address a block transfer touches, from its four addressing modes:
-// increment after and before, decrement after and before.
-template<class Memory>
-std::uint32_t
-BlockStart(const Execution<Memory>& execution, std::uint32_t base, std::uint32_t bytes) {
-    const Instruction& instruction = execution.instruction;
-    if (instruction.add_offset) {
-        return instruction.preindexed ? base + WordSize : base;
-    }
-    return instruction.preindexed ? base - bytes : base - bytes + WordSize;
-}
-
-template<class Memory>
-std::uint32_t
-BlockWrittenBack(const Execution<Memory>& execution, std::uint32_t base, std::uint32_t bytes) {
-    return execution.instruction.add_offset ? base + bytes : base - bytes;
-}
-
 // LDM, and POP in Thumb. All the words are read before any register is
 // written, so that a fault leaves the registers alone.
 template<class Memory>
@@ -294,20 +178,10 @@ Stop ExecuteLoadMultiple(Execution<Memory>& execution) {
     const RegisterSet registers = instruction.registers;
     const RegisterIndex base_register = instruction.first;
     const bool base_listed = Holds(registers, base_register);
-
-    // The S bit loads user mode registers or restores the saved status, neither
-    // of which means anything from user mode. A base of r15 is unpredictable
-    // with or without write-back. In ARM, writing back into a
-    // register the transfer also loads is unpredictable; Thumb defines it as no
-    // write-back, and the loaded value wins.
-    if (instruction.saved_status || base_register == ProgramCounter ||
-        (instruction.writes_back && base_listed && !execution.Thumb())) {
-        return Halt(execution, StopReason::Unpredictable);
-    }
-
     const std::uint32_t base = Read(execution, base_register);
     const auto bytes = static_cast<std::uint32_t>(std::popcount(registers)) * WordSize;
-    const std::uint32_t start = BlockStart(execution, base, bytes);
+    const std::uint32_t start =
+        primitives::BlockStart(instruction.add_offset, instruction.preindexed, base, bytes);
     if (!IsAligned(start, WordSize)) {
         return Halt(StopReason::AlignmentFault, start);
     }
@@ -333,7 +207,8 @@ Stop ExecuteLoadMultiple(Execution<Memory>& execution) {
         }
     }
     if (instruction.writes_back && !base_listed) {
-        execution.state->registers.at(base_register) = BlockWrittenBack(execution, base, bytes);
+        execution.state->registers.at(base_register) =
+            primitives::BlockWrittenBack(instruction.add_offset, base, bytes);
     }
     for (RegisterIndex index = 0; index < ProgramCounter; ++index) {
         if (Holds(registers, index)) {
@@ -352,16 +227,10 @@ Stop ExecuteStoreMultiple(Execution<Memory>& execution) {
     const RegisterSet registers = instruction.registers;
     const RegisterIndex base_register = instruction.first;
 
-    const auto below_base = static_cast<RegisterSet>((1U << base_register) - 1U);
-    const bool base_not_lowest = Holds(registers, base_register) && (registers & below_base) != 0;
-    if (instruction.saved_status || base_register == ProgramCounter ||
-        (instruction.writes_back && base_not_lowest)) {
-        return Halt(execution, StopReason::Unpredictable);
-    }
-
     const std::uint32_t base = Read(execution, base_register);
     const auto bytes = static_cast<std::uint32_t>(std::popcount(registers)) * WordSize;
-    const std::uint32_t start = BlockStart(execution, base, bytes);
+    const std::uint32_t start =
+        primitives::BlockStart(instruction.add_offset, instruction.preindexed, base, bytes);
     if (!IsAligned(start, WordSize)) {
         return Halt(StopReason::AlignmentFault, start);
     }
@@ -378,7 +247,8 @@ Stop ExecuteStoreMultiple(Execution<Memory>& execution) {
     }
 
     if (instruction.writes_back) {
-        execution.state->registers.at(base_register) = BlockWrittenBack(execution, base, bytes);
+        execution.state->registers.at(base_register) =
+            primitives::BlockWrittenBack(instruction.add_offset, base, bytes);
     }
     return Completed();
 }
@@ -388,11 +258,6 @@ template<class Memory>
 Stop ExecuteSwap(Execution<Memory>& execution) {
     const Instruction& instruction = execution.instruction;
     const RegisterIndex base = instruction.first;
-    if (AnyIsProgramCounter({base, instruction.destination, instruction.second}) ||
-        base == instruction.destination || base == instruction.second) {
-        return Halt(execution, StopReason::Unpredictable);
-    }
-
     const bool byte = instruction.operation == Operation::SwapByte;
     const Width width = byte ? Width::Byte : Width::Word;
     const std::uint32_t address = Read(execution, base);
@@ -400,7 +265,8 @@ Stop ExecuteSwap(Execution<Memory>& execution) {
         return Halt(StopReason::AlignmentFault, address);
     }
 
-    const std::optional<std::uint32_t> old = Load(*execution.memory, address, width);
+    const std::optional<std::uint32_t> old =
+        primitives::LoadValue(*execution.memory, address, width);
     if (!old.has_value()) {
         return Halt(StopReason::ReadFault, address);
     }
@@ -411,33 +277,6 @@ Stop ExecuteSwap(Execution<Memory>& execution) {
     return Completed();
 }
 
-inline Width WidthOfSize(std::uint32_t size) {
-    switch (size) {
-    case 1:
-        return Width::Byte;
-    case 2:
-        return Width::Half;
-    default:
-        return Width::Word;
-    }
-}
-
-inline std::uint32_t ExclusiveSize(Operation operation) {
-    switch (operation) {
-    case Operation::LoadExclusiveByte:
-    case Operation::StoreExclusiveByte:
-        return 1;
-    case Operation::LoadExclusiveHalf:
-    case Operation::StoreExclusiveHalf:
-        return 2;
-    case Operation::LoadExclusiveDouble:
-    case Operation::StoreExclusiveDouble:
-        return 2 * WordSize;
-    default:
-        return WordSize;
-    }
-}
-
 // LDREX and its byte, halfword and doubleword forms. The load opens the local
 // monitor on its address.
 template<class Memory>
@@ -445,11 +284,8 @@ Stop ExecuteLoadExclusive(Execution<Memory>& execution) {
     const Instruction& instruction = execution.instruction;
     const bool pair = instruction.operation == Operation::LoadExclusiveDouble;
     const RegisterIndex low = instruction.destination;
-    if (AnyIsProgramCounter({instruction.first, low}) || (pair && low + 1 == ProgramCounter)) {
-        return Halt(execution, StopReason::Unpredictable);
-    }
 
-    const std::uint32_t size = ExclusiveSize(instruction.operation);
+    const std::uint32_t size = primitives::ExclusiveSize(instruction.operation);
     const std::uint32_t address = Read(execution, instruction.first);
     if (!IsAligned(address, size)) {
         return Halt(StopReason::AlignmentFault, address);
@@ -463,8 +299,9 @@ Stop ExecuteLoadExclusive(Execution<Memory>& execution) {
         execution.state->registers.at(low) = static_cast<std::uint32_t>(value.value());
         execution.state->registers.at(low + 1) = static_cast<std::uint32_t>(value.value() >> 32U);
     } else {
-        const Width width = WidthOfSize(size);
-        const std::optional<std::uint32_t> value = Load(*execution.memory, address, width);
+        const Width width = primitives::WidthOfSize(size);
+        const std::optional<std::uint32_t> value =
+            primitives::LoadValue(*execution.memory, address, width);
         if (!value.has_value()) {
             return Halt(StopReason::ReadFault, address);
         }
@@ -486,12 +323,7 @@ Stop ExecuteStoreExclusive(Execution<Memory>& execution) {
     const RegisterIndex status = instruction.destination;
     const RegisterIndex value = instruction.second;
     const RegisterIndex base = instruction.first;
-    if (AnyIsProgramCounter({status, value, base}) || (pair && value + 1 == ProgramCounter) ||
-        status == base || status == value || (pair && status == value + 1)) {
-        return Halt(execution, StopReason::Unpredictable);
-    }
-
-    const std::uint32_t size = ExclusiveSize(instruction.operation);
+    const std::uint32_t size = primitives::ExclusiveSize(instruction.operation);
     const std::uint32_t address = Read(execution, base);
     if (!IsAligned(address, size)) {
         return Halt(StopReason::AlignmentFault, address);
@@ -507,7 +339,7 @@ Stop ExecuteStoreExclusive(Execution<Memory>& execution) {
                 Read(execution, value);
             written = execution.memory->Write64(address, doubleword);
         } else {
-            const Width width = WidthOfSize(size);
+            const Width width = primitives::WidthOfSize(size);
             written = StoreValue(*execution.memory, address, Read(execution, value), width);
         }
         if (!written) {

@@ -4,6 +4,7 @@
 #include "domain/arm/cpu_state.h"
 #include "domain/arm/instruction.h"
 #include "domain/arm/interpreter/interpreter.h"
+#include "domain/arm/primitives/branch.h"
 
 #include <cstdint>
 
@@ -39,17 +40,12 @@ struct Execution {
     }
 };
 
-// How far ahead of an instruction r15 reads: two instructions in ARM, one in
-// Thumb, for the pipeline reason instruction.h gives.
-constexpr std::uint32_t ArmReadOffset = 8;
-constexpr std::uint32_t ThumbReadOffset = 4;
-
 // The value an instruction reads from a register. r15 reads as the
 // instruction's address plus the pipeline offset.
 template<class Memory>
 std::uint32_t Read(const Execution<Memory>& execution, RegisterIndex index) {
     if (index == ProgramCounter) {
-        return execution.address + (execution.Thumb() ? ThumbReadOffset : ArmReadOffset);
+        return primitives::ReadProgramCounter(execution.address, execution.Thumb());
     }
     return execution.state->registers.at(index);
 }
@@ -58,9 +54,10 @@ std::uint32_t Read(const Execution<Memory>& execution, RegisterIndex index) {
 // address of a literal: a Thumb instruction can sit at any halfword.
 template<class Memory>
 std::uint32_t ReadAligned(const Execution<Memory>& execution, RegisterIndex index) {
-    constexpr std::uint32_t WordMask = ~3U;
-    const std::uint32_t value = Read(execution, index);
-    return index == ProgramCounter && execution.Thumb() ? value & WordMask : value;
+    if (index == ProgramCounter) {
+        return primitives::ReadAlignedProgramCounter(execution.address, execution.Thumb());
+    }
+    return Read(execution, index);
 }
 
 inline Stop Halt(StopReason reason, std::uint32_t detail) {
@@ -81,10 +78,8 @@ inline Stop Completed() {
 // odd value land on the even address below it.
 template<class Memory>
 void BranchTo(Execution<Memory>& execution, std::uint32_t target) {
-    constexpr std::uint32_t ArmMask = ~3U;
-    constexpr std::uint32_t ThumbMask = ~1U;
     execution.state->registers.at(ProgramCounter) =
-        target & (execution.state->thumb ? ThumbMask : ArmMask);
+        primitives::BranchWriteTarget(target, execution.state->thumb);
     execution.branched = true;
 }
 
@@ -93,13 +88,10 @@ void BranchTo(Execution<Memory>& execution, std::uint32_t target) {
 // unpredictable.
 template<class Memory>
 Stop ExchangeTo(Execution<Memory>& execution, std::uint32_t target) {
-    constexpr std::uint32_t ThumbBit = 1;
-    constexpr std::uint32_t HalfwordBit = 2;
-    const bool to_thumb = (target & ThumbBit) != 0;
-    if (!to_thumb && (target & HalfwordBit) != 0) {
+    if (primitives::ExchangeTargetUnpredictable(target)) {
         return Halt(execution, StopReason::Unpredictable);
     }
-    execution.state->thumb = to_thumb;
+    execution.state->thumb = primitives::ExchangeToThumb(target);
     BranchTo(execution, target);
     return Completed();
 }
@@ -110,8 +102,7 @@ Stop ExchangeTo(Execution<Memory>& execution, std::uint32_t target) {
 // aligned is unpredictable.
 template<class Memory>
 Stop ComputedBranchTo(Execution<Memory>& execution, std::uint32_t target) {
-    constexpr std::uint32_t LowBits = 3;
-    if (!execution.Thumb() && (target & LowBits) != 0) {
+    if (primitives::ComputedBranchUnpredictable(target, execution.Thumb())) {
         return Halt(execution, StopReason::Unpredictable);
     }
     BranchTo(execution, target);

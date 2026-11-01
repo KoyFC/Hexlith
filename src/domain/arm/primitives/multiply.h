@@ -1,6 +1,7 @@
 #ifndef HEXLITH_DOMAIN_ARM_PRIMITIVES_MULTIPLY_H
 #define HEXLITH_DOMAIN_ARM_PRIMITIVES_MULTIPLY_H
 
+#include "domain/arm/operation.h"
 #include "domain/arm/primitives/saturate.h"
 
 #include <cstdint>
@@ -151,6 +152,32 @@ DualMultiplyAddLong(std::uint32_t x, std::uint32_t y, bool exchange, std::uint64
                                                                    std::uint32_t low,
                                                                    std::uint32_t high) {
     return (static_cast<std::uint64_t>(x) * y) + low + high;
+}
+
+// UMULL, UMLAL, SMULL, SMLAL and UMAAL, on the registers' values: the two
+// operands, the 64-bit accumulator of the accumulating forms, and the two
+// halves of it that UMAAL adds separately. Any other operation yields zero.
+[[nodiscard]] constexpr std::uint64_t LongMultiply(Operation operation,
+                                                   std::uint32_t x,
+                                                   std::uint32_t y,
+                                                   std::uint64_t accumulator,
+                                                   std::uint32_t low,
+                                                   std::uint32_t high) {
+    switch (operation) {
+    case Operation::Umull:
+        return static_cast<std::uint64_t>(x) * y;
+    case Operation::Umlal:
+        return (static_cast<std::uint64_t>(x) * y) + accumulator;
+    case Operation::Smull:
+        return static_cast<std::uint64_t>(Signed(x) * Signed(y));
+    case Operation::Smlal:
+        return static_cast<std::uint64_t>(Signed(x) * Signed(y)) + accumulator;
+    case Operation::Umaal:
+        return MultiplyAccumulateAccumulate(x, y, low, high);
+    default:
+        break;
+    }
+    return 0;
 }
 
 }  // namespace hexlith::domain::arm::primitives

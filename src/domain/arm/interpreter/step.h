@@ -10,6 +10,7 @@
 #include "domain/arm/interpreter/execution.h"
 #include "domain/arm/interpreter/interpreter.h"
 #include "domain/arm/primitives/integer.h"
+#include "domain/arm/primitives/unpredictable.h"
 
 #include <cstdint>
 #include <optional>
@@ -208,6 +209,13 @@ Stop Step(CpuState& state, Memory& memory) {
     if (instruction.operation != Operation::Undefined && !passes) {
         state.registers.at(ProgramCounter) = execution.Next();
         return Completed();
+    }
+
+    // The register combinations the architecture calls unpredictable stop the
+    // interpreter before anything is written. The rule is shared with the
+    // lifter, which has to stop on the same ones.
+    if (primitives::HasUnpredictableOperands(instruction)) {
+        return Halt(execution, StopReason::Unpredictable);
     }
 
     const Stop stop = Dispatch(execution);
