@@ -1,0 +1,8 @@
+# The lowering restates what the interpreter does instruction by instruction,
+# and the interpreter is written in bit positions: the top bit of a word, the
+# bits that name a register or choose a shift. A bit position is the field
+# specification rather than a number that needs a name, and a lowering that
+# hid them behind constants could no longer be read against the code it has to
+# agree with. Every other check stays on.
+InheritParentConfig: true
+Checks: "-readability-magic-numbers"

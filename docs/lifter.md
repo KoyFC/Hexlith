@@ -68,3 +68,13 @@ How the blocks end:
 **The 17 traps** are in 17 functions, and several are the addresses the analysis reports as instruction set conflicts. They are the places where two paths disagree about what a byte is.
 
 The survey takes about 0.6 seconds for the whole executable.
+
+## The intermediate representation
+
+[ADR 0024](adr/0024-the-lifter-lowers-instruction-by-instruction-and-the-interpreter-takes-the-rest.md) has the reasoning. In short, `Lower` turns one decoded instruction into an `ir::Instruction`: its condition, and a list of operations in `src/domain/lift/ir.h`.
+
+An operation reads or writes processor state (a register, a flag, the instruction set bit, a thread ID register), computes on temporaries, calls one of the shared primitives (`Shift`, `ComputeAlu`, `ConditionPassed`), loads or stores, or leaves for the interpreter. Temporaries do not outlive their instruction. The registers an instruction reads are read at the point it needs them, so the lowering is a faithful copy of the order the interpreter reads and writes in, which matters when a load faults after some of its work and when a branch reads its target before it writes the link register.
+
+`Evaluate` in `evaluate.h` runs those operations against a `CpuState` and a memory. It is how a lowering is checked: `tests/domain/lift/differential` runs an instruction through the interpreter and through its lowering from the same state and compares every register, every flag, the instruction set, the thread IDs and the writable pages. For an instruction that does not complete, the interpreter stops with the state unchanged, and the lowering has to bail with the state unchanged or hand the instruction to the interpreter and stop with the same reason.
+
+What is translated so far: data processing with the shifter, MUL and MLA, single loads and stores of every width and addressing mode, B, BL, BLX, BX, the hints, the thread ID registers of CP15 and the c7 barriers. Everything else is one `Interpret` operation. Those classes are checked in `tests/domain/lift/lower_test.cpp`, with the encodings checked against another disassembler.

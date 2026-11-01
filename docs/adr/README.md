@@ -29,5 +29,6 @@ The format is deliberately short: context, the options that were actually consid
 | [0021](0021-the-vulkan-backend-is-held-to-the-reference-within-a-measured-tolerance.md) | The Vulkan backend is held to the reference within a measured tolerance | Accepted |
 | [0022](0022-the-vulkan-backend-keeps-gpu-memory-true.md) | The Vulkan backend keeps GPU memory true and the PICA's fragment stage in one shader | Accepted |
 | [0023](0023-switches-and-tables-of-functions-are-recognised-by-shape.md) | Switches and tables of functions are recognised by shape, and the interpreter is the fallback for the rest | Accepted |
+| [0024](0024-the-lifter-lowers-instruction-by-instruction-and-the-interpreter-takes-the-rest.md) | The lifter lowers instruction by instruction, and the interpreter takes what it does not | Accepted |
 
 A record marked provisional has a named condition that will settle it. It is written down because work has to proceed in the meantime, not because the question is closed.
