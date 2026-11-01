@@ -1,0 +1,6 @@
+# The fixtures here are instruction encodings and the offsets of the
+# instructions around them, and each one is the thing under test rather than a
+# number that needs a name. The encodings carry the disassembly they stand for
+# in a comment above them.
+InheritParentConfig: true
+Checks: "-readability-magic-numbers"

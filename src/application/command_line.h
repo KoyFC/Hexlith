@@ -48,6 +48,19 @@ struct AnalyzeOptions {
     bool help = false;
 };
 
+struct LiftOptions {
+    std::optional<std::string> work_directory;
+
+    // The extraction to read, instead of the one the profile names.
+    std::optional<std::string> extraction;
+
+    // Cuts every function in the analysis tables into blocks and prints what the
+    // control flow of the whole executable looks like.
+    bool survey = false;
+
+    bool help = false;
+};
+
 // What to stop the run after, as --stop-after names it: a module event, or
 // the vertical blank that starts a frame.
 struct BootStopPoint {
@@ -115,6 +128,10 @@ std::string ExtractUsage();
 core::Result<AnalyzeOptions> ParseAnalyzeCommandLine(std::span<const std::string_view> arguments);
 
 std::string AnalyzeUsage();
+
+core::Result<LiftOptions> ParseLiftCommandLine(std::span<const std::string_view> arguments);
+
+std::string LiftUsage();
 
 core::Result<BootOptions> ParseBootCommandLine(std::span<const std::string_view> arguments);
 

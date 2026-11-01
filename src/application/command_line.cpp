@@ -22,6 +22,7 @@ constexpr std::string_view NewGameOption = "--new-game";
 constexpr std::string_view GoldenOption = "--golden";
 constexpr std::string_view InputOption = "--input";
 constexpr std::string_view StopAfterOption = "--stop-after";
+constexpr std::string_view SurveyOption = "--survey";
 constexpr std::string_view RecordGpuOption = "--record-gpu";
 constexpr std::string_view RecordExecutedOption = "--record-executed";
 
@@ -188,6 +189,62 @@ core::Result<AnalyzeOptions> ParseAnalyzeCommandLine(std::span<const std::string
     }
 
     return options;
+}
+
+core::Result<LiftOptions> ParseLiftCommandLine(std::span<const std::string_view> arguments) {
+    LiftOptions options;
+
+    for (std::size_t index = 0; index < arguments.size(); ++index) {
+        const std::string_view argument = arguments[index];
+
+        if (argument == HelpOption || argument == "-h") {
+            options.help = true;
+            continue;
+        }
+        if (argument == SurveyOption) {
+            options.survey = true;
+            continue;
+        }
+
+        core::Status taken;
+        if (argument == WorkDirectoryOption) {
+            taken = TakeValue(arguments, index, options.work_directory);
+        } else if (argument == ExtractionOption) {
+            taken = TakeValue(arguments, index, options.extraction);
+        } else if (argument.starts_with("-")) {
+            return core::Error{std::format("{} is not an option this tool knows", argument)};
+        } else {
+            return core::Error{std::format(
+                "'{}' is not an option. Every path is given with the option it belongs to",
+                argument)};
+        }
+
+        if (!taken) {
+            return taken.Failure();
+        }
+    }
+
+    return options;
+}
+
+std::string LiftUsage() {
+    return std::format(
+        "hexlith-lift: turns the analysed code of the main executable into C++ in the\n"
+        "workspace.\n"
+        "\n"
+        "  {} <path>     where the extraction lives\n"
+        "  {} <path>   a specific extraction directory, instead of the profile's\n"
+        "  {}              cut every function into blocks and print what the control\n"
+        "                       flow of the whole executable looks like\n"
+        "  {}                this text\n"
+        "\n"
+        "The work directory is taken from the command line first, then from {},\n"
+        "then from the configuration file, the same way hexlith-extract takes it.\n",
+        WorkDirectoryOption,
+        ExtractionOption,
+        SurveyOption,
+        HelpOption,
+        WorkDirectoryVariable);
 }
 
 std::string AnalyzeUsage() {

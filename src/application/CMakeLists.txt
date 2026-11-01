@@ -22,6 +22,8 @@ add_library(
     gpu_render.h
     gpu_replay.cpp
     gpu_replay.h
+    lift_survey.cpp
+    lift_survey.h
     input_script.cpp
     input_script.h
     manifest.cpp
