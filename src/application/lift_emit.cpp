@@ -1,5 +1,6 @@
 #include "application/lift_emit.h"
 
+#include "application/analysis_tables.h"
 #include "core/sha256.h"
 #include "domain/analysis/tables.h"
 #include "domain/lift/control_flow.h"
@@ -159,31 +160,6 @@ private:
     std::size_t written_ = 0;
 };
 
-struct SortedTables {
-    std::vector<analysis::FunctionRange> functions;
-    std::vector<analysis::Region> regions;
-};
-
-// The function and region tables, each in the order of its addresses.
-core::Result<SortedTables> ReadSortedTables(const LiftEmitRequest& request) {
-    core::Result<std::vector<analysis::FunctionRange>> functions =
-        analysis::ParseFunctions(request.functions);
-    if (!functions) {
-        return functions.Failure().WithContext("functions.txt");
-    }
-    core::Result<std::vector<analysis::Region>> regions = analysis::ParseRegions(request.regions);
-    if (!regions) {
-        return regions.Failure().WithContext("regions.txt");
-    }
-    std::ranges::sort(
-        regions.Value(), {}, [](const analysis::Region& region) { return region.address; });
-    std::ranges::sort(functions.Value(), {}, [](const analysis::FunctionRange& function) {
-        return function.address;
-    });
-    return SortedTables{.functions = std::move(functions.Value()),
-                        .regions = std::move(regions.Value())};
-}
-
 // The lines that add each address the function can be entered at to the table
 // of entries.
 std::string Registration(const lift::EmittedFunction& emitted,
@@ -222,16 +198,14 @@ core::Status WriteProjectFiles(const std::vector<std::string>& declarations,
 }  // namespace
 
 core::Result<LiftEmitReport> EmitLiftedCode(const LiftEmitRequest& request, ports::BlobSink& sink) {
-    const core::Result<SortedTables> tables = ReadSortedTables(request);
+    core::Result<LiftTables> tables = ReadLiftTables(request.functions, request.regions);
     if (!tables) {
         return tables.Failure();
     }
-    const std::vector<analysis::FunctionRange>& functions = tables.Value().functions;
-
-    std::unordered_set<std::uint32_t> entries;
-    for (const analysis::FunctionRange& function : functions) {
-        entries.insert(function.address);
-    }
+    std::vector<analysis::FunctionRange>& functions = tables.Value().functions;
+    std::ranges::sort(
+        functions, {}, [](const analysis::FunctionRange& function) { return function.address; });
+    const std::unordered_set<std::uint32_t>& entries = tables.Value().entries;
 
     const lift::CodeImage image{.bytes = request.code, .base = request.base};
     const lift::FlowContext flow{.entries = &entries, .regions = tables.Value().regions};

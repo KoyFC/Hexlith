@@ -6,8 +6,10 @@
 #include "domain/analysis/tables.h"
 #include "ports/blob_sink.h"
 
+#include <cstdint>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace hexlith::application {
@@ -56,6 +58,17 @@ core::Result<WrittenTables> MergeAndWriteTables(const DerivedTables& derived,
                                                 const ExistingTables& existing,
                                                 ports::BlobSink& sink,
                                                 std::string_view directory);
+
+// The function and region tables as hexlith-lift reads them: the functions in
+// the order the table lists them, the regions in the order of their addresses,
+// and the address of every function, which is where lifted code may call.
+struct LiftTables {
+    std::vector<domain::analysis::FunctionRange> functions;
+    std::vector<domain::analysis::Region> regions;
+    std::unordered_set<std::uint32_t> entries;
+};
+
+core::Result<LiftTables> ReadLiftTables(std::string_view functions, std::string_view regions);
 
 }  // namespace hexlith::application
 

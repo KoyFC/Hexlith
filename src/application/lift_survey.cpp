@@ -1,5 +1,6 @@
 #include "application/lift_survey.h"
 
+#include "application/analysis_tables.h"
 #include "domain/analysis/record_text.h"
 #include "domain/analysis/tables.h"
 #include "domain/lift/lower.h"
@@ -149,25 +150,14 @@ void Measure(LiftSurvey& survey,
 }  // namespace
 
 core::Result<LiftSurvey> SurveyControlFlow(const LiftSurveyRequest& request) {
-    core::Result<std::vector<analysis::FunctionRange>> functions =
-        analysis::ParseFunctions(request.functions);
-    if (!functions) {
-        return functions.Failure().WithContext("functions.txt");
-    }
-    core::Result<std::vector<analysis::Region>> regions = analysis::ParseRegions(request.regions);
-    if (!regions) {
-        return regions.Failure().WithContext("regions.txt");
-    }
-    std::ranges::sort(
-        regions.Value(), {}, [](const analysis::Region& region) { return region.address; });
-
-    std::unordered_set<std::uint32_t> entries;
-    for (const analysis::FunctionRange& function : functions.Value()) {
-        entries.insert(function.address);
+    const core::Result<LiftTables> tables = ReadLiftTables(request.functions, request.regions);
+    if (!tables) {
+        return tables.Failure();
     }
 
     const lift::CodeImage image{.bytes = request.code, .base = request.base};
-    const lift::FlowContext context{.entries = &entries, .regions = regions.Value()};
+    const lift::FlowContext context{.entries = &tables.Value().entries,
+                                    .regions = tables.Value().regions};
 
     const core::Result<std::map<std::uint32_t, std::uint64_t>> executed =
         ExecutedCounts(request.executed);
@@ -177,7 +167,7 @@ core::Result<LiftSurvey> SurveyControlFlow(const LiftSurveyRequest& request) {
 
     LiftSurvey survey;
     Instructions instructions;
-    for (const analysis::FunctionRange& function : functions.Value()) {
+    for (const analysis::FunctionRange& function : tables.Value().functions) {
         const lift::Function built =
             lift::BuildFunction(image, function.address, function.instruction_set, context);
         Add(survey, built);

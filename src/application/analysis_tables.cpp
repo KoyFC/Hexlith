@@ -1,6 +1,8 @@
 #include "application/analysis_tables.h"
 
+#include <algorithm>
 #include <format>
+#include <utility>
 
 namespace hexlith::application {
 namespace {
@@ -104,6 +106,27 @@ core::Result<WrittenTables> MergeAndWriteTables(const DerivedTables& derived,
     written.regions = regions.Value();
     written.pointers = pointers.Value();
     return written;
+}
+
+core::Result<LiftTables> ReadLiftTables(std::string_view functions, std::string_view regions) {
+    core::Result<std::vector<analysis::FunctionRange>> parsed_functions =
+        analysis::ParseFunctions(functions);
+    if (!parsed_functions) {
+        return parsed_functions.Failure().WithContext("functions.txt");
+    }
+    core::Result<std::vector<analysis::Region>> parsed_regions = analysis::ParseRegions(regions);
+    if (!parsed_regions) {
+        return parsed_regions.Failure().WithContext("regions.txt");
+    }
+    LiftTables tables{.functions = std::move(parsed_functions.Value()),
+                      .regions = std::move(parsed_regions.Value()),
+                      .entries = {}};
+    std::ranges::sort(
+        tables.regions, {}, [](const analysis::Region& region) { return region.address; });
+    for (const analysis::FunctionRange& function : tables.functions) {
+        tables.entries.insert(function.address);
+    }
+    return tables;
 }
 
 }  // namespace hexlith::application
