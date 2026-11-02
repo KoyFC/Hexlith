@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <span>
@@ -122,17 +123,73 @@ public:
     core::Status Load(std::uint32_t address, core::ByteSpan bytes);
     core::Status Copy(std::uint32_t address, std::span<std::uint8_t> bytes) const;
 
-    [[nodiscard]] std::optional<std::uint8_t> Read8(std::uint32_t address) const;
-    [[nodiscard]] std::optional<std::uint16_t> Read16(std::uint32_t address) const;
-    [[nodiscard]] std::optional<std::uint32_t> Read32(std::uint32_t address) const;
-    [[nodiscard]] std::optional<std::uint64_t> Read64(std::uint32_t address) const;
+    // The accesses lifted code makes for every load and store, so the common
+    // case is here, inline: a whole access inside one mapped page that allows
+    // it, which is every aligned one. What straddles pages or fails is in
+    // process_memory.cpp.
+    [[nodiscard]] std::optional<std::uint8_t> Read8(std::uint32_t address) const {
+        return Read<std::uint8_t>(address);
+    }
 
-    bool Write8(std::uint32_t address, std::uint8_t value);
-    bool Write16(std::uint32_t address, std::uint16_t value);
-    bool Write32(std::uint32_t address, std::uint32_t value);
-    bool Write64(std::uint32_t address, std::uint64_t value);
+    [[nodiscard]] std::optional<std::uint16_t> Read16(std::uint32_t address) const {
+        return Read<std::uint16_t>(address);
+    }
+
+    [[nodiscard]] std::optional<std::uint32_t> Read32(std::uint32_t address) const {
+        return Read<std::uint32_t>(address);
+    }
+
+    [[nodiscard]] std::optional<std::uint64_t> Read64(std::uint32_t address) const {
+        return Read<std::uint64_t>(address);
+    }
+
+    bool Write8(std::uint32_t address, std::uint8_t value) {
+        return Write(address, value);
+    }
+
+    bool Write16(std::uint32_t address, std::uint16_t value) {
+        return Write(address, value);
+    }
+
+    bool Write32(std::uint32_t address, std::uint32_t value) {
+        return Write(address, value);
+    }
+
+    bool Write64(std::uint32_t address, std::uint64_t value) {
+        return Write(address, value);
+    }
 
 private:
+    template<typename Value>
+    [[nodiscard]] std::optional<Value> Read(std::uint32_t address) const {
+        const std::uint32_t page = address / PageSize;
+        const std::uint32_t offset = address % PageSize;
+        const std::uint8_t* host = host_[page];
+        if (offset + sizeof(Value) <= PageSize && host != nullptr &&
+            Allows(access_[page], Access::Read)) {
+            Value value{};
+            // The hottest path a guest access takes; offset is in the page.
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+            std::memcpy(&value, host + offset, sizeof(Value));
+            return value;
+        }
+        return ReadValue<Value>(address);
+    }
+
+    template<typename Value>
+    bool Write(std::uint32_t address, Value value) {
+        const std::uint32_t page = address / PageSize;
+        const std::uint32_t offset = address % PageSize;
+        std::uint8_t* host = host_[page];
+        if (offset + sizeof(Value) <= PageSize && host != nullptr &&
+            Allows(access_[page], Access::Write)) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+            std::memcpy(host + offset, &value, sizeof(Value));
+            return true;
+        }
+        return WriteValue(address, value);
+    }
+
     template<typename Value>
     [[nodiscard]] std::optional<Value> ReadValue(std::uint32_t address) const;
     template<typename Value>

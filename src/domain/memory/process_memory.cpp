@@ -240,36 +240,13 @@ bool ProcessMemory::WriteValue(std::uint32_t address, Value value) {
     return true;
 }
 
-std::optional<std::uint8_t> ProcessMemory::Read8(std::uint32_t address) const {
-    return ReadValue<std::uint8_t>(address);
-}
-
-std::optional<std::uint16_t> ProcessMemory::Read16(std::uint32_t address) const {
-    return ReadValue<std::uint16_t>(address);
-}
-
-std::optional<std::uint32_t> ProcessMemory::Read32(std::uint32_t address) const {
-    return ReadValue<std::uint32_t>(address);
-}
-
-std::optional<std::uint64_t> ProcessMemory::Read64(std::uint32_t address) const {
-    return ReadValue<std::uint64_t>(address);
-}
-
-bool ProcessMemory::Write8(std::uint32_t address, std::uint8_t value) {
-    return WriteValue(address, value);
-}
-
-bool ProcessMemory::Write16(std::uint32_t address, std::uint16_t value) {
-    return WriteValue(address, value);
-}
-
-bool ProcessMemory::Write32(std::uint32_t address, std::uint32_t value) {
-    return WriteValue(address, value);
-}
-
-bool ProcessMemory::Write64(std::uint32_t address, std::uint64_t value) {
-    return WriteValue(address, value);
-}
+template std::optional<std::uint8_t> ProcessMemory::ReadValue<std::uint8_t>(std::uint32_t) const;
+template std::optional<std::uint16_t> ProcessMemory::ReadValue<std::uint16_t>(std::uint32_t) const;
+template std::optional<std::uint32_t> ProcessMemory::ReadValue<std::uint32_t>(std::uint32_t) const;
+template std::optional<std::uint64_t> ProcessMemory::ReadValue<std::uint64_t>(std::uint32_t) const;
+template bool ProcessMemory::WriteValue<std::uint8_t>(std::uint32_t, std::uint8_t);
+template bool ProcessMemory::WriteValue<std::uint16_t>(std::uint32_t, std::uint16_t);
+template bool ProcessMemory::WriteValue<std::uint32_t>(std::uint32_t, std::uint32_t);
+template bool ProcessMemory::WriteValue<std::uint64_t>(std::uint32_t, std::uint64_t);
 
 }  // namespace hexlith::domain::memory
