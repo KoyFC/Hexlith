@@ -155,13 +155,9 @@ core::Result<core::ByteSpan> ReadFile(adapters::FileRomSource& source) {
     return contents.Value();
 }
 
-int Run(const application::AnalyzeOptions& options) {
-    const profile::GameProfile* chosen = OnlyProfile();
-    if (chosen == nullptr) {
-        Report("the build knows no single profile to analyse against");
-        return Failure;
-    }
-
+// The extraction the options name, or the profile's in the work directory.
+core::Result<std::filesystem::path> FindExtraction(const application::AnalyzeOptions& options,
+                                                   const profile::GameProfile& chosen) {
     std::filesystem::path extraction;
     if (options.extraction.has_value()) {
         extraction = *options.extraction;
@@ -173,17 +169,44 @@ int Run(const application::AnalyzeOptions& options) {
             adapters::LocateWorkDirectory(adapters::WorkspaceArguments{
                 .rom_directory = std::nullopt, .work_directory = options.work_directory});
         if (!work) {
-            Report(work.Failure().Message());
-            return Failure;
+            return work.Failure();
         }
-        extraction = work.Value().path / profile::WorkspaceDirectoryName(*chosen);
+        extraction = work.Value().path / profile::WorkspaceDirectoryName(chosen);
     }
-
     if (!std::filesystem::is_directory(extraction)) {
-        Report(
-            std::format("{} is not a directory; run hexlith-extract first", extraction.string()));
+        return core::Error{
+            std::format("{} is not a directory; run hexlith-extract first", extraction.string())};
+    }
+    return extraction;
+}
+
+// What a run executed, if one was recorded: hexlith-boot --record-executed
+// leaves it beside the extraction. Without it the analysis is the image's
+// alone, and the text is empty.
+std::string ReadExecuted(const std::filesystem::path& extraction) {
+    const std::filesystem::path executed_path = extraction / "observed" / "executed.txt";
+    std::string executed;
+    if (std::filesystem::exists(executed_path)) {
+        std::ifstream file{executed_path};
+        executed.assign(std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{});
+        std::cout << std::format("observed    {}\n\n", executed_path.string());
+    }
+    return executed;
+}
+
+int Run(const application::AnalyzeOptions& options) {
+    const profile::GameProfile* chosen = OnlyProfile();
+    if (chosen == nullptr) {
+        Report("the build knows no single profile to analyse against");
         return Failure;
     }
+
+    const core::Result<std::filesystem::path> found = FindExtraction(options, *chosen);
+    if (!found) {
+        Report(found.Failure().Message());
+        return Failure;
+    }
+    const std::filesystem::path& extraction = found.Value();
 
     const std::filesystem::path output = options.output.has_value()
                                              ? std::filesystem::path{*options.output}
@@ -222,16 +245,7 @@ int Run(const application::AnalyzeOptions& options) {
         return Failure;
     }
 
-    // What a run executed, if one was recorded: hexlith-boot --record-executed
-    // leaves it beside the extraction. Without it the analysis is the image's
-    // alone.
-    const std::filesystem::path executed_path = extraction / "observed" / "executed.txt";
-    std::string executed;
-    if (std::filesystem::exists(executed_path)) {
-        std::ifstream file{executed_path};
-        executed.assign(std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{});
-        std::cout << std::format("observed    {}\n\n", executed_path.string());
-    }
+    const std::string executed = ReadExecuted(extraction);
 
     const application::AnalyzeRequest request{.code = code_bytes.Value(),
                                               .static_module = module_bytes.Value(),
