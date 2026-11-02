@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <vector>
 
 namespace hexlith::domain::services {
@@ -409,10 +410,16 @@ void Graphics::FillRange(std::uint32_t start,
     } else if ((control & Fill32Bit) != 0) {
         width = 4;
     }
+    // The value's low bytes, repeated. A fill covers whole framebuffers, so
+    // this is done a pattern at a time on the buffer's own storage and not byte
+    // by byte through a bounds-checked accessor.
+    std::array<std::uint8_t, 4> pattern{};
+    for (std::size_t byte = 0; byte < width; ++byte) {
+        pattern.at(byte) = static_cast<std::uint8_t>(value >> (8U * byte));
+    }
+    std::uint8_t* out = bytes.data();
     for (std::size_t at = 0; at + width <= bytes.size(); at += width) {
-        for (std::size_t byte = 0; byte < width; ++byte) {
-            bytes.at(at + byte) = static_cast<std::uint8_t>(value >> (8U * byte));
-        }
+        std::memcpy(out + at, pattern.data(), width);
     }
     static_cast<void>(kernel_->Space().Memory().Load(start, bytes));
 }
