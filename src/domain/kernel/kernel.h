@@ -188,14 +188,14 @@ public:
         debug_output_observer_ = std::move(observer);
     }
 
-    // Adds an observer of service requests, which sees each one once it is
-    // answered. A trace for a person and a golden trace for a script can both
-    // be watching.
     // Asks the run to stop once the system call in progress is answered.
     void RequestStop() {
         stop_requested_ = true;
     }
 
+    // Adds an observer of service requests, which sees each one once it is
+    // answered. A trace for a person and a golden trace for a script can both
+    // be watching.
     void OnServiceRequest(std::function<void(const ServiceRequestRecord&)> observer) {
         service_request_observers_.push_back(std::move(observer));
     }
