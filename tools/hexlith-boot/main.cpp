@@ -444,6 +444,78 @@ core::Status WriteExecuted(const application::Workspace& workspace,
     return written;
 }
 
+// The title the image holds. It reads its RomFS from the source's bytes, so the
+// source has to outlive it.
+core::Result<std::unique_ptr<application::BootedTitle>>
+BootTitle(adapters::FileRomSource& source, const profile::GameProfile& target) {
+    const core::Result<core::ByteSpan> contents = source.Contents();
+    if (!contents) {
+        return contents.Failure();
+    }
+    return application::BootedTitle::FromCartridge(contents.Value(), target.executable_partition);
+}
+
+bool AttachGpuRecording(const application::BootOptions& options,
+                        application::BootedTitle& title,
+                        adapters::GpuRecordingDirectory& gpu,
+                        std::unique_ptr<application::GpuRecording>& recording) {
+    if (!options.record_gpu) {
+        return true;
+    }
+    const core::Status prepared = gpu.Prepare();
+    if (!prepared) {
+        Report(prepared.Failure().Message());
+        return false;
+    }
+    recording = std::make_unique<application::GpuRecording>(title, gpu);
+    return true;
+}
+
+// Closes what watched the run: the GPU recording and the window.
+void FinishWatching(application::GpuRecording* recording,
+                    const adapters::GpuRecordingDirectory& gpu,
+                    const Display& shown) {
+    if (recording != nullptr) {
+        const core::Status finished = recording->Finish();
+        if (!finished) {
+            Report(finished.Failure().Message());
+        }
+        PrintRecording(recording->Summary(), gpu.Describe());
+    }
+    if (shown.display != nullptr) {
+        const core::Status finished = shown.display->Finish();
+        if (!finished) {
+            Report(finished.Failure().Message());
+        }
+        std::cout << std::format("window  {} frames shown\n", shown.display->Presented());
+    }
+}
+
+// How fast the run went, overall and in the game's own code, and how much of it
+// lifted code left to the interpreter.
+void PrintSpeed(const kernel::Kernel& running, double seconds, const LiftedCode& lifted_code) {
+    std::cout << std::format("{} instructions, {} ticks, in {:.2f} s: {:.1f} million a second\n",
+                             running.Executed(),
+                             running.Threads().Ticks(),
+                             seconds,
+                             static_cast<double>(running.Executed()) / seconds / Million);
+
+    const double guest_seconds = std::chrono::duration<double>(running.GuestTime()).count();
+    std::cout << std::format(
+        "guest   {:.3f} s running the game's code: {:.1f} million instructions a second\n",
+        guest_seconds,
+        static_cast<double>(running.Executed()) / guest_seconds / Million);
+    if (lifted_code.engine != nullptr) {
+        const auto& counted = lifted_code.engine->Counted();
+        std::cout << std::format("lifted  {} entries into lifted code, {} instructions interpreted "
+                                 "({:.2f}%)\n",
+                                 counted.entries,
+                                 counted.interpreted,
+                                 100.0 * static_cast<double>(counted.interpreted) /
+                                     static_cast<double>(running.Executed()));
+    }
+}
+
 int Run(const application::BootOptions& options) {
     const profile::GameProfile* target = OnlyProfile();
     if (target == nullptr) {
@@ -465,13 +537,7 @@ int Run(const application::BootOptions& options) {
     std::cout << std::format("image   {}\nprofile {}\n", image.Value().string(), target->name);
 
     adapters::FileRomSource source{image.Value()};
-    const core::Result<core::ByteSpan> contents = source.Contents();
-    if (!contents) {
-        Report(contents.Failure().Message());
-        return Failure;
-    }
-    core::Result<std::unique_ptr<application::BootedTitle>> booted =
-        application::BootedTitle::FromCartridge(contents.Value(), target->executable_partition);
+    core::Result<std::unique_ptr<application::BootedTitle>> booted = BootTitle(source, *target);
     if (!booted) {
         Report(booted.Failure().Message());
         return Failure;
@@ -500,13 +566,8 @@ int Run(const application::BootOptions& options) {
     adapters::GpuRecordingDirectory gpu{workspace.Value().work_directory.path /
                                         profile::WorkspaceDirectoryName(*target) / GpuDirectory};
     std::unique_ptr<application::GpuRecording> recording;
-    if (options.record_gpu) {
-        const core::Status prepared = gpu.Prepare();
-        if (!prepared) {
-            Report(prepared.Failure().Message());
-            return Failure;
-        }
-        recording = std::make_unique<application::GpuRecording>(title, gpu);
+    if (!AttachGpuRecording(options, title, gpu, recording)) {
+        return Failure;
     }
 
     hexlith::domain::arm::ExecutedAddresses executed;
@@ -526,20 +587,7 @@ int Run(const application::BootOptions& options) {
 
     PrintStop(stop);
     PrintModules(title);
-    if (recording != nullptr) {
-        const core::Status finished = recording->Finish();
-        if (!finished) {
-            Report(finished.Failure().Message());
-        }
-        PrintRecording(recording->Summary(), gpu.Describe());
-    }
-    if (shown.display != nullptr) {
-        const core::Status finished = shown.display->Finish();
-        if (!finished) {
-            Report(finished.Failure().Message());
-        }
-        std::cout << std::format("window  {} frames shown\n", shown.display->Presented());
-    }
+    FinishWatching(recording.get(), gpu, shown);
     if (options.record_executed) {
         const core::Status written = WriteExecuted(workspace.Value(), *target, title, executed);
         if (!written) {
@@ -549,26 +597,7 @@ int Run(const application::BootOptions& options) {
     if (!options.new_game) {
         StoreSaves(saves, title);
     }
-    std::cout << std::format("{} instructions, {} ticks, in {:.2f} s: {:.1f} million a second\n",
-                             running.Executed(),
-                             running.Threads().Ticks(),
-                             seconds,
-                             static_cast<double>(running.Executed()) / seconds / Million);
-
-    const double guest_seconds = std::chrono::duration<double>(running.GuestTime()).count();
-    std::cout << std::format(
-        "guest   {:.3f} s running the game's code: {:.1f} million instructions a second\n",
-        guest_seconds,
-        static_cast<double>(running.Executed()) / guest_seconds / Million);
-    if (lifted_code.engine != nullptr) {
-        const auto& counted = lifted_code.engine->Counted();
-        std::cout << std::format("lifted  {} entries into lifted code, {} instructions interpreted "
-                                 "({:.2f}%)\n",
-                                 counted.entries,
-                                 counted.interpreted,
-                                 100.0 * static_cast<double>(counted.interpreted) /
-                                     static_cast<double>(running.Executed()));
-    }
+    PrintSpeed(running, seconds, lifted_code);
     if (options.compare.has_value() && !Compare(title, *options.compare)) {
         return Failure;
     }
