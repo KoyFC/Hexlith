@@ -1,8 +1,9 @@
 #include "domain/linker/cro_linker.h"
 
+#include "common/tool_main.h"
+
 #include <cstdint>
 #include <deque>
-#include <exception>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -222,13 +223,5 @@ int Main(std::span<char* const> arguments) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    try {
-        return Main(std::span<char* const>{argv, static_cast<std::size_t>(argc)});
-    } catch (const std::exception& thrown) {
-        Report(thrown.what());
-        return Failure;
-    } catch (...) {
-        Report("something was thrown that is not an exception");
-        return Failure;
-    }
+    return hexlith::tools::RunGuarded("hexlith-cro-link", argc, argv, Main);
 }

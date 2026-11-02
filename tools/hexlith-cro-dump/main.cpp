@@ -1,8 +1,9 @@
 #include "domain/ctr/cro.h"
 #include "domain/ctr/cro_link_tables.h"
 
+#include "common/tool_main.h"
+
 #include <cstdint>
-#include <exception>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -126,13 +127,5 @@ int Main(std::span<char* const> arguments) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    try {
-        return Main(std::span<char* const>{argv, static_cast<std::size_t>(argc)});
-    } catch (const std::exception& thrown) {
-        Report(thrown.what());
-        return Failure;
-    } catch (...) {
-        Report("something was thrown that is not an exception");
-        return Failure;
-    }
+    return hexlith::tools::RunGuarded("hexlith-cro-dump", argc, argv, Main);
 }

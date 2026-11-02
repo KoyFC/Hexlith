@@ -11,13 +11,14 @@
 #include "domain/gpu/shader_interpreter.h"
 #include "domain/video/yuv_conversion.h"
 
+#include "common/tool_main.h"
+
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
-#include <exception>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -1028,10 +1029,5 @@ int Main(std::span<char* const> arguments) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    try {
-        return Main(std::span<char* const>{argv, static_cast<std::size_t>(argc)});
-    } catch (const std::exception& thrown) {
-        std::cerr << "hexlith-oracle-run: " << thrown.what() << '\n';
-        return Failure;
-    }
+    return hexlith::tools::RunGuarded("hexlith-oracle-run", argc, argv, Main);
 }

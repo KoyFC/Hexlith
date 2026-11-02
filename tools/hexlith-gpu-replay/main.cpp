@@ -3,8 +3,9 @@
 #include "adapters/vulkan/vulkan_backend.h"
 #include "application/gpu_render.h"
 
+#include "common/tool_main.h"
+
 #include <cstdint>
-#include <exception>
 #include <filesystem>
 #include <format>
 #include <iostream>
@@ -204,10 +205,5 @@ int Main(std::span<char* const> arguments) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    try {
-        return Main(std::span<char* const>{argv, static_cast<std::size_t>(argc)});
-    } catch (const std::exception& thrown) {
-        std::cerr << "hexlith-gpu-replay: " << thrown.what() << '\n';
-        return Failure;
-    }
+    return hexlith::tools::RunGuarded("hexlith-gpu-replay", argc, argv, Main);
 }

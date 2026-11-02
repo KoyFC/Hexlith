@@ -1,3 +1,3 @@
 add_executable(hexlith-arm-dump main.cpp)
 
-target_link_libraries(hexlith-arm-dump PRIVATE Hexlith::Domain Hexlith::Warnings)
+target_link_libraries(hexlith-arm-dump PRIVATE Hexlith::ToolMain Hexlith::Domain Hexlith::Warnings)

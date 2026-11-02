@@ -11,11 +11,11 @@
 #include "domain/profile/game_profile.h"
 #include "domain/profile/registry.h"
 
-#include <exception>
+#include "common/tool_main.h"
+
 #include <filesystem>
 #include <format>
 #include <iostream>
-#include <iterator>
 #include <memory>
 #include <span>
 #include <string>
@@ -37,7 +37,6 @@ namespace profile = hexlith::domain::profile;
 
 constexpr int Success = 0;
 constexpr int Failure = 1;
-constexpr int Usage = 2;
 // Lifted code differed from the interpreter.
 constexpr int Differed = 3;
 
@@ -191,26 +190,10 @@ int Run(const application::LiftVerifyOptions& options) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    try {
-        const std::span<char*> raw{argv, static_cast<std::size_t>(argc)};
-        const std::vector<std::string_view> arguments(std::next(raw.begin()), raw.end());
-        const core::Result<application::LiftVerifyOptions> options =
-            application::ParseLiftVerifyCommandLine(arguments);
-        if (!options) {
-            Report(options.Failure().Message());
-            std::cerr << application::LiftVerifyUsage();
-            return Usage;
-        }
-        if (options.Value().help) {
-            std::cout << application::LiftVerifyUsage();
-            return Success;
-        }
-        return Run(options.Value());
-    } catch (const std::exception& error) {
-        Report(error.what());
-        return Failure;
-    } catch (...) {
-        Report("something was thrown that is not an exception");
-        return Failure;
-    }
+    return hexlith::tools::RunCommand("hexlith-lift-verify",
+                                      argc,
+                                      argv,
+                                      application::ParseLiftVerifyCommandLine,
+                                      application::LiftVerifyUsage,
+                                      Run);
 }

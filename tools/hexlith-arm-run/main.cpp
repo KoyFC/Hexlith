@@ -2,10 +2,11 @@
 #include "domain/arm/interpreter/interpreter.h"
 #include "domain/memory/paged_memory.h"
 
+#include "common/tool_main.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
-#include <exception>
 #include <format>
 #include <iostream>
 #include <map>
@@ -292,13 +293,5 @@ int Main(std::span<char* const> arguments) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    try {
-        return Main(std::span<char* const>{argv, static_cast<std::size_t>(argc)});
-    } catch (const std::exception& thrown) {
-        std::cerr << std::format("hexlith-arm-run: {}\n", thrown.what());
-        return Failure;
-    } catch (...) {
-        std::cerr << "hexlith-arm-run: something was thrown that is not an exception\n";
-        return Failure;
-    }
+    return hexlith::tools::RunGuarded("hexlith-arm-run", argc, argv, Main);
 }

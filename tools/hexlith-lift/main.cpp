@@ -8,7 +8,8 @@
 #include "domain/profile/game_profile.h"
 #include "domain/profile/registry.h"
 
-#include <exception>
+#include "common/tool_main.h"
+
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -190,36 +191,9 @@ int Run(const application::LiftOptions& options) {
     return Usage;
 }
 
-int Main(std::span<char* const> arguments) {
-    std::vector<std::string_view> words;
-    words.reserve(arguments.size());
-    for (std::size_t index = 1; index < arguments.size(); ++index) {
-        words.emplace_back(arguments[index]);
-    }
-
-    const core::Result<application::LiftOptions> options = application::ParseLiftCommandLine(words);
-    if (!options) {
-        Report(options.Failure().Message());
-        std::cerr << '\n' << application::LiftUsage();
-        return Usage;
-    }
-    if (options.Value().help) {
-        std::cout << application::LiftUsage();
-        return Success;
-    }
-    return Run(options.Value());
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
-    try {
-        return Main(std::span<char* const>{argv, static_cast<std::size_t>(argc)});
-    } catch (const std::exception& thrown) {
-        Report(thrown.what());
-        return Failure;
-    } catch (...) {
-        Report("something was thrown that is not an exception");
-        return Failure;
-    }
+    return hexlith::tools::RunCommand(
+        "hexlith-lift", argc, argv, application::ParseLiftCommandLine, application::LiftUsage, Run);
 }

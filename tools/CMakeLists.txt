@@ -1,3 +1,9 @@
+# What every tool's main does around its own work, header only.
+add_library(hexlith_tool_main INTERFACE)
+add_library(Hexlith::ToolMain ALIAS hexlith_tool_main)
+target_include_directories(hexlith_tool_main INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(hexlith_tool_main INTERFACE Hexlith::Core)
+
 add_subdirectory(hexlith-analyze)
 add_subdirectory(hexlith-arm-dump)
 add_subdirectory(hexlith-arm-run)

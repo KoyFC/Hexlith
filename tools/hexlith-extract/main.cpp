@@ -9,7 +9,8 @@
 #include "domain/profile/game_profile.h"
 #include "domain/profile/registry.h"
 
-#include <exception>
+#include "common/tool_main.h"
+
 #include <filesystem>
 #include <format>
 #include <iostream>
@@ -30,7 +31,6 @@ namespace profile = hexlith::domain::profile;
 
 constexpr int Success = 0;
 constexpr int Failure = 1;
-constexpr int Usage = 2;
 
 void Report(std::string_view message) {
     std::cerr << "hexlith-extract: " << message << '\n';
@@ -139,42 +139,13 @@ int Run(const application::ExtractOptions& options) {
     return Success;
 }
 
-int Main(std::span<char* const> command_line) {
-    std::vector<std::string_view> arguments;
-    arguments.reserve(command_line.size());
-    for (std::size_t index = 1; index < command_line.size(); ++index) {
-        arguments.emplace_back(command_line[index]);
-    }
-
-    const core::Result<application::ExtractOptions> options =
-        application::ParseExtractCommandLine(arguments);
-    if (!options) {
-        Report(options.Failure().Message());
-        std::cerr << application::ExtractUsage();
-        return Usage;
-    }
-
-    if (options.Value().help) {
-        std::cout << application::ExtractUsage();
-        return Success;
-    }
-
-    return Run(options.Value());
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
-    // Nothing below here throws as a matter of course: failures are a
-    // Result. A std::bad_alloc on a two gigabyte image is the case this
-    // catches, and it deserves a sentence rather than a terminate.
-    try {
-        return Main(std::span<char* const>{argv, static_cast<std::size_t>(argc)});
-    } catch (const std::exception& thrown) {
-        Report(thrown.what());
-        return Failure;
-    } catch (...) {
-        Report("something was thrown that is not an exception");
-        return Failure;
-    }
+    return hexlith::tools::RunCommand("hexlith-extract",
+                                      argc,
+                                      argv,
+                                      application::ParseExtractCommandLine,
+                                      application::ExtractUsage,
+                                      Run);
 }

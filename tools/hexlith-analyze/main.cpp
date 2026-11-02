@@ -8,8 +8,9 @@
 #include "domain/profile/game_profile.h"
 #include "domain/profile/registry.h"
 
+#include "common/tool_main.h"
+
 #include <algorithm>
-#include <exception>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -34,7 +35,6 @@ namespace profile = hexlith::domain::profile;
 
 constexpr int Success = 0;
 constexpr int Failure = 1;
-constexpr int Usage = 2;
 
 // Where the extraction put the two files this reads, and where the tables go.
 constexpr std::string_view CodePath = "exefs/.code";
@@ -265,42 +265,13 @@ int Run(const application::AnalyzeOptions& options) {
     return AnalyzeTheModules(output, module_bytes.Value(), modules.Value(), writing);
 }
 
-int Main(std::span<char* const> arguments) {
-    std::vector<std::string_view> words;
-    words.reserve(arguments.size());
-    for (std::size_t index = 1; index < arguments.size(); ++index) {
-        words.emplace_back(arguments[index]);
-    }
-
-    const core::Result<application::AnalyzeOptions> options =
-        application::ParseAnalyzeCommandLine(words);
-    if (!options) {
-        Report(options.Failure().Message());
-        std::cerr << '\n' << application::AnalyzeUsage();
-        return Usage;
-    }
-
-    if (options.Value().help) {
-        std::cout << application::AnalyzeUsage();
-        return Success;
-    }
-
-    return Run(options.Value());
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
-    // Nothing below here throws as a matter of course: failures are a Result. A
-    // std::bad_alloc on a five megabyte image is the case this catches, and it
-    // deserves a sentence rather than a terminate.
-    try {
-        return Main(std::span<char* const>{argv, static_cast<std::size_t>(argc)});
-    } catch (const std::exception& thrown) {
-        Report(thrown.what());
-        return Failure;
-    } catch (...) {
-        Report("something was thrown that is not an exception");
-        return Failure;
-    }
+    return hexlith::tools::RunCommand("hexlith-analyze",
+                                      argc,
+                                      argv,
+                                      application::ParseAnalyzeCommandLine,
+                                      application::AnalyzeUsage,
+                                      Run);
 }

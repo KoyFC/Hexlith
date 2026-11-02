@@ -22,6 +22,8 @@
 #include "domain/profile/game_profile.h"
 #include "domain/profile/registry.h"
 
+#include "common/tool_main.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -56,7 +58,6 @@ namespace profile = hexlith::domain::profile;
 
 constexpr int Success = 0;
 constexpr int Failure = 1;
-constexpr int Usage = 2;
 
 constexpr double Million = 1e6;
 
@@ -604,37 +605,9 @@ int Run(const application::BootOptions& options) {
     return Success;
 }
 
-int Main(std::span<char* const> command_line) {
-    std::vector<std::string_view> arguments;
-    arguments.reserve(command_line.size());
-    for (std::size_t index = 1; index < command_line.size(); ++index) {
-        arguments.emplace_back(command_line[index]);
-    }
-
-    const core::Result<application::BootOptions> options =
-        application::ParseBootCommandLine(arguments);
-    if (!options) {
-        Report(options.Failure().Message());
-        std::cerr << application::BootUsage();
-        return Usage;
-    }
-    if (options.Value().help) {
-        std::cout << application::BootUsage();
-        return Success;
-    }
-    return Run(options.Value());
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
-    try {
-        return Main(std::span<char* const>{argv, static_cast<std::size_t>(argc)});
-    } catch (const std::exception& thrown) {
-        Report(thrown.what());
-        return Failure;
-    } catch (...) {
-        Report("something was thrown that is not an exception");
-        return Failure;
-    }
+    return hexlith::tools::RunCommand(
+        "hexlith-boot", argc, argv, application::ParseBootCommandLine, application::BootUsage, Run);
 }

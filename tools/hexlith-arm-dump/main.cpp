@@ -1,11 +1,12 @@
 #include "domain/arm/decode_arm.h"
 #include "domain/arm/decode_thumb.h"
 
+#include "common/tool_main.h"
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdlib>
-#include <exception>
 #include <format>
 #include <fstream>
 #include <iostream>
@@ -381,16 +382,5 @@ int Main(std::span<char* const> arguments_in) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    // Nothing below here throws as a matter of course. A std::bad_alloc on a
-    // file of several megabytes is the case this catches, and it deserves a
-    // sentence rather than a terminate.
-    try {
-        return Main(std::span<char* const>{argv, static_cast<std::size_t>(argc)});
-    } catch (const std::exception& thrown) {
-        std::cerr << std::format("hexlith-arm-dump: {}\n", thrown.what());
-        return Failure;
-    } catch (...) {
-        std::cerr << "hexlith-arm-dump: something was thrown that is not an exception\n";
-        return Failure;
-    }
+    return hexlith::tools::RunGuarded("hexlith-arm-dump", argc, argv, Main);
 }
