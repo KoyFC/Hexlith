@@ -16,6 +16,9 @@ namespace hexlith::domain::gpu {
 // Physical addresses and sizes: VRAM_PADDR, VRAM_SIZE, FCRAM_PADDR and
 // FCRAM_SIZE in Azahar's src/core/memory.h; 3dbrew, Memory layout. FCRAM is
 // the Old 3DS's 128 MiB, which is all the reference title runs in.
+//
+// It holds the bytes itself, for a replay, or stands over bytes a running
+// title holds, so that what the GPU draws is drawn in the game's own memory.
 class GpuMemory {
 public:
     static constexpr std::uint32_t VramBase = 0x18000000;
@@ -30,7 +33,19 @@ public:
     static constexpr std::uint32_t OldLinearHeapBase = 0x14000000;
     static constexpr std::uint32_t NewLinearHeapBase = 0x30000000;
 
+    // Memory of its own, zeroed.
     GpuMemory();
+
+    // Memory someone else holds, which has to outlive this. FCRAM may be
+    // shorter than the console's, from its start: the application's region,
+    // where the linear heap lies.
+    GpuMemory(std::span<std::uint8_t> vram, std::span<std::uint8_t> fcram);
+
+    GpuMemory(const GpuMemory&) = delete;
+    GpuMemory& operator=(const GpuMemory&) = delete;
+    GpuMemory(GpuMemory&&) = default;
+    GpuMemory& operator=(GpuMemory&&) = default;
+    ~GpuMemory() = default;
 
     // The physical address behind a game's virtual address in VRAM or a linear
     // heap, if it is in one.
@@ -47,8 +62,12 @@ public:
     bool Write(std::uint32_t address, std::span<const std::uint8_t> bytes);
 
 private:
-    std::vector<std::uint8_t> vram_;
-    std::vector<std::uint8_t> fcram_;
+    // What the memory holds when it is its own. A vector's storage stays put
+    // when the vector is moved, so the views below survive a move.
+    std::vector<std::uint8_t> owned_vram_;
+    std::vector<std::uint8_t> owned_fcram_;
+    std::span<std::uint8_t> vram_;
+    std::span<std::uint8_t> fcram_;
 };
 
 }  // namespace hexlith::domain::gpu

@@ -313,16 +313,15 @@ void StopAfter(const application::BootStopPoint& point, application::BootedTitle
     });
 }
 
-// What shows the title on screen while it runs: the memory and the backend that
-// draw into it, the window, and the display that feeds them. Kept alive for the
-// run, in the order they depend on each other.
+// What shows the title on screen while it runs: the title's memory as the GPU
+// sees it, the backend that draws into it, the window, and the display that
+// feeds them. Kept alive for the run, in the order they depend on each other.
 struct Display {
     std::unique_ptr<hexlith::domain::gpu::GpuMemory> memory;
     std::unique_ptr<hexlith::adapters::vulkan::VulkanContext> context;
     std::unique_ptr<hexlith::ports::GpuBackend> backend;
     std::unique_ptr<hexlith::adapters::sdl::SdlWindow> window;
     std::unique_ptr<hexlith::application::LiveDisplay> display;
-    std::unique_ptr<application::GpuRecording> feed;
 };
 
 constexpr int WindowScale = 2;
@@ -335,7 +334,7 @@ bool AttachWindow(const application::BootOptions& options,
     if (!options.window) {
         return true;
     }
-    shown.memory = std::make_unique<gpu::GpuMemory>();
+    shown.memory = std::make_unique<gpu::GpuMemory>(application::GpuMemoryOf(title));
     if (options.vulkan) {
         auto made = vulkan::VulkanContext::Create({.device = options.device, .validation = false});
         if (!made) {
@@ -364,7 +363,7 @@ bool AttachWindow(const application::BootOptions& options,
     shown.window = std::move(window.Value());
     shown.display =
         std::make_unique<application::LiveDisplay>(*shown.memory, *shown.backend, *shown.window);
-    shown.feed = std::make_unique<application::GpuRecording>(title, *shown.display);
+    shown.display->Watch(title.Gpu());
     std::cout << std::format("window  {}\n", shown.display->Describe());
     return true;
 }
@@ -529,8 +528,8 @@ int Run(const application::BootOptions& options) {
         }
         PrintRecording(recording->Summary(), gpu.Describe());
     }
-    if (shown.feed != nullptr) {
-        const core::Status finished = shown.feed->Finish();
+    if (shown.display != nullptr) {
+        const core::Status finished = shown.display->Finish();
         if (!finished) {
             Report(finished.Failure().Message());
         }

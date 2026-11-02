@@ -32,6 +32,7 @@ The format is deliberately short: context, the options that were actually consid
 | [0024](0024-the-lifter-lowers-instruction-by-instruction-and-the-interpreter-takes-the-rest.md) | The lifter lowers instruction by instruction, and the interpreter takes what it does not | Accepted |
 | [0025](0025-lifted-code-answers-where-the-guest-continues.md) | Lifted code answers where the guest continues, and can be entered at any block | Accepted |
 | [0026](0026-lifted-code-is-built-in-the-workspace-and-loaded-as-a-library.md) | Lifted code is built in the workspace and loaded as a shared library | Accepted |
-| [0027](0027-the-screens-are-drawn-as-the-game-runs-and-shown-in-a-window.md) | The screens are drawn as the game runs and shown in a window | Accepted |
+| [0027](0027-the-screens-are-drawn-as-the-game-runs-and-shown-in-a-window.md) | The screens are drawn as the game runs and shown in a window | Accepted, amended by 0028 |
+| [0028](0028-the-live-display-draws-in-the-titles-own-memory.md) | The live display draws in the title's own memory | Accepted |
 
 A record marked provisional has a named condition that will settle it. It is written down because work has to proceed in the meantime, not because the question is closed.

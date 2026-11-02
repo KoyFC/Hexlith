@@ -11,7 +11,12 @@ bool Within(std::uint32_t address, std::uint32_t size, std::uint32_t base, std::
 
 }  // namespace
 
-GpuMemory::GpuMemory() : vram_(VramSize), fcram_(FcramSize) {}
+GpuMemory::GpuMemory()
+    : owned_vram_(VramSize), owned_fcram_(FcramSize), vram_(owned_vram_), fcram_(owned_fcram_) {}
+
+GpuMemory::GpuMemory(std::span<std::uint8_t> vram, std::span<std::uint8_t> fcram)
+    : vram_(vram.first(std::min<std::size_t>(vram.size(), VramSize))),
+      fcram_(fcram.first(std::min<std::size_t>(fcram.size(), FcramSize))) {}
 
 std::optional<std::uint32_t> GpuMemory::PhysicalFromVirtual(std::uint32_t address) {
     if (Within(address, 1, VramVirtualBase, VramSize)) {
@@ -26,21 +31,21 @@ std::optional<std::uint32_t> GpuMemory::PhysicalFromVirtual(std::uint32_t addres
 }
 
 std::span<const std::uint8_t> GpuMemory::Bytes(std::uint32_t address, std::uint32_t size) const {
-    if (Within(address, size, VramBase, VramSize)) {
-        return std::span{vram_}.subspan(address - VramBase, size);
+    if (Within(address, size, VramBase, static_cast<std::uint32_t>(vram_.size()))) {
+        return vram_.subspan(address - VramBase, size);
     }
-    if (Within(address, size, FcramBase, FcramSize)) {
-        return std::span{fcram_}.subspan(address - FcramBase, size);
+    if (Within(address, size, FcramBase, static_cast<std::uint32_t>(fcram_.size()))) {
+        return fcram_.subspan(address - FcramBase, size);
     }
     return {};
 }
 
 std::span<std::uint8_t> GpuMemory::Bytes(std::uint32_t address, std::uint32_t size) {
-    if (Within(address, size, VramBase, VramSize)) {
-        return std::span{vram_}.subspan(address - VramBase, size);
+    if (Within(address, size, VramBase, static_cast<std::uint32_t>(vram_.size()))) {
+        return vram_.subspan(address - VramBase, size);
     }
-    if (Within(address, size, FcramBase, FcramSize)) {
-        return std::span{fcram_}.subspan(address - FcramBase, size);
+    if (Within(address, size, FcramBase, static_cast<std::uint32_t>(fcram_.size()))) {
+        return fcram_.subspan(address - FcramBase, size);
     }
     return {};
 }

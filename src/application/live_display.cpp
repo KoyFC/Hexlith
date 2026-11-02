@@ -3,19 +3,58 @@
 #include "domain/gpu/gx_command.h"
 #include "domain/gpu/memory_transfer.h"
 
+#include <algorithm>
 #include <format>
+#include <optional>
+#include <span>
+#include <utility>
 
 namespace hexlith::application {
 namespace {
 
 namespace gpu = domain::gpu;
+using domain::services::Graphics;
+
+// A command list's address and size, at words 1 and 2 of its command. Source:
+// SubmitCmdListCommand in Azahar's gsp_command.h.
+constexpr std::size_t ListAddressWord = 1;
+constexpr std::size_t ListSizeWord = 2;
 
 }  // namespace
+
+gpu::GpuMemory GpuMemoryOf(BootedTitle& title) {
+    domain::kernel::Kernel& kernel = title.Kernel();
+    return gpu::GpuMemory{kernel.Vram()->Bytes(), kernel.Space().Region()->Bytes()};
+}
 
 LiveDisplay::LiveDisplay(gpu::GpuMemory& memory,
                          ports::GpuBackend& backend,
                          ports::ScreenSink& sink)
     : memory_(&memory), backend_(&backend), sink_(&sink) {}
+
+void LiveDisplay::Watch(Graphics& gpu) {
+    gpu.OnCommand([this](const Graphics::GxCommand& command) {
+        Keep(Command(command.frame, command.words));
+    });
+    gpu.OnFramebuffer([this](const Graphics::FramebufferSwap& swap) {
+        const Graphics::FramebufferInfo& info = swap.info;
+        Keep(Framebuffer(swap.frame,
+                         swap.screen,
+                         {info.active,
+                          info.address_left,
+                          info.address_right,
+                          info.stride,
+                          info.format,
+                          info.shown,
+                          info.unknown}));
+    });
+}
+
+void LiveDisplay::Keep(const core::Status& status) {
+    if (!status && failure_) {
+        failure_ = status;
+    }
+}
 
 // A frame that had no event of its own is not shown: the picture of the next
 // one that does is the same, since nothing changed in between.
@@ -37,33 +76,38 @@ core::Status LiveDisplay::Before(std::uint64_t frame, bool framebuffer) {
                           screens_.Compose(*memory_, gpu::ScreenSetup::Bottom));
 }
 
+// gsp::Gpu tells its observer of a command before it carries it out, so a
+// display transfer run here is done where the console would do it.
 core::Status LiveDisplay::Command(std::uint64_t frame, const std::array<std::uint32_t, 8>& words) {
-    const core::Status before = Before(frame, false);
+    core::Status before = Before(frame, false);
     if (!before) {
         return before;
     }
-    for (const gpu::MemoryFillConfig& fill : gpu::MemoryFills(words)) {
-        static_cast<void>(gpu::RunMemoryFill(*memory_, fill));
+    switch (gpu::CommandId(words)) {
+    case gpu::GxCommandId::ProcessCommandList: {
+        const std::uint32_t size = words.at(ListSizeWord);
+        const std::optional<std::uint32_t> physical =
+            gpu::GpuMemory::PhysicalFromVirtual(words.at(ListAddressWord));
+        const std::span<const std::uint8_t> bytes =
+            physical ? std::as_const(*memory_).Bytes(*physical, size)
+                     : std::span<const std::uint8_t>{};
+        if (bytes.size() != size) {
+            return core::Error{std::format("a command list at {:08X} is not in GPU memory",
+                                           words.at(ListAddressWord))};
+        }
+        // A list is read while it draws into the same memory, so it is read
+        // from a copy.
+        list_.assign(bytes.begin(), bytes.end());
+        return backend_->RunCommandList(list_);
     }
-    if (const std::optional<gpu::TransferConfig> transfer = gpu::Transfer(words)) {
-        static_cast<void>(gpu::RunTransfer(*memory_, *transfer));
+    case gpu::GxCommandId::DisplayTransfer:
+        if (const std::optional<gpu::TransferConfig> transfer = gpu::Transfer(words)) {
+            static_cast<void>(gpu::RunTransfer(*memory_, *transfer));
+        }
+        return {};
+    default:
+        return {};
     }
-    return {};
-}
-
-core::Status
-LiveDisplay::Page(std::uint64_t /*frame*/, std::uint32_t address, core::ByteSpan bytes) {
-    const std::optional<std::uint32_t> physical = gpu::GpuMemory::PhysicalFromVirtual(address);
-    if (!physical.has_value() || !memory_->Write(*physical, bytes)) {
-        return core::Error{std::format("a page at {:08X} is not in GPU memory", address)};
-    }
-    return {};
-}
-
-core::Status
-LiveDisplay::List(std::uint64_t frame, std::uint32_t /*address*/, core::ByteSpan bytes) {
-    const core::Status before = Before(frame, false);
-    return before ? backend_->RunCommandList(bytes) : before;
 }
 
 core::Status LiveDisplay::Framebuffer(std::uint64_t frame,
@@ -76,9 +120,9 @@ core::Status LiveDisplay::Framebuffer(std::uint64_t frame,
     return before;
 }
 
-// What the last frame left, which no later event takes a picture of.
 core::Status LiveDisplay::Finish() {
-    return Before(last_seen_ + 1, false);
+    Keep(Before(last_seen_ + 1, false));
+    return failure_;
 }
 
 std::string LiveDisplay::Describe() const {

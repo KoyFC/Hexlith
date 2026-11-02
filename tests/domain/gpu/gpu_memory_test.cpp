@@ -32,5 +32,18 @@ TEST(GpuMemory, RefusesAnythingThatLeavesItsMemory) {
                               std::vector<std::uint8_t>{1, 2}));
 }
 
+TEST(GpuMemory, StandsOverMemoryHeldElsewhereAndNoFurther) {
+    std::vector<std::uint8_t> vram(GpuMemory::VramSize);
+    constexpr std::uint32_t Region = 0x4000;
+    std::vector<std::uint8_t> fcram(Region);
+    GpuMemory memory{vram, fcram};
+
+    ASSERT_TRUE(memory.Write(GpuMemory::FcramBase + 0x10, std::vector<std::uint8_t>{7}));
+    EXPECT_EQ(fcram.at(0x10), 7);
+    vram.at(0x20) = 9;
+    EXPECT_EQ(memory.Bytes(GpuMemory::VramBase + 0x20, 1).front(), 9);
+    EXPECT_TRUE(memory.Bytes(GpuMemory::FcramBase + Region - 2, 4).empty());
+}
+
 }  // namespace
 }  // namespace hexlith::domain::gpu

@@ -121,6 +121,12 @@ public:
         return linear_heap_base_ + region_.Size();
     }
 
+    // The application's region of FCRAM, which the linear heap maps one to
+    // one from its base and the heap takes pages of.
+    [[nodiscard]] const std::shared_ptr<memory::Backing>& Region() const {
+        return fcram_;
+    }
+
     // Commits heap memory, zero filled, at an address the caller chose inside
     // the heap range. HeapAllocate in Azahar.
     ResultCode CommitHeap(std::uint32_t address, std::uint32_t size, memory::Access access);

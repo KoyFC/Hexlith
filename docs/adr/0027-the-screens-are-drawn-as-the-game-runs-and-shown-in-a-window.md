@@ -1,6 +1,6 @@
 # 0027. The screens are drawn as the game runs and shown in a window
 
-Status: Accepted
+Status: Accepted. Amended by [ADR 0028](0028-the-live-display-draws-in-the-titles-own-memory.md), which draws in the title's own memory instead of a copy.
 Date: 2026-11-02
 
 ## Context
