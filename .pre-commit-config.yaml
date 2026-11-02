@@ -69,6 +69,14 @@ repos:
         files: '^scripts/executed_coverage\.py$'
         stages: [pre-commit]
 
+      - id: measure-lift-speed-self-test
+        name: Lift speed measurement self-test
+        entry: scripts/measure_lift_speed.py --self-test
+        language: system
+        pass_filenames: false
+        files: '^scripts/measure_lift_speed\.py$'
+        stages: [pre-commit]
+
       - id: commit-message
         name: Check commit message
         entry: scripts/check_commit_message.py

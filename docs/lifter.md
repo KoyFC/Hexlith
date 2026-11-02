@@ -127,3 +127,30 @@ On 2026-11-02, from a new game to the first frame after the title appears, with 
 - Time spent running the game's code, as `hexlith-boot` now reports it, apart from the system calls and services: the interpreter 2.7 to 3.1 seconds, 14 to 16 million instructions a second; lifted code 0.6 to 0.7 seconds, 58 to 69 million. About four and a half times faster, with the registers still in memory, every guest memory access a call into the binary, and no instruction translated beyond what ADR 0024 lists. The boot as a whole is about three times faster, because a great deal of its time is the GPU memory fills and the start-up.
 
 A bug the run found is in ADR 0026: the import stubs of the main executable are rewritten by the module loader.
+
+## Measuring the speed
+
+The phase's gate compares the time the interpreter and lifted code take to run the game's own code. A boot to the title spends less than half a second of that time with lifted code, so a single run of each says little: a core changing clock or another program waking up moves it by a tenth. `scripts/measure_lift_speed.py` makes the comparison the same way every time:
+
+- Both builds boot from a new game to frame 227 with the input script `100 tap a`, `200 tap a`, which is where the title screen's modules have loaded and almost everything that ran is the main executable's code. Past that frame most of what runs belongs to the modules, which this phase does not lift.
+- The interpreter and lifted code are run alternately, seven times each by default, so that a slow drift in the machine falls on both.
+- Every run is pinned to one core, by default the last of the processor's performance cores, and the result names it.
+- Before each run the script waits until the one-minute load average falls below a threshold, 1.0 by default, and prints the load it started at.
+- Every run must execute the same number of instructions, or the script stops: a run that did different work measures nothing.
+- What is compared is the time `hexlith-boot` reports on its `guest` line, to the millisecond, and the result is the median of each build and the ratio of the two medians.
+
+```sh
+scripts/measure_lift_speed.py --boot build/release/tools/hexlith-boot/hexlith-boot \
+    --lifted ~/recomp-data/work/<title>/lift/build/libhexlith_lifted.so \
+    --rom-dir ~/recomp-data/rom --work-dir ~/recomp-data/work --input <script>
+```
+
+On 2026-11-02 the machine was a laptop with four performance and four efficiency cores, the `powersave` governor and a desktop session whose load average never fell below 1.5, so the measurements ran with `--max-load 2.0`. Three measurements gave:
+
+| Core | Runs | Interpreter, median | Lifted, median | Ratio |
+| --- | --- | --- | --- | --- |
+| 7, efficiency, times to the hundredth | 7 | 2.060 s | 0.430 s | 4.79 |
+| 7, efficiency | 7 | 2.035 s | 0.392 s | 5.19 |
+| 3, performance | 11 | 2.422 s | 0.494 s | 4.90 |
+
+Lifted runs spread by about 15 percent from fastest to slowest, the interpreter's by less. The ratio sits on the gate, between 4.8 and 5.2, and this machine cannot place it more finely than that. The instruction count was 41,972,790 in every run.

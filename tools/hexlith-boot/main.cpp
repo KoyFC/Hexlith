@@ -557,7 +557,7 @@ int Run(const application::BootOptions& options) {
 
     const double guest_seconds = std::chrono::duration<double>(running.GuestTime()).count();
     std::cout << std::format(
-        "guest   {:.2f} s running the game's code: {:.1f} million instructions a second\n",
+        "guest   {:.3f} s running the game's code: {:.1f} million instructions a second\n",
         guest_seconds,
         static_cast<double>(running.Executed()) / guest_seconds / Million);
     if (lifted_code.engine != nullptr) {
