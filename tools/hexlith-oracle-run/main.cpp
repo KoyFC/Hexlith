@@ -728,31 +728,6 @@ private:
     std::mt19937 random_{Seed};  // NOLINT(bugprone-random-generator-seed): repeatable on purpose
 };
 
-int WriteShaderCases(const fs::path& recording, const fs::path& directory) {
-    fs::create_directories(directory);
-    std::ofstream out(directory / "shader-cases.bin", std::ios::binary);
-    hexlith::adapters::filesystem::GpuRecordingFiles source{recording};
-    auto memory = std::make_unique<gpu::GpuMemory>();
-    gpu::PicaState state;
-    ShaderCaseWriter writer{out};
-    gpu::CommandProcessor processor{state, *memory, writer};
-    hexlith::application::GpuReplayVisitor visitor;
-    visitor.list = [&processor](const gpu::RecordedList& /*list*/,
-                                std::span<const std::uint8_t> bytes) {
-        const hexlith::core::Result<gpu::CommandListRun> run = processor.Run(bytes);
-        return run ? hexlith::core::Status{} : hexlith::core::Status{run.Failure()};
-    };
-    const hexlith::core::Status replayed =
-        hexlith::application::ReplayGpuRecording(source, *memory, visitor);
-    if (!replayed) {
-        std::cerr << "hexlith-oracle-run: " << replayed.Failure().Message() << '\n';
-        return Failure;
-    }
-    writer.Close();
-    std::cout << writer.Cases() << " shader cases\n";
-    return out ? Success : Failure;
-}
-
 // How far float24 arithmetic would move each vertex shader case's position.
 int MeasurePrecision(const fs::path& directory) {
     std::ifstream in(directory / "shader-cases.bin", std::ios::binary);
@@ -951,13 +926,20 @@ private:
     std::set<std::uint64_t> seen_;
 };
 
-int WriteTextureCases(const fs::path& recording, const fs::path& directory) {
+// Replays a GPU recording through a command processor whose writer, made by
+// `make`, turns what each draw uses into a file of cases.
+template<class MakeWriter>
+int WriteCases(const fs::path& recording,
+               const fs::path& directory,
+               std::string_view file,
+               std::string_view kind,
+               MakeWriter make) {
     fs::create_directories(directory);
-    std::ofstream out(directory / "texture-cases.bin", std::ios::binary);
+    std::ofstream out(directory / file, std::ios::binary);
     hexlith::adapters::filesystem::GpuRecordingFiles source{recording};
     auto memory = std::make_unique<gpu::GpuMemory>();
     gpu::PicaState state;
-    TextureCaseWriter writer{out, *memory};
+    auto writer = make(out, *memory);
     gpu::CommandProcessor processor{state, *memory, writer};
     hexlith::application::GpuReplayVisitor visitor;
     visitor.list = [&processor](const gpu::RecordedList& /*list*/,
@@ -972,7 +954,7 @@ int WriteTextureCases(const fs::path& recording, const fs::path& directory) {
         return Failure;
     }
     writer.Close();
-    std::cout << writer.Cases() << " texture cases\n";
+    std::cout << writer.Cases() << " " << kind << " cases\n";
     return out ? Success : Failure;
 }
 
@@ -993,10 +975,22 @@ int Main(std::span<char* const> arguments) {
         return MeasurePrecision(fs::path{arguments[2]});
     }
     if (arguments.size() == 4 && std::string_view{arguments[1]} == "--texture-cases-from") {
-        return WriteTextureCases(fs::path{arguments[2]}, fs::path{arguments[3]});
+        return WriteCases(fs::path{arguments[2]},
+                          fs::path{arguments[3]},
+                          "texture-cases.bin",
+                          "texture",
+                          [](std::ostream& out, const gpu::GpuMemory& memory) {
+                              return TextureCaseWriter{out, memory};
+                          });
     }
     if (arguments.size() == 4 && std::string_view{arguments[1]} == "--shader-cases-from") {
-        return WriteShaderCases(fs::path{arguments[2]}, fs::path{arguments[3]});
+        return WriteCases(fs::path{arguments[2]},
+                          fs::path{arguments[3]},
+                          "shader-cases.bin",
+                          "shader",
+                          [](std::ostream& out, const gpu::GpuMemory& /*memory*/) {
+                              return ShaderCaseWriter{out};
+                          });
     }
     if (arguments.size() != 2 || std::string_view{arguments[1]} == "--help") {
         std::cerr << UsageText;
