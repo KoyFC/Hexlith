@@ -76,7 +76,7 @@ head -1 $D.gdb > $D.first.gdb
 gdb -batch -ex 'set architecture arm' \
     -ex 'set remote memory-read-packet-size 512' -ex 'set remote memory-read-packet-size fixed' \
     -ex 'target remote 127.0.0.1:24689' -x $D.first.gdb -ex detach
-scripts/compare_cro_link.py compare $D --romfs ~/recomp-data/work/<id>/romfs --tool build/ci/tools/hexlith-cro-link/hexlith-cro-link
+scripts/compare_cro_link.py compare $D --romfs ~/recomp-data/work/<id>/romfs --tool build/release/tools/hexlith-cro-link/hexlith-cro-link
 ```
 
 The first command also writes the resident modules and their addresses beside the dumps, so the comparison does not depend on the log surviving the next run.

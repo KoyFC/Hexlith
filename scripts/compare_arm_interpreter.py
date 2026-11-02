@@ -53,8 +53,8 @@ try:
 except ImportError:
     sys.exit("unicorn is not installed: pip install unicorn, in a virtual environment")
 
-DEFAULT_RUN = pathlib.Path("build/ci/tools/hexlith-arm-run/hexlith-arm-run")
-DEFAULT_DUMP = pathlib.Path("build/ci/tools/hexlith-arm-dump/hexlith-arm-dump")
+DEFAULT_RUN = pathlib.Path("build/release/tools/hexlith-arm-run/hexlith-arm-run")
+DEFAULT_DUMP = pathlib.Path("build/release/tools/hexlith-arm-dump/hexlith-arm-dump")
 
 CODE_BASE, CODE_SIZE = 0x00100000, 0x1000
 DATA_BASE, DATA_SIZE = 0x00200000, 0x10000

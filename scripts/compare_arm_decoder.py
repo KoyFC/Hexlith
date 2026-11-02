@@ -41,7 +41,7 @@ try:
 except ImportError:
     sys.exit("capstone is not installed: dnf install python3-capstone")
 
-DEFAULT_DUMP = pathlib.Path("build/ci/tools/hexlith-arm-dump/hexlith-arm-dump")
+DEFAULT_DUMP = pathlib.Path("build/release/tools/hexlith-arm-dump/hexlith-arm-dump")
 
 CONDITION_SUFFIX = {
     capstone_arm.ARM_CC_EQ: "eq",
