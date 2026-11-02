@@ -3,7 +3,10 @@
 #include "application/workspace.h"
 
 #include <format>
+#include <functional>
+#include <initializer_list>
 #include <tuple>
+#include <utility>
 
 namespace hexlith::application {
 namespace {
@@ -102,6 +105,49 @@ core::Status TakeValue(std::span<const std::string_view> arguments,
     return {};
 }
 
+using Arguments = std::span<const std::string_view>;
+
+// The options one tool knows: those that take no value, those that take a
+// string, and those that do something of their own with the argument at
+// `index` and what follows it.
+struct OptionTable {
+    std::initializer_list<std::pair<std::string_view, bool*>> flags;
+    std::initializer_list<std::pair<std::string_view, std::optional<std::string>*>> values;
+    std::initializer_list<std::pair<std::string_view, std::function<core::Status(std::size_t&)>>>
+        others;
+};
+
+core::Status ParseArguments(Arguments arguments, const OptionTable& table) {
+    for (std::size_t index = 0; index < arguments.size(); ++index) {
+        const std::string_view argument = arguments[index];
+        const auto named = [argument](const auto& entry) { return entry.first == argument; };
+
+        if (const auto* flag = std::ranges::find_if(table.flags, named);
+            flag != table.flags.end()) {
+            *flag->second = true;
+            continue;
+        }
+        core::Status taken;
+        if (const auto* value = std::ranges::find_if(table.values, named);
+            value != table.values.end()) {
+            taken = TakeValue(arguments, index, *value->second);
+        } else if (const auto* other = std::ranges::find_if(table.others, named);
+                   other != table.others.end()) {
+            taken = other->second(index);
+        } else if (argument.starts_with("-")) {
+            return core::Error{std::format("{} is not an option this tool knows", argument)};
+        } else {
+            return core::Error{std::format(
+                "'{}' is not an option. Every path is given with the option it belongs to",
+                argument)};
+        }
+        if (!taken) {
+            return taken;
+        }
+    }
+    return {};
+}
+
 core::Status TakeStopPoint(std::span<const std::string_view> arguments,
                            std::size_t& index,
                            std::optional<BootStopPoint>& into) {
@@ -123,123 +169,56 @@ core::Status TakeStopPoint(std::span<const std::string_view> arguments,
 
 }  // namespace
 
-core::Result<ExtractOptions> ParseExtractCommandLine(std::span<const std::string_view> arguments) {
+core::Result<ExtractOptions> ParseExtractCommandLine(Arguments arguments) {
     ExtractOptions options;
-
-    for (std::size_t index = 0; index < arguments.size(); ++index) {
-        const std::string_view argument = arguments[index];
-
-        if (argument == HelpOption || argument == "-h") {
-            options.help = true;
-            continue;
-        }
-        if (argument == AllowMismatchOption) {
-            options.allow_mismatch = true;
-            continue;
-        }
-
-        core::Status taken;
-        if (argument == RomDirectoryOption) {
-            taken = TakeValue(arguments, index, options.rom_directory);
-        } else if (argument == WorkDirectoryOption) {
-            taken = TakeValue(arguments, index, options.work_directory);
-        } else if (argument == ImageOption) {
-            taken = TakeValue(arguments, index, options.image);
-        } else if (argument.starts_with("-")) {
-            return core::Error{std::format("{} is not an option this tool knows", argument)};
-        } else {
-            return core::Error{std::format(
-                "'{}' is not an option. Every path is given with the option it belongs to",
-                argument)};
-        }
-
-        if (!taken) {
-            return taken.Failure();
-        }
+    const core::Status parsed =
+        ParseArguments(arguments,
+                       {.flags = {{HelpOption, &options.help},
+                                  {"-h", &options.help},
+                                  {AllowMismatchOption, &options.allow_mismatch}},
+                        .values = {{RomDirectoryOption, &options.rom_directory},
+                                   {WorkDirectoryOption, &options.work_directory},
+                                   {ImageOption, &options.image}},
+                        .others = {}});
+    if (!parsed) {
+        return parsed.Failure();
     }
-
     return options;
 }
 
-core::Result<AnalyzeOptions> ParseAnalyzeCommandLine(std::span<const std::string_view> arguments) {
+core::Result<AnalyzeOptions> ParseAnalyzeCommandLine(Arguments arguments) {
     AnalyzeOptions options;
-
-    for (std::size_t index = 0; index < arguments.size(); ++index) {
-        const std::string_view argument = arguments[index];
-
-        if (argument == HelpOption || argument == "-h") {
-            options.help = true;
-            continue;
-        }
-        if (argument == NoSweepOption) {
-            options.no_sweep = true;
-            continue;
-        }
-
-        core::Status taken;
-        if (argument == WorkDirectoryOption) {
-            taken = TakeValue(arguments, index, options.work_directory);
-        } else if (argument == ExtractionOption) {
-            taken = TakeValue(arguments, index, options.extraction);
-        } else if (argument == OutputOption) {
-            taken = TakeValue(arguments, index, options.output);
-        } else if (argument.starts_with("-")) {
-            return core::Error{std::format("{} is not an option this tool knows", argument)};
-        } else {
-            return core::Error{std::format(
-                "'{}' is not an option. Every path is given with the option it belongs to",
-                argument)};
-        }
-
-        if (!taken) {
-            return taken.Failure();
-        }
+    const core::Status parsed =
+        ParseArguments(arguments,
+                       {.flags = {{HelpOption, &options.help},
+                                  {"-h", &options.help},
+                                  {NoSweepOption, &options.no_sweep}},
+                        .values = {{WorkDirectoryOption, &options.work_directory},
+                                   {ExtractionOption, &options.extraction},
+                                   {OutputOption, &options.output}},
+                        .others = {}});
+    if (!parsed) {
+        return parsed.Failure();
     }
-
     return options;
 }
 
-core::Result<LiftOptions> ParseLiftCommandLine(std::span<const std::string_view> arguments) {
+core::Result<LiftOptions> ParseLiftCommandLine(Arguments arguments) {
     LiftOptions options;
-
-    for (std::size_t index = 0; index < arguments.size(); ++index) {
-        const std::string_view argument = arguments[index];
-
-        if (argument == HelpOption || argument == "-h") {
-            options.help = true;
-            continue;
-        }
-        if (argument == SurveyOption) {
-            options.survey = true;
-            continue;
-        }
-        if (argument == EmitOption) {
-            options.emit = true;
-            continue;
-        }
-
-        core::Status taken;
-        if (argument == WorkDirectoryOption) {
-            taken = TakeValue(arguments, index, options.work_directory);
-        } else if (argument == ExtractionOption) {
-            taken = TakeValue(arguments, index, options.extraction);
-        } else if (argument == ExecutedOption) {
-            taken = TakeValue(arguments, index, options.executed);
-        } else if (argument == OutputOption) {
-            taken = TakeValue(arguments, index, options.output);
-        } else if (argument.starts_with("-")) {
-            return core::Error{std::format("{} is not an option this tool knows", argument)};
-        } else {
-            return core::Error{std::format(
-                "'{}' is not an option. Every path is given with the option it belongs to",
-                argument)};
-        }
-
-        if (!taken) {
-            return taken.Failure();
-        }
+    const core::Status parsed =
+        ParseArguments(arguments,
+                       {.flags = {{HelpOption, &options.help},
+                                  {"-h", &options.help},
+                                  {SurveyOption, &options.survey},
+                                  {EmitOption, &options.emit}},
+                        .values = {{WorkDirectoryOption, &options.work_directory},
+                                   {ExtractionOption, &options.extraction},
+                                   {ExecutedOption, &options.executed},
+                                   {OutputOption, &options.output}},
+                        .others = {}});
+    if (!parsed) {
+        return parsed.Failure();
     }
-
     return options;
 }
 
@@ -321,29 +300,6 @@ std::string ExtractUsage() {
 
 namespace {
 
-// The options of hexlith-boot that take no value, or nothing for another.
-bool* BootFlag(BootOptions& options, std::string_view argument) {
-    if (argument == HelpOption || argument == "-h") {
-        return &options.help;
-    }
-    if (argument == TraceOption) {
-        return &options.trace;
-    }
-    if (argument == NewGameOption) {
-        return &options.new_game;
-    }
-    if (argument == RecordGpuOption) {
-        return &options.record_gpu;
-    }
-    if (argument == RecordExecutedOption) {
-        return &options.record_executed;
-    }
-    if (argument == WindowOption) {
-        return &options.window;
-    }
-    return nullptr;
-}
-
 core::Status
 TakeBackend(std::span<const std::string_view> arguments, std::size_t& index, bool& vulkan) {
     std::optional<std::string> name;
@@ -371,52 +327,37 @@ TakeDevice(std::span<const std::string_view> arguments, std::size_t& index, std:
 
 }  // namespace
 
-core::Result<BootOptions> ParseBootCommandLine(std::span<const std::string_view> arguments) {
+core::Result<BootOptions> ParseBootCommandLine(Arguments arguments) {
     BootOptions options;
     std::optional<std::string> limit;
-
-    for (std::size_t index = 0; index < arguments.size(); ++index) {
-        const std::string_view argument = arguments[index];
-
-        if (bool* flag = BootFlag(options, argument)) {
-            *flag = true;
-            continue;
-        }
-
-        core::Status taken;
-        if (argument == RomDirectoryOption) {
-            taken = TakeValue(arguments, index, options.rom_directory);
-        } else if (argument == WorkDirectoryOption) {
-            taken = TakeValue(arguments, index, options.work_directory);
-        } else if (argument == ImageOption) {
-            taken = TakeValue(arguments, index, options.image);
-        } else if (argument == LimitOption) {
-            taken = TakeValue(arguments, index, limit);
-        } else if (argument == CompareOption) {
-            taken = TakeValue(arguments, index, options.compare);
-        } else if (argument == GoldenOption) {
-            taken = TakeValue(arguments, index, options.golden);
-        } else if (argument == InputOption) {
-            taken = TakeValue(arguments, index, options.input);
-        } else if (argument == LiftedOption) {
-            taken = TakeValue(arguments, index, options.lifted);
-        } else if (argument == StopAfterOption) {
-            taken = TakeStopPoint(arguments, index, options.stop_after);
-        } else if (argument == BackendOption) {
-            taken = TakeBackend(arguments, index, options.vulkan);
-        } else if (argument == DeviceOption) {
-            taken = TakeDevice(arguments, index, options.device);
-        } else if (argument.starts_with("-")) {
-            return core::Error{std::format("{} is not an option this tool knows", argument)};
-        } else {
-            return core::Error{std::format(
-                "'{}' is not an option. Every path is given with the option it belongs to",
-                argument)};
-        }
-
-        if (!taken) {
-            return taken.Failure();
-        }
+    const core::Status parsed = ParseArguments(
+        arguments,
+        {.flags = {{HelpOption, &options.help},
+                   {"-h", &options.help},
+                   {TraceOption, &options.trace},
+                   {NewGameOption, &options.new_game},
+                   {RecordGpuOption, &options.record_gpu},
+                   {RecordExecutedOption, &options.record_executed},
+                   {WindowOption, &options.window}},
+         .values = {{RomDirectoryOption, &options.rom_directory},
+                    {WorkDirectoryOption, &options.work_directory},
+                    {ImageOption, &options.image},
+                    {LimitOption, &limit},
+                    {CompareOption, &options.compare},
+                    {GoldenOption, &options.golden},
+                    {InputOption, &options.input},
+                    {LiftedOption, &options.lifted}},
+         .others = {
+             {StopAfterOption,
+              [&](std::size_t& index) {
+                  return TakeStopPoint(arguments, index, options.stop_after);
+              }},
+             {BackendOption,
+              [&](std::size_t& index) { return TakeBackend(arguments, index, options.vulkan); }},
+             {DeviceOption,
+              [&](std::size_t& index) { return TakeDevice(arguments, index, options.device); }}}});
+    if (!parsed) {
+        return parsed.Failure();
     }
 
     if (options.window && options.record_gpu) {
@@ -495,44 +436,23 @@ std::string BootUsage() {
         WorkDirectoryVariable);
 }
 
-core::Result<LiftVerifyOptions>
-ParseLiftVerifyCommandLine(std::span<const std::string_view> arguments) {
+core::Result<LiftVerifyOptions> ParseLiftVerifyCommandLine(Arguments arguments) {
     LiftVerifyOptions options;
     std::optional<std::string> limit;
     std::optional<std::string> step;
-
-    for (std::size_t index = 0; index < arguments.size(); ++index) {
-        const std::string_view argument = arguments[index];
-        if (argument == HelpOption || argument == "-h") {
-            options.help = true;
-            continue;
-        }
-
-        core::Status taken;
-        if (argument == RomDirectoryOption) {
-            taken = TakeValue(arguments, index, options.rom_directory);
-        } else if (argument == WorkDirectoryOption) {
-            taken = TakeValue(arguments, index, options.work_directory);
-        } else if (argument == ImageOption) {
-            taken = TakeValue(arguments, index, options.image);
-        } else if (argument == LiftedOption) {
-            taken = TakeValue(arguments, index, options.lifted);
-        } else if (argument == InputOption) {
-            taken = TakeValue(arguments, index, options.input);
-        } else if (argument == LimitOption) {
-            taken = TakeValue(arguments, index, limit);
-        } else if (argument == StepOption) {
-            taken = TakeValue(arguments, index, step);
-        } else if (argument.starts_with("-")) {
-            return core::Error{std::format("{} is not an option this tool knows", argument)};
-        } else {
-            return core::Error{std::format(
-                "'{}' is not an option. Every path is given with the option it belongs to",
-                argument)};
-        }
-        if (!taken) {
-            return taken.Failure();
-        }
+    const core::Status parsed =
+        ParseArguments(arguments,
+                       {.flags = {{HelpOption, &options.help}, {"-h", &options.help}},
+                        .values = {{RomDirectoryOption, &options.rom_directory},
+                                   {WorkDirectoryOption, &options.work_directory},
+                                   {ImageOption, &options.image},
+                                   {LiftedOption, &options.lifted},
+                                   {InputOption, &options.input},
+                                   {LimitOption, &limit},
+                                   {StepOption, &step}},
+                        .others = {}});
+    if (!parsed) {
+        return parsed.Failure();
     }
 
     if (options.help) {
