@@ -168,6 +168,14 @@ Synthetic fixtures are generated in code at build time. They are never checked i
 
 Tests go in the same commit as the behaviour they cover.
 
+### Tests come first
+
+A test is written before the code it covers, from what the code is meant to do: the format as 3dbrew or Azahar describes it, the behaviour a service should show, the bug as it was observed. It is run and seen to fail, and then the code is written until it passes. A test written afterwards by reading the implementation and asserting whatever it returns is not a test of anything. It passes by construction, it repeats the code's mistakes, and it stops passing only when someone changes the code, right or wrong.
+
+The distinction matters most when a test fails. The code is fixed to meet the test. The test changes only when the expectation itself was wrong, and the source that shows it was wrong goes in the commit message.
+
+A test earns its place by checking behaviour that could break. Getters returning what a constructor was given, defaults nobody depends on, the same path tested twice under different names, and checks the compiler already makes do not belong. Ten tests that each say something are better than fifty that say the same thing.
+
 ### Oracles
 
 Unit tests are not enough for a decoder, because the mistakes that matter there are the ones nobody thought to write a case for. The ARM and Thumb decoders are checked against Capstone over millions of random words and over the reference image, by `scripts/compare_arm_decoder.py`. Capstone is a development dependency and nothing else: the build does not use it and the tests do not need it. `docs/arm-decoder.md` records what that comparison found.
