@@ -269,6 +269,12 @@ std::size_t BytesPerPixel(PixelFormat format) {
 // Red in the most significant bits, alpha in the least, little-endian.
 // Source: GBATEK, Texture Formats.
 void EncodePixel(PixelFormat format, const Color& color, std::span<std::uint8_t> bytes) {
+    // Widened before shifting, or each channel would be promoted to int and the
+    // packed value would change signedness on its way into Write16.
+    const std::uint32_t red = color.red;
+    const std::uint32_t green = color.green;
+    const std::uint32_t blue = color.blue;
+    const std::uint32_t alpha = color.alpha;
     switch (format) {
     case PixelFormat::Rgba8:
         bytes[0] = color.alpha;
@@ -282,17 +288,14 @@ void EncodePixel(PixelFormat format, const Color& color, std::span<std::uint8_t>
         bytes[2] = color.red;
         return;
     case PixelFormat::Rgb5A1:
-        Write16(((color.red >> 3U) << 11U) | ((color.green >> 3U) << 6U) |
-                    ((color.blue >> 3U) << 1U) | (color.alpha >> 7U),
+        Write16(((red >> 3U) << 11U) | ((green >> 3U) << 6U) | ((blue >> 3U) << 1U) | (alpha >> 7U),
                 bytes);
         return;
     case PixelFormat::Rgb565:
-        Write16(((color.red >> 3U) << 11U) | ((color.green >> 2U) << 5U) | (color.blue >> 3U),
-                bytes);
+        Write16(((red >> 3U) << 11U) | ((green >> 2U) << 5U) | (blue >> 3U), bytes);
         return;
     case PixelFormat::Rgba4:
-        Write16(((color.red >> 4U) << 12U) | ((color.green >> 4U) << 8U) |
-                    ((color.blue >> 4U) << 4U) | (color.alpha >> 4U),
+        Write16(((red >> 4U) << 12U) | ((green >> 4U) << 8U) | ((blue >> 4U) << 4U) | (alpha >> 4U),
                 bytes);
         return;
     }
