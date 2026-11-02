@@ -45,12 +45,6 @@ public:
     // caller's to set.
     std::shared_ptr<Thread> CreateThread(std::uint32_t priority, std::int32_t processor_id);
 
-    // The thread that is running, or null before the first reschedule and when
-    // nothing is ready.
-    [[nodiscard]] Thread* Current() const {
-        return current_.get();
-    }
-
     [[nodiscard]] std::shared_ptr<Thread> CurrentShared() const {
         return current_;
     }

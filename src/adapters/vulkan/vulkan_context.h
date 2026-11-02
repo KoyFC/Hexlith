@@ -49,10 +49,6 @@ public:
         return device_;
     }
 
-    [[nodiscard]] VkPhysicalDevice PhysicalDevice() const {
-        return physical_;
-    }
-
     [[nodiscard]] const std::string& DeviceName() const {
         return device_name_;
     }
@@ -74,10 +70,6 @@ public:
     // and clip distances.
     [[nodiscard]] bool CanDraw() const {
         return can_draw_;
-    }
-
-    [[nodiscard]] bool Validating() const {
-        return messenger_ != VK_NULL_HANDLE;
     }
 
     // Records commands into a one-time command buffer, submits it and waits

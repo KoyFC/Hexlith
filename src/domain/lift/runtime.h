@@ -133,14 +133,8 @@ struct Context {
 }
 
 // The interpreter executes the instruction at `address`, for an instruction the
-// lifter does not translate.
-[[nodiscard]] inline arm::Stop ExecuteInterpreted(Context& context, Pc address) {
-    context.cpu->registers[arm::ProgramCounter] = address;
-    return arm::Step(*context.cpu, *context.memory);
-}
-
-// The same for an instruction decoded once, where the lifted code is, and not
-// every time it runs.
+// lifter does not translate. It was decoded once, where the lifted code is, and
+// not every time it runs.
 [[nodiscard]] inline arm::Stop
 ExecuteDecoded(Context& context, Pc address, const arm::Instruction& instruction) {
     context.cpu->registers[arm::ProgramCounter] = address;
