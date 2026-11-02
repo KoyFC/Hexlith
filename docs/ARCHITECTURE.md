@@ -2,7 +2,7 @@
 
 How Hexlith is put together, and why. Decisions with lasting consequences are recorded separately in [`adr/`](adr/); this document is the map that makes those decisions legible.
 
-Much of what follows does not exist yet. The container formats are read, the profile is checked, a cartridge can be unpacked, and the main executable can be analysed into function and region tables; lifting and the runtime are planned. Each section marks what is present and what is not, because a design document that reads as though the system already works is worse than no document at all.
+Most of what follows exists. A cartridge is unpacked and analysed, the main executable is lifted to C++ and runs as a library under a reimplemented kernel and its services, and the screens are drawn with Vulkan. The CRO modules are still interpreted, and no sound is made. Each section marks what is present and what is not, because a design document that reads as though the system already works is worse than no document at all.
 
 ## What is being built
 
@@ -21,32 +21,32 @@ cartridge image
       |  lift         emit readable C++ per function
       v
   generated C++
-      |  build        compile and link against the Hexlith runtime
+      |  build        compile into a shared library in the workspace
       v
-native executable
+lifted library, loaded and run by hexlith-boot
 ```
 
-The first two stages exist. [`extraction.md`](extraction.md) describes extraction, and [`classification.md`](classification.md) and [`analysis-tables.md`](analysis-tables.md) describe analysis. Analysis covers the main executable and each of the 133 CRO modules, which are analysed in address spaces of their own and seeded from their relocation tables.
+All four stages exist for the main executable. [`extraction.md`](extraction.md) describes extraction, [`classification.md`](classification.md) and [`analysis-tables.md`](analysis-tables.md) describe analysis, and [`lifter.md`](lifter.md) describes lifting and building, with [ADR 0026](adr/0026-lifted-code-is-built-in-the-workspace-and-loaded-as-a-library.md) for why the result is a library. Analysis covers the main executable and each of the 133 CRO modules, which are analysed in address spaces of their own and seeded from their relocation tables. Lifting the modules is Phase 9, and [ADR 0029](adr/0029-cro-modules-are-lifted-against-a-base-the-loader-gives.md) is its starting design.
 
 The repository holds the tools and the runtime. The workspace, which holds the cartridge image and everything derived from it, lives outside the repository and is never redistributed. See [ADR 0007](adr/0007-no-game-data-in-the-repository.md) and [ADR 0008](adr/0008-workspace-configuration.md).
 
 ## Layers
 
-Dependencies point inward. A layer uses the one below it and never the one above.
+Dependencies point inward. A layer uses those below it and never one above.
 
 ```
-tools  ->  adapters  ->  ports  ->  application  ->  domain  ->  core
+tools  ->  adapters  ->  application  ->  ports  ->  domain  ->  core
 ```
 
-**`src/core`** holds small utilities: a `Result` type, bounds-checked byte reading, SHA-256, deterministic text output. Nothing here knows what a 3DS is. Its one external dependency is OpenSSL's libcrypto, linked privately by the SHA-256 wrapper so that it reaches nothing else. See [ADR 0009](adr/0009-sha256-from-openssl.md).
+**`src/core`** holds small utilities: a `Result` type, bounds-checked byte reading, SHA-256, UTF-16 transcoding for RomFS names, and the `key = value` text the workspace configuration is written in. Nothing here knows what a 3DS is. Its one external dependency is OpenSSL's libcrypto, linked privately by the SHA-256 wrapper so that it reaches nothing else. See [ADR 0009](adr/0009-sha256-from-openssl.md).
 
 **`src/domain`** holds pure logic and no I/O at all. The ARM processor model, the guest memory map, kernel abstractions, the CTR container and CRO formats, the analysis types, the `GameProfile`. Everything here is testable against synthetic data, which is what makes the test suite able to run without a cartridge.
 
 **`src/application`** holds use cases. Extract a title, validate an image against a profile, analyse a code region, lift a function. A use case orchestrates domain types and reaches the outside world only through a port.
 
-**`src/ports`** holds the interfaces through which the outside world is reached: `RomSource`, `BlobSink`, `GpuBackend`, `AudioSink`, `InputSource`. The first two exist, and they are narrow on purpose: a `RomSource` can only be read, and a `BlobSink` owns the directory its relative paths resolve against, so a use case never sees an absolute path and cannot construct one.
+**`src/ports`** holds the interfaces through which the outside world is reached: `RomSource`, `BlobSink` and `TreeStore` for files, `InputSource` for the player, `ScreenSink` and `GpuBackend` for the screens, and `GpuRecorder` and `GpuRecordingSource` for a recording of the GPU's work. Sound has none yet, since none is made. The first two are narrow on purpose: a `RomSource` can only be read, and a `BlobSink` owns the directory its relative paths resolve against, so a use case never sees an absolute path and cannot construct one.
 
-**`src/adapters`** holds the implementations: the filesystem, Vulkan, SDL. Only the filesystem ones exist.
+**`src/adapters`** holds the implementations: the filesystem, Vulkan, SDL, and the loader of the library of lifted code. Vulkan and SDL are libraries of their own, so that only what draws links Vulkan and glslang and only what opens a window links SDL.
 
 **`tools`** holds the command-line programs. A tool wires adapters to a use case and does nothing else, so that the interesting code is never trapped inside a `main`.
 
@@ -68,11 +68,13 @@ The intent is that a `GpuBackend` is a virtual interface chosen once at startup,
 
 ## The runtime
 
-Planned, apart from the interpreter, the kernel, and the services and the module loader the boot reaches. Recorded here so the pieces have names.
+Everything here exists in a first form except sound. What each piece still lacks is said with it.
 
 **Guest memory** is a page table: one host pointer per 4 KiB guest page, into backings that stand for the console's physical memory, so that two guest addresses can share bytes the way Horizon's aliases require. A guest word read is an index and a host load. [ADR 0012](adr/0012-guest-memory-is-a-page-table.md) records why it is not the flat allocation first planned, and [`horizon-memory.md`](horizon-memory.md) describes the address space the kernel builds in it. Memory-mapped I/O, misaligned access and exclusive access stay explicit transactions.
 
 **The CPU** has two implementations of the same semantics. Lifted C++ is the fast path. An ARM interpreter is the reference, the fallback for addresses that were never lifted, and the oracle for differential testing. Both call the same primitive library so they cannot diverge. See [ADR 0003](adr/0003-interpreter-as-the-semantic-reference.md).
+
+The lifter, in `src/domain/lift`, turns the main executable into C++ that `hexlith-boot --lifted` runs, leaving to the interpreter what it does not lower, and `hexlith-lift-verify` runs both side by side to the first instruction they disagree on. [ADRs 0024](adr/0024-the-lifter-lowers-instruction-by-instruction-and-the-interpreter-takes-the-rest.md) to [0026](adr/0026-lifted-code-is-built-in-the-workspace-and-loaded-as-a-library.md) record how, and [`lifter.md`](lifter.md) what it measured. The modules' code is still interpreted.
 
 The interpreter and the primitive library exist, in `src/domain/arm/interpreter` and `src/domain/arm/primitives`, and run ARM, Thumb and VFPv2 floating point in user mode. They are checked against Unicorn as [`arm-interpreter.md`](arm-interpreter.md) describes. Floating point runs on the host's own arithmetic with the edges handled explicitly, which [ADR 0010](adr/0010-floating-point-on-the-host.md) records. The interpreter runs against anything that satisfies the `GuestMemory` concept, and is compiled for two: the page table above, and a sparse paged memory for tests and tools.
 
@@ -80,11 +82,13 @@ The interpreter and the primitive library exist, in `src/domain/arm/interpreter`
 
 **Services** implement a common interface and live in a registry, keyed by the port name the game connects to. The extended header's service access control list names every service the title can reach, which makes it the work list, and srv: refuses any other. A request is answered on the calling thread within its SendSyncRequest, and a command nothing implements stops the run by name. See [`ipc.md`](ipc.md) and [`formats/exheader.md`](formats/exheader.md).
 
-**Dynamic modules** are the hard part. Roughly half the title's executable code sits in 133 CRO modules that are relocated at load time. [ADR 0004](adr/0004-cro-modules-and-the-ldr-ro-hle.md) records the approach, and the trace that showed a module can land at a different address each time it is loaded. The linking exists in `src/domain/linker`: given the modules and the addresses chosen for them, it computes what every relocated word holds, the way the service does. The `ldr:ro` service is built on it and leaves a module in memory as the console's loader does. [`cro-linking.md`](cro-linking.md) describes both.
+**Dynamic modules** are the hard part. Roughly half the title's executable code sits in 133 CRO modules that are relocated at load time. [ADR 0004](adr/0004-cro-modules-and-the-ldr-ro-hle.md) records the approach, and the trace that showed a module can land at a different address each time it is loaded. The linking exists in `src/domain/linker`: given the modules and the addresses chosen for them, it computes what every relocated word holds, the way the service does. The `ldr:ro` service is built on it and leaves a module in memory as the console's loader does. [`cro-linking.md`](cro-linking.md) describes both. Lifting the modules is Phase 9, and [ADR 0029](adr/0029-cro-modules-are-lifted-against-a-base-the-loader-gives.md) is its starting design.
 
 **Graphics** translate PICA200 state and command lists into Vulkan. Azahar's `video_core` is the reference for PICA behaviour and `nihstro` for its shader format.
 
-**Audio** reimplements the DSP in software. Azahar's `audio_core/hle` is the reference.
+The PICA state is its register file ([ADR 0017](adr/0017-pica-state-is-the-register-file.md)). A shader interpreter ([ADR 0018](adr/0018-a-shader-interpreter-is-the-semantic-reference.md)) and a reference rasterizer that follows Azahar's software renderer ([ADR 0019](adr/0019-the-reference-rasterizer-follows-azahar-and-samples-two-ways.md)) are the semantic reference. The Vulkan backend translates the vertex shaders to GLSL ([ADR 0020](adr/0020-pica-shaders-become-glsl-compiled-by-glslang.md)), keeps GPU memory true ([ADR 0022](adr/0022-the-vulkan-backend-keeps-gpu-memory-true.md)) and is held to the reference within a measured tolerance ([ADR 0021](adr/0021-the-vulkan-backend-is-held-to-the-reference-within-a-measured-tolerance.md)). `hexlith-boot --window` draws the screens as the title runs ([ADRs 0027](adr/0027-the-screens-are-drawn-as-the-game-runs-and-shown-in-a-window.md) and [0028](adr/0028-the-live-display-draws-in-the-titles-own-memory.md)). [`pica-commands.md`](pica-commands.md), [`pica-shaders.md`](pica-shaders.md), [`pica-rasterizer.md`](pica-rasterizer.md) and [`gpu-reference.md`](gpu-reference.md) say what each was checked against.
+
+**Audio** reimplements the DSP in software. Azahar's `audio_core/hle` is the reference. It does not exist yet: the `dsp::DSP` service answers what the boot asks of it, from the firmware load to an audio frame at the console's rate, and mixes nothing. [`ipc.md`](ipc.md) has what it answers.
 
 ## Game-specific knowledge
 
