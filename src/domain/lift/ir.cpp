@@ -48,6 +48,8 @@ std::string_view Name(OpKind kind) {
         return "shift";
     case OpKind::Alu:
         return "alu";
+    case OpKind::Extend:
+        return "extend";
     case OpKind::ConditionPassed:
         return "condition-passed";
     case OpKind::Load:

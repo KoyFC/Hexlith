@@ -73,7 +73,9 @@ core::Result<std::filesystem::path> Extraction(const application::LiftOptions& o
     return work.Value().path / profile::WorkspaceDirectoryName(chosen);
 }
 
-int Survey(const std::filesystem::path& extraction, const profile::GameProfile& chosen) {
+int Survey(const std::filesystem::path& extraction,
+           const profile::GameProfile& chosen,
+           const application::LiftOptions& options) {
     adapters::FileRomSource code{extraction / CodePath};
     const core::Result<core::ByteSpan> code_bytes = code.Contents();
     if (!code_bytes) {
@@ -89,11 +91,24 @@ int Survey(const std::filesystem::path& extraction, const profile::GameProfile& 
         return Failure;
     }
 
+    // The table of a run is optional, and absent is not a failure.
+    const std::filesystem::path executed_path = options.executed.has_value()
+                                                    ? std::filesystem::path{*options.executed}
+                                                    : extraction / "observed" / "executed.txt";
+    std::string executed;
+    if (const core::Result<std::string> text = ReadText(executed_path)) {
+        executed = text.Value();
+    } else if (options.executed.has_value()) {
+        Report(text.Failure().Message());
+        return Failure;
+    }
+
     const core::Result<application::LiftSurvey> survey = application::SurveyControlFlow(
         application::LiftSurveyRequest{.code = code_bytes.Value(),
                                        .base = chosen.text.address,
                                        .functions = functions.Value(),
-                                       .regions = regions.Value()});
+                                       .regions = regions.Value(),
+                                       .executed = executed});
     if (!survey) {
         Report(survey.Failure().Message());
         return Failure;
@@ -122,7 +137,7 @@ int Run(const application::LiftOptions& options) {
         "extraction  {}\nprofile     {}\n\n", extraction.Value().string(), chosen->name);
 
     if (options.survey) {
-        return Survey(extraction.Value(), *chosen);
+        return Survey(extraction.Value(), *chosen, options);
     }
     Report("nothing to do; --survey is the only mode so far");
     return Usage;

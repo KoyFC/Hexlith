@@ -36,8 +36,9 @@ void DefaultSetup(Machine& machine);
 // agree.
 //
 // "Agree" has a precise meaning for an instruction that does not complete. The
-// interpreter stops and leaves the state as it was; the lowered code either
-// bails, and must then have changed nothing, or hands the instruction to the
+// interpreter stops; the lowered code either bails, after which the interpreter
+// executes the instruction from the state the bail left and must stop with the
+// same reason and leave the same state, or hands the instruction to the
 // interpreter and stops with the same reason.
 std::string Disagreement(const arm::Instruction& instruction, const Setup& setup);
 

@@ -204,11 +204,80 @@ TEST(Lower, TheThreadIdRegistersAndTheBarriers) {
     ExpectArm(0xEE070F9A, with_ids);  // mcr p15, 0, r0, c7, c10, 4
 }
 
+TEST(Lower, BlockLoadsInEveryAddressingMode) {
+    ExpectArm(0xE891000C);  // ldm r1, {r2, r3}
+    ExpectArm(0xE8B1000C);  // ldm r1!, {r2, r3}
+    ExpectArm(0xE931000C);  // ldmdb r1!, {r2, r3}
+    ExpectArm(0xE991000C);  // ldmib r1, {r2, r3}
+    ExpectArm(0xE811000C);  // ldmda r1, {r2, r3}
+}
+
+TEST(Lower, BlockStoresInEveryAddressingMode) {
+    ExpectArm(0xE881000C);  // stm r1, {r2, r3}
+    ExpectArm(0xE8A1000C);  // stm r1!, {r2, r3}
+    ExpectArm(0xE921000C);  // stmdb r1!, {r2, r3}
+    ExpectArm(0xE981000C);  // stmib r1, {r2, r3}
+    ExpectArm(0xE801000C);  // stmda r1, {r2, r3}
+    ExpectArm(0xE8818004);  // stm r1, {r2, pc}
+    ExpectArm(0xE8A10006);  // stm r1!, {r1, r2}, the base stored is the original
+}
+
+TEST(Lower, PushAndPopOnTheStack) {
+    const auto with_return_address = [](Machine& machine) {
+        DefaultSetup(machine);
+        machine.state.registers.at(arm::StackPointer) = test::Stack + 0x100;
+        EXPECT_TRUE(machine.memory.Write32(test::Stack + 0x104, test::Code + 0x40));
+    };
+    ExpectArm(0xE92D4010);                       // push {r4, lr}
+    ExpectArm(0xE8BD8010, with_return_address);  // pop {r4, pc}
+    ExpectThumb(0xB510);                         // push {r4, lr}
+    ExpectThumb(0xBD10, with_return_address);    // pop {r4, pc}
+    ExpectThumb(0xC90C);                         // ldm r1!, {r2, r3}
+    ExpectThumb(0xC10C);                         // stm r1!, {r2, r3}
+}
+
+TEST(Lower, ABlockLoadIntoThePcExchangesAndAMisalignedBlockBails) {
+    const auto to_thumb = [](Machine& machine) {
+        DefaultSetup(machine);
+        EXPECT_TRUE(machine.memory.Write32(Data + 0x104, test::Code + 0x41));
+    };
+    ExpectArm(0xE8918004, to_thumb);  // ldm r1, {r2, pc}
+    ExpectArm(0xE8918004);            // a target that is only halfword aligned
+    const auto unaligned = [](Machine& machine) {
+        DefaultSetup(machine);
+        machine.state.registers.at(1) = Data + 0x102;
+    };
+    ExpectArm(0xE891000C, unaligned);
+    ExpectArm(0xE881000C, unaligned);
+}
+
+TEST(Lower, ABlockTransferThatFaultsPartWayLeavesWhatTheInterpreterLeaves) {
+    // The second word of a block of four is on an unmapped page.
+    const auto at_the_end_of_the_page = [](Machine& machine) {
+        DefaultSetup(machine);
+        machine.state.registers.at(1) = Data + 0x1000 - 8;
+    };
+    ExpectArm(0xE881003C, at_the_end_of_the_page);  // stm r1, {r2, r3, r4, r5}
+    ExpectArm(0xE891003C, at_the_end_of_the_page);  // ldm r1, {r2, r3, r4, r5}
+}
+
+TEST(Lower, ABlockWithTheBaseInItsListGoesToTheInterpreterWhenTheArchitectureSaysSo) {
+    ExpectArm(0xE8A20006, DefaultSetup, Expect::Interpreted);  // stm r2!, {r1, r2}
+}
+
+TEST(Lower, ExtensionsWithAndWithoutAnAddend) {
+    ExpectArm(0xE6FF0071);  // uxth r0, r1
+    ExpectArm(0xE6EF0071);  // uxtb r0, r1
+    ExpectArm(0xE6AF0071);  // sxtb r0, r1
+    ExpectArm(0xE6BF0071);  // sxth r0, r1
+    ExpectArm(0xE6EF0471);  // uxtb r0, r1, ror #8
+    ExpectArm(0xE6E20071);  // uxtab r0, r2, r1
+    ExpectArm(0xE6B20871);  // sxtah r0, r2, r1, ror #16
+}
+
 TEST(Lower, WhatIsNotTranslatedGoesToTheInterpreterWhole) {
-    ExpectArm(0xE891000C, DefaultSetup, Expect::Interpreted);  // ldm r1, {r2, r3}
     ExpectArm(0xEF000011, DefaultSetup, Expect::Interpreted);  // svc #0x11
     ExpectArm(0xEE300A01, DefaultSetup, Expect::Interpreted);  // vadd.f32 s0, s0, s2
-    EXPECT_TRUE(LowerArm(0xE891000C).IsInterpreted());
     EXPECT_TRUE(LowerArm(0xEF000011).IsInterpreted());
 }
 

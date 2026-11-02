@@ -77,4 +77,22 @@ An operation reads or writes processor state (a register, a flag, the instructio
 
 `Evaluate` in `evaluate.h` runs those operations against a `CpuState` and a memory. It is how a lowering is checked: `tests/domain/lift/differential` runs an instruction through the interpreter and through its lowering from the same state and compares every register, every flag, the instruction set, the thread IDs and the writable pages. For an instruction that does not complete, the interpreter stops with the state unchanged, and the lowering has to bail with the state unchanged or hand the instruction to the interpreter and stop with the same reason.
 
-What is translated so far: data processing with the shifter, MUL and MLA, single loads and stores of every width and addressing mode, B, BL, BLX, BX, the hints, the thread ID registers of CP15 and the c7 barriers. Everything else is one `Interpret` operation. Those classes are checked in `tests/domain/lift/lower_test.cpp`, with the encodings checked against another disassembler.
+What is translated so far: data processing with the shifter, MUL and MLA, single loads and stores of every width and addressing mode, block loads and stores in the four addressing modes (and so PUSH and POP), the sign and zero extensions, B, BL, BLX and BX, the hints, the thread ID registers of CP15 and the c7 barriers. Everything else is one `Interpret` operation. Those classes are checked in `tests/domain/lift/lower_test.cpp`, with the encodings checked against another disassembler.
+
+A block transfer that faults part of the way is the case worth stating. The interpreter writes the words before the fault and stops, and the lowering bails at that instruction. The test harness then has the interpreter execute the instruction from the state the bail left, and requires it to stop with the same reason and leave the same memory. That holds because a store writes the same values to the same addresses when it is done again.
+
+## Checking the lowering at scale
+
+`tests/domain/lift/random_test.cpp` decodes random ARM words and random Thumb halfwords, gives each a random state (registers that point into the data page about half the time, random flags, random thread IDs), and compares the interpreter with the lowering. `HEXLITH_LIFT_RANDOM_CASES` sets how many of each; the default is 4,000 and runs in a few seconds. On 2026-11-02, with 1,500,000 of each, in a release build, the lowering and the interpreter agreed on every one: about 130 seconds for the ARM words and 150 for the Thumb halfwords.
+
+## How much of the executable is translated
+
+`hexlith-lift --survey` lowers every distinct instruction the functions hold and counts those that go to the interpreter. With the table of a run it weighs them by how often the game executes them, which is the figure that predicts speed. For the boot to the title screen, 41.9 million instructions:
+
+| | Distinct instructions | Executed |
+| --- | --- | --- |
+| Data processing, single transfers, multiplies, branches | translated | |
+| Before block transfers and extensions | 11.1 percent interpreted | 15.42 percent interpreted |
+| After | 6.2 percent interpreted | 4.61 percent interpreted |
+
+What is left, by how much it runs, is floating point (`vldr`, `vstr`, `vmul`, `vmov`, `vcvt`, `vldm`, `vmla` and the rest of VFP), the exclusive pair `ldrex` and `strex`, the doubleword transfers, the long multiplies and the supervisor call. Floating point is the largest part of it.

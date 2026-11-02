@@ -1,10 +1,13 @@
 #include "application/lift_survey.h"
 
+#include "domain/analysis/record_text.h"
 #include "domain/analysis/tables.h"
+#include "domain/lift/lower.h"
 
 #include <algorithm>
 #include <array>
 #include <format>
+#include <map>
 #include <unordered_set>
 #include <vector>
 
@@ -79,6 +82,70 @@ void Add(LiftSurvey& survey, const lift::Function& function) {
     }
 }
 
+// Every distinct instruction the functions hold, once, wherever it is reached from.
+using Instructions = std::map<std::uint32_t, lift::PlacedInstruction>;
+
+void Collect(Instructions& instructions, const lift::Function& function) {
+    for (const lift::BasicBlock& block : function.blocks) {
+        for (const lift::PlacedInstruction& placed : block.instructions) {
+            instructions.emplace(placed.address, placed);
+        }
+    }
+}
+
+// How many times a run executed each address, by instruction set.
+core::Result<std::map<std::uint32_t, std::uint64_t>> ExecutedCounts(std::string_view text) {
+    std::map<std::uint32_t, std::uint64_t> counts;
+    if (text.empty()) {
+        return counts;
+    }
+    const core::Result<analysis::RecordFile> parsed = analysis::ParseRecordText(text);
+    if (!parsed) {
+        return parsed.Failure();
+    }
+    for (const analysis::Record& record : parsed.Value().records) {
+        const core::Result<std::string_view> count = analysis::RequiredField(record, "count");
+        if (!count) {
+            return count.Failure();
+        }
+        counts[record.address] += std::stoull(std::string{count.Value()});
+    }
+    return counts;
+}
+
+void Measure(LiftSurvey& survey,
+             const Instructions& instructions,
+             const std::map<std::uint32_t, std::uint64_t>& executed) {
+    std::map<domain::arm::Operation, OperationCoverage> by_operation;
+    for (const auto& [address, placed] : instructions) {
+        const bool interpreted = lift::Lower(placed).IsInterpreted();
+        const auto ran = executed.find(address);
+        const std::uint64_t times = ran == executed.end() ? 0 : ran->second;
+
+        OperationCoverage& entry = by_operation[placed.instruction.operation];
+        entry.operation = placed.instruction.operation;
+        ++entry.instructions;
+        entry.executed += times;
+        ++survey.distinct_instructions;
+        survey.executed_total += times;
+        if (interpreted) {
+            ++entry.interpreted;
+            entry.executed_interpreted += times;
+            ++survey.distinct_interpreted;
+            survey.executed_interpreted += times;
+        }
+    }
+    for (const auto& [operation, entry] : by_operation) {
+        survey.coverage.push_back(entry);
+    }
+    std::ranges::sort(survey.coverage, [](const OperationCoverage& l, const OperationCoverage& r) {
+        if (l.executed_interpreted != r.executed_interpreted) {
+            return l.executed_interpreted > r.executed_interpreted;
+        }
+        return l.interpreted > r.interpreted;
+    });
+}
+
 }  // namespace
 
 core::Result<LiftSurvey> SurveyControlFlow(const LiftSurveyRequest& request) {
@@ -102,13 +169,60 @@ core::Result<LiftSurvey> SurveyControlFlow(const LiftSurveyRequest& request) {
     const lift::CodeImage image{.bytes = request.code, .base = request.base};
     const lift::FlowContext context{.entries = &entries, .regions = regions.Value()};
 
-    LiftSurvey survey;
-    for (const analysis::FunctionRange& function : functions.Value()) {
-        Add(survey,
-            lift::BuildFunction(image, function.address, function.instruction_set, context));
+    const core::Result<std::map<std::uint32_t, std::uint64_t>> executed =
+        ExecutedCounts(request.executed);
+    if (!executed) {
+        return executed.Failure().WithContext("executed.txt");
     }
+
+    LiftSurvey survey;
+    Instructions instructions;
+    for (const analysis::FunctionRange& function : functions.Value()) {
+        const lift::Function built =
+            lift::BuildFunction(image, function.address, function.instruction_set, context);
+        Add(survey, built);
+        Collect(instructions, built);
+    }
+    Measure(survey, instructions, executed.Value());
     return survey;
 }
+
+namespace {
+
+std::string RenderCoverage(const LiftSurvey& survey) {
+    std::string text;
+    const auto percent = [](double part, double whole) {
+        return whole == 0.0 ? 0.0 : 100.0 * part / whole;
+    };
+    text.append(std::format("{} distinct instruction(s), {} left to the interpreter ({:.1f}%)\n",
+                            survey.distinct_instructions,
+                            survey.distinct_interpreted,
+                            percent(static_cast<double>(survey.distinct_interpreted),
+                                    static_cast<double>(survey.distinct_instructions))));
+    if (survey.executed_total != 0) {
+        text.append(std::format("{} executed, {} of them by the interpreter ({:.2f}%)\n",
+                                survey.executed_total,
+                                survey.executed_interpreted,
+                                percent(static_cast<double>(survey.executed_interpreted),
+                                        static_cast<double>(survey.executed_total))));
+    }
+    constexpr std::size_t Listed = 30;
+    text.append("operations left to the interpreter, by how much they run:\n");
+    for (std::size_t index = 0; index < survey.coverage.size() && index < Listed; ++index) {
+        const OperationCoverage& entry = survey.coverage.at(index);
+        if (entry.interpreted == 0) {
+            break;
+        }
+        text.append(std::format("  {:<12} {:>8} of {:>8} distinct, {:>12} executed\n",
+                                domain::arm::Mnemonic(entry.operation),
+                                entry.interpreted,
+                                entry.instructions,
+                                entry.executed_interpreted));
+    }
+    return text;
+}
+
+}  // namespace
 
 std::string RenderLiftSurvey(const LiftSurvey& survey) {
     std::string text;
@@ -136,6 +250,7 @@ std::string RenderLiftSurvey(const LiftSurvey& survey) {
                             survey.functions_with_a_trap,
                             survey.functions_at_the_limit,
                             survey.functions_without_code));
+    text.append(RenderCoverage(survey));
     constexpr std::size_t TrapsListed = 24;
     for (std::size_t index = 0; index < survey.trap_addresses.size() && index < TrapsListed;
          ++index) {

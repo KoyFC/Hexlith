@@ -58,6 +58,10 @@ struct LiftOptions {
     // control flow of the whole executable looks like.
     bool survey = false;
 
+    // The table of executed instructions to weigh the survey by, instead of the
+    // one hexlith-boot --record-executed left beside the extraction.
+    std::optional<std::string> executed;
+
     bool help = false;
 };
 

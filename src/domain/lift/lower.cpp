@@ -1,8 +1,12 @@
 #include "domain/lift/lower.h"
 
 #include "domain/arm/primitives/branch.h"
+#include "domain/arm/primitives/media.h"
 #include "domain/arm/primitives/transfer.h"
 #include "domain/arm/primitives/unpredictable.h"
+
+#include <array>
+#include <bit>
 
 namespace hexlith::domain::lift {
 namespace {
@@ -119,6 +123,22 @@ private:
         case Operation::StoreByteUnprivileged:
         case Operation::StoreHalf:
             Store();
+            return true;
+        case Operation::LoadMultiple:
+            LoadMultiple();
+            return true;
+        case Operation::StoreMultiple:
+            StoreMultiple();
+            return true;
+        case Operation::Sxtab:
+        case Operation::Sxtah:
+        case Operation::Sxtb:
+        case Operation::Sxth:
+        case Operation::Uxtab:
+        case Operation::Uxtah:
+        case Operation::Uxtb:
+        case Operation::Uxth:
+            Extension();
             return true;
         case Operation::Branch:
             out_.branch_target = arm::BranchTarget(instruction_, address_);
@@ -447,6 +467,123 @@ private:
         const Operand value = Read(instruction_.destination);
         Emit(OpKind::Store, {.index = width, .a = where.address, .b = value});
         WriteBack(where.written_back);
+    }
+
+    // --- Block transfers --------------------------------------------------------
+
+    // The address of the nth word of a block that starts at `start`.
+    Operand WordAt(Operand start, unsigned n) {
+        return n == 0 ? start : Binary(OpKind::Add, start, Operand::Word(n * primitives::WordSize));
+    }
+
+    // Where a block transfer starts, after bailing if that is not word aligned.
+    // Returns the base as well, which the write-back needs.
+    struct Block {
+        Operand base;
+        Operand start;
+        std::uint32_t bytes = 0;
+    };
+
+    Block StartBlock() {
+        Block block;
+        block.base = Read(instruction_.first);
+        block.bytes = static_cast<std::uint32_t>(std::popcount(instruction_.registers)) *
+                      primitives::WordSize;
+        // BlockStart, with the addressing mode known: the four of them are an
+        // offset from the base.
+        std::uint32_t before_offset = 0;
+        if (instruction_.add_offset) {
+            before_offset = instruction_.preindexed ? primitives::WordSize : 0;
+        } else {
+            before_offset = block.bytes - (instruction_.preindexed ? 0 : primitives::WordSize);
+        }
+        block.start = block.base;
+        if (before_offset != 0) {
+            block.start = Binary(instruction_.add_offset ? OpKind::Add : OpKind::Subtract,
+                                 block.base,
+                                 Operand::Word(before_offset));
+        }
+        const Operand low = Binary(OpKind::And, block.start, Operand::Word(LowTwoBits));
+        Emit(OpKind::BailIf, {.a = Compare(OpKind::NotEqual, low, Operand::Word(0))});
+        return block;
+    }
+
+    Operand BlockWrittenBack(const Block& block) {
+        return Binary(instruction_.add_offset ? OpKind::Add : OpKind::Subtract,
+                      block.base,
+                      Operand::Word(block.bytes));
+    }
+
+    // LDM, and POP in Thumb. Every word is read before any register is written,
+    // so that a fault leaves the registers alone.
+    void LoadMultiple() {
+        const Block block = StartBlock();
+        std::array<Operand, arm::RegisterCount> loaded{};
+        unsigned n = 0;
+        for (arm::RegisterIndex index = 0; index < arm::RegisterCount; ++index) {
+            if (arm::Holds(instruction_.registers, index)) {
+                loaded.at(index) =
+                    Produce(OpKind::Load,
+                            Type::Word,
+                            {.index = static_cast<std::uint32_t>(primitives::Width::Word),
+                             .a = WordAt(block.start, n++)});
+            }
+        }
+
+        if (arm::Holds(instruction_.registers, arm::ProgramCounter)) {
+            ExchangeTo(loaded.at(arm::ProgramCounter));
+        }
+        const bool base_listed = arm::Holds(instruction_.registers, instruction_.first);
+        if (instruction_.writes_back && !base_listed) {
+            Write(instruction_.first, BlockWrittenBack(block));
+        }
+        for (arm::RegisterIndex index = 0; index < arm::ProgramCounter; ++index) {
+            if (arm::Holds(instruction_.registers, index)) {
+                Write(index, loaded.at(index));
+            }
+        }
+    }
+
+    // STM, and PUSH in Thumb. A store that faults part of the way has written the
+    // words before it, as the interpreter's has; the interpreter re-executes the
+    // instruction after the bail and writes them again, the same values.
+    void StoreMultiple() {
+        const Block block = StartBlock();
+        unsigned n = 0;
+        for (arm::RegisterIndex index = 0; index < arm::RegisterCount; ++index) {
+            if (arm::Holds(instruction_.registers, index)) {
+                Emit(OpKind::Store,
+                     {.index = static_cast<std::uint32_t>(primitives::Width::Word),
+                      .a = WordAt(block.start, n++),
+                      .b = Read(index)});
+            }
+        }
+        if (instruction_.writes_back) {
+            Write(instruction_.first, BlockWrittenBack(block));
+        }
+    }
+
+    // --- Extensions -------------------------------------------------------------
+
+    // SXTB, UXTH and the rest, with and without an addend. The rotation is the
+    // shift amount.
+    void Extension() {
+        const Operand source = Read(instruction_.second);
+        const Operand rotated =
+            Produce(OpKind::Shift,
+                    Type::Word,
+                    {.index = static_cast<std::uint32_t>(arm::ShiftKind::RotateRight),
+                     .a = source,
+                     .b = Operand::Word(instruction_.shift_amount),
+                     .c = Operand::Bit(false)});
+        const Operand addend =
+            instruction_.first == arm::NoRegister ? Operand::Word(0) : Read(instruction_.first);
+        const Operand result = Produce(OpKind::Extend,
+                                       Type::Word,
+                                       {.index = static_cast<std::uint32_t>(instruction_.operation),
+                                        .a = rotated,
+                                        .b = addend});
+        Write(instruction_.destination, result);
     }
 
     // --- Coprocessor 15 ---------------------------------------------------------

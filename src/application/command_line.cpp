@@ -23,6 +23,7 @@ constexpr std::string_view GoldenOption = "--golden";
 constexpr std::string_view InputOption = "--input";
 constexpr std::string_view StopAfterOption = "--stop-after";
 constexpr std::string_view SurveyOption = "--survey";
+constexpr std::string_view ExecutedOption = "--executed";
 constexpr std::string_view RecordGpuOption = "--record-gpu";
 constexpr std::string_view RecordExecutedOption = "--record-executed";
 
@@ -211,6 +212,8 @@ core::Result<LiftOptions> ParseLiftCommandLine(std::span<const std::string_view>
             taken = TakeValue(arguments, index, options.work_directory);
         } else if (argument == ExtractionOption) {
             taken = TakeValue(arguments, index, options.extraction);
+        } else if (argument == ExecutedOption) {
+            taken = TakeValue(arguments, index, options.executed);
         } else if (argument.starts_with("-")) {
             return core::Error{std::format("{} is not an option this tool knows", argument)};
         } else {
@@ -236,6 +239,7 @@ std::string LiftUsage() {
         "  {} <path>   a specific extraction directory, instead of the profile's\n"
         "  {}              cut every function into blocks and print what the control\n"
         "                       flow of the whole executable looks like\n"
+        "  {} <path>      weigh it by a table of executed instructions\n"
         "  {}                this text\n"
         "\n"
         "The work directory is taken from the command line first, then from {},\n"
@@ -243,6 +247,7 @@ std::string LiftUsage() {
         WorkDirectoryOption,
         ExtractionOption,
         SurveyOption,
+        ExecutedOption,
         HelpOption,
         WorkDirectoryVariable);
 }

@@ -108,6 +108,10 @@ enum class OpKind : std::uint8_t {
     // destination3 the overflow, which only an arithmetic operation sets.
     Alu,
 
+    // primitives::Extend. `index` is the Operation, a the source already
+    // rotated and b the addend, which is zero for the forms without one.
+    Extend,
+
     // primitives::ConditionPassed. `index` is the Condition and a, b, c, d are
     // N, Z, C and V.
     ConditionPassed,

@@ -3,6 +3,7 @@
 
 #include "core/byte_reader.h"
 #include "core/result.h"
+#include "domain/arm/operation.h"
 #include "domain/lift/control_flow.h"
 
 #include <array>
@@ -30,6 +31,22 @@ struct LiftSurveyRequest {
     // functions.txt and regions.txt, as hexlith-analyze wrote them.
     std::string_view functions;
     std::string_view regions;
+
+    // The table hexlith-boot --record-executed wrote, when there is one. With it
+    // the survey can say how much of what the game runs is translated, and not
+    // only how much of the code.
+    std::string_view executed;
+};
+
+// How one operation fares in the lowering: how many distinct instructions of it
+// the functions hold, how many of those the interpreter has to take whole, and
+// the same weighted by how often a run executed them.
+struct OperationCoverage {
+    domain::arm::Operation operation = domain::arm::Operation::Undefined;
+    std::size_t instructions = 0;
+    std::size_t interpreted = 0;
+    std::uint64_t executed = 0;
+    std::uint64_t executed_interpreted = 0;
 };
 
 constexpr std::size_t ExitKindCount = 10;
@@ -55,6 +72,13 @@ struct LiftSurvey {
     std::size_t indirect_through_load = 0;
     std::size_t indirect_through_block_load = 0;
     std::size_t indirect_through_arithmetic = 0;
+
+    // Per operation, most executed-and-interpreted first, then most numerous.
+    std::vector<OperationCoverage> coverage;
+    std::size_t distinct_instructions = 0;
+    std::size_t distinct_interpreted = 0;
+    std::uint64_t executed_total = 0;
+    std::uint64_t executed_interpreted = 0;
 
     // Cases across every switch.
     std::size_t switch_cases = 0;

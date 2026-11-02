@@ -116,12 +116,16 @@ void DefaultSetup(Machine& machine) {
 std::string Disagreement(const arm::Instruction& instruction, const Setup& setup) {
     Machine reference = Prepare(instruction, setup);
     Machine lifted = Prepare(instruction, setup);
-    const Machine pristine = Prepare(instruction, setup);
 
     const arm::Stop stopped = arm::Step(reference.state, reference.memory);
 
     const PlacedInstruction placed{.address = Code, .instruction = instruction};
     const ir::Instruction lowered = Lower(placed);
+    // r15 is set to something no branch goes to, so that an instruction that
+    // writes it can be told from one that leaves it for the block to move on,
+    // including a branch to itself.
+    constexpr std::uint32_t Untouched = 0xDEADBEEF;
+    lifted.state.registers.at(arm::ProgramCounter) = Untouched;
     const Evaluation evaluation = Evaluate(lowered, lifted.state, lifted.memory);
 
     if (stopped.Stopped()) {
@@ -130,9 +134,17 @@ std::string Disagreement(const arm::Instruction& instruction, const Setup& setup
                                Describe(stopped));
         }
         if (evaluation.kind == EvaluationKind::Bailed) {
-            return Differences(pristine, lifted).empty()
-                       ? std::string{}
-                       : "bailed after changing the state: " + Differences(pristine, lifted);
+            // The lifted code leaves for the interpreter, which executes the
+            // instruction from the state it was left in and has to stop as the
+            // reference did, with the same state.
+            lifted.state.registers.at(arm::ProgramCounter) = Code;
+            const arm::Stop again = arm::Step(lifted.state, lifted.memory);
+            if (again.reason != stopped.reason || again.detail != stopped.detail) {
+                return std::format("after the bail the interpreter stops with {}, not {}",
+                                   Describe(again),
+                                   Describe(stopped));
+            }
+            return Differences(reference, lifted);
         }
         if (evaluation.stop.reason != stopped.reason || evaluation.stop.detail != stopped.detail) {
             return std::format("stops with {}, the interpreter with {}",
@@ -151,7 +163,7 @@ std::string Disagreement(const arm::Instruction& instruction, const Setup& setup
 
     // The block moves r15 on, or to a branch's target, unless the operations did.
     std::uint32_t& pc = lifted.state.registers.at(arm::ProgramCounter);
-    if (pc == Code) {
+    if (pc == Untouched) {
         pc = Code + instruction.width;
         if (lowered.branch_target.has_value()) {
             const primitives::ConditionFlags flags{.negative = lifted.state.negative,

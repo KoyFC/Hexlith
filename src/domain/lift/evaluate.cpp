@@ -1,5 +1,7 @@
 #include "domain/lift/evaluate.h"
 
+#include "domain/arm/primitives/media.h"
+
 #include <optional>
 
 namespace hexlith::domain::lift {
@@ -134,6 +136,9 @@ void ApplyArithmetic(const ir::Op& op, Temporaries& t) {
         break;
     case OpKind::Select:
         t.Set(op.destination, a != 0 ? b : t.Get(op.c));
+        break;
+    case OpKind::Extend:
+        t.Set(op.destination, primitives::Extend(static_cast<arm::Operation>(op.index), a, b));
         break;
     default:
         break;

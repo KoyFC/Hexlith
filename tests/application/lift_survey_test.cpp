@@ -40,8 +40,8 @@ TEST(SurveyControlFlow, CountsFunctionsBlocksAndHowTheyEnd) {
                                        "0x00100000 size=0x0000000C isa=arm source=heuristic\n"
                                        "0x0010000C size=0x00000004 isa=arm source=heuristic\n";
 
-    const core::Result<LiftSurvey> survey = SurveyControlFlow(
-        LiftSurveyRequest{.code = code, .base = Base, .functions = functions, .regions = Regions});
+    const core::Result<LiftSurvey> survey = SurveyControlFlow(LiftSurveyRequest{
+        .code = code, .base = Base, .functions = functions, .regions = Regions, .executed = {}});
     ASSERT_TRUE(survey.Ok()) << survey.Failure().Message();
 
     EXPECT_EQ(survey.Value().functions, 2U);
@@ -58,8 +58,8 @@ TEST(SurveyControlFlow, ReportsWhereTheControlFlowCannotBeFollowed) {
     const std::string_view functions = "format version=1\n"
                                        "0x00100000 size=0x00000008 isa=arm source=heuristic\n";
 
-    const core::Result<LiftSurvey> survey = SurveyControlFlow(
-        LiftSurveyRequest{.code = code, .base = Base, .functions = functions, .regions = Regions});
+    const core::Result<LiftSurvey> survey = SurveyControlFlow(LiftSurveyRequest{
+        .code = code, .base = Base, .functions = functions, .regions = Regions, .executed = {}});
     ASSERT_TRUE(survey.Ok());
     EXPECT_EQ(survey.Value().functions_with_a_trap, 1U);
     ASSERT_EQ(survey.Value().trap_addresses.size(), 1U);
@@ -68,8 +68,12 @@ TEST(SurveyControlFlow, ReportsWhereTheControlFlowCannotBeFollowed) {
 
 TEST(SurveyControlFlow, RefusesTablesItCannotRead) {
     const std::vector<std::uint8_t> code = Code({ArmPop});
-    const core::Result<LiftSurvey> survey = SurveyControlFlow(LiftSurveyRequest{
-        .code = code, .base = Base, .functions = "not a table", .regions = Regions});
+    const core::Result<LiftSurvey> survey =
+        SurveyControlFlow(LiftSurveyRequest{.code = code,
+                                            .base = Base,
+                                            .functions = "not a table",
+                                            .regions = Regions,
+                                            .executed = {}});
     EXPECT_FALSE(survey.Ok());
 }
 
@@ -77,8 +81,8 @@ TEST(RenderLiftSurvey, NamesTheNumbersWorthWatching) {
     const std::vector<std::uint8_t> code = Code({ArmPop});
     const std::string_view functions = "format version=1\n"
                                        "0x00100000 size=0x00000004 isa=arm source=heuristic\n";
-    const core::Result<LiftSurvey> survey = SurveyControlFlow(
-        LiftSurveyRequest{.code = code, .base = Base, .functions = functions, .regions = Regions});
+    const core::Result<LiftSurvey> survey = SurveyControlFlow(LiftSurveyRequest{
+        .code = code, .base = Base, .functions = functions, .regions = Regions, .executed = {}});
     ASSERT_TRUE(survey.Ok());
     const std::string text = RenderLiftSurvey(survey.Value());
     EXPECT_NE(text.find("1 function(s): 1 ARM, 0 Thumb"), std::string::npos);
