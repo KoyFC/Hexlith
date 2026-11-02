@@ -1,18 +1,54 @@
 #include "adapters/filesystem/file_rom_source.h"
 
+#include <cerrno>
+#include <cstring>
 #include <format>
-#include <fstream>
+#include <sys/mman.h>
+
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace hexlith::adapters::filesystem {
 namespace {
 
 namespace fs = std::filesystem;
 
+// Closes a descriptor when it goes out of scope. The mapping outlives it.
+class Descriptor {
+public:
+    explicit Descriptor(int descriptor) : descriptor_(descriptor) {}
+
+    ~Descriptor() {
+        if (descriptor_ >= 0) {
+            close(descriptor_);
+        }
+    }
+
+    Descriptor(const Descriptor&) = delete;
+    Descriptor& operator=(const Descriptor&) = delete;
+    Descriptor(Descriptor&&) = delete;
+    Descriptor& operator=(Descriptor&&) = delete;
+
+    [[nodiscard]] int Get() const {
+        return descriptor_;
+    }
+
+private:
+    int descriptor_;
+};
+
 }  // namespace
 
+FileRomSource::~FileRomSource() {
+    if (!mapped_.empty()) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): munmap takes the address mmap gave
+        munmap(const_cast<std::uint8_t*>(mapped_.data()), mapped_.size());
+    }
+}
+
 core::Result<core::ByteSpan> FileRomSource::Contents() {
-    if (bytes_.has_value()) {
-        return core::ByteSpan{*bytes_};
+    if (!mapped_.empty()) {
+        return mapped_;
     }
 
     std::error_code failure;
@@ -38,20 +74,24 @@ core::Result<core::ByteSpan> FileRomSource::Contents() {
         return core::Error{std::format("'{}' is empty", path_.string())};
     }
 
-    std::ifstream file(path_, std::ios::binary);
-    if (!file) {
-        return core::Error{std::format("'{}' could not be opened for reading", path_.string())};
-    }
-
-    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
-    file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-    if (static_cast<std::size_t>(file.gcount()) != bytes.size()) {
+    // O_NOFOLLOW refuses a link that took the file's place after the check
+    // above.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): open is the POSIX call
+    const Descriptor file{open(path_.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC)};
+    if (file.Get() < 0) {
         return core::Error{std::format(
-            "'{}' ended after {} of {} bytes", path_.string(), file.gcount(), bytes.size())};
+            "'{}' could not be opened for reading: {}", path_.string(), std::strerror(errno))};
     }
 
-    bytes_ = std::move(bytes);
-    return core::ByteSpan{*bytes_};
+    const auto length = static_cast<std::size_t>(size);
+    const void* const address = mmap(nullptr, length, PROT_READ, MAP_PRIVATE, file.Get(), 0);
+    if (address == MAP_FAILED) {
+        return core::Error{
+            std::format("'{}' could not be mapped: {}", path_.string(), std::strerror(errno))};
+    }
+
+    mapped_ = std::span<const std::uint8_t>{static_cast<const std::uint8_t*>(address), length};
+    return mapped_;
 }
 
 std::string FileRomSource::Describe() const {
