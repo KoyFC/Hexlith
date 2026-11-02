@@ -1,6 +1,8 @@
+#include "adapters/filesystem/directory_blob_sink.h"
 #include "adapters/filesystem/file_rom_source.h"
 #include "adapters/filesystem/workspace_locator.h"
 #include "application/command_line.h"
+#include "application/lift_emit.h"
 #include "application/lift_survey.h"
 #include "application/workspace.h"
 #include "domain/profile/game_profile.h"
@@ -34,6 +36,7 @@ constexpr int Usage = 2;
 // Where the extraction put the code, and where the analysis put its tables.
 constexpr std::string_view CodePath = "exefs/.code";
 constexpr std::string_view AnalysisDirectory = "analysis";
+constexpr std::string_view LiftDirectory = "lift";
 
 void Report(std::string_view message) {
     std::cerr << "hexlith-lift: " << message << '\n';
@@ -117,6 +120,47 @@ int Survey(const std::filesystem::path& extraction,
     return Success;
 }
 
+int Emit(const std::filesystem::path& extraction,
+         const profile::GameProfile& chosen,
+         const application::LiftOptions& options) {
+    adapters::FileRomSource code{extraction / CodePath};
+    const core::Result<core::ByteSpan> code_bytes = code.Contents();
+    if (!code_bytes) {
+        Report(code_bytes.Failure().WithContext(code.Describe()).Message());
+        return Failure;
+    }
+    const std::filesystem::path tables = extraction / AnalysisDirectory;
+    const core::Result<std::string> functions = ReadText(tables / "functions.txt");
+    const core::Result<std::string> regions = ReadText(tables / "regions.txt");
+    if (!functions || !regions) {
+        Report((!functions ? functions : regions).Failure().Message());
+        return Failure;
+    }
+
+    const std::filesystem::path output = options.output.has_value()
+                                             ? std::filesystem::path{*options.output}
+                                             : extraction / LiftDirectory;
+    adapters::DirectoryBlobSink sink{output};
+    if (const core::Status prepared = sink.Prepare(); !prepared) {
+        Report(prepared.Failure().Message());
+        return Failure;
+    }
+    std::cout << std::format("writing to {}\n", output.string());
+
+    const core::Result<application::LiftEmitReport> report =
+        application::EmitLiftedCode(application::LiftEmitRequest{.code = code_bytes.Value(),
+                                                                 .base = chosen.text.address,
+                                                                 .functions = functions.Value(),
+                                                                 .regions = regions.Value()},
+                                    sink);
+    if (!report) {
+        Report(report.Failure().Message());
+        return Failure;
+    }
+    std::cout << application::RenderLiftEmitSummary(report.Value());
+    return Success;
+}
+
 int Run(const application::LiftOptions& options) {
     const profile::GameProfile* chosen = OnlyProfile();
     if (chosen == nullptr) {
@@ -139,7 +183,10 @@ int Run(const application::LiftOptions& options) {
     if (options.survey) {
         return Survey(extraction.Value(), *chosen, options);
     }
-    Report("nothing to do; --survey is the only mode so far");
+    if (options.emit) {
+        return Emit(extraction.Value(), *chosen, options);
+    }
+    Report("nothing to do; ask for --survey or --emit");
     return Usage;
 }
 

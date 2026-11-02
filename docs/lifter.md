@@ -30,7 +30,9 @@ Every exit but a fallthrough carries the condition of its instruction. When it f
 
 **A trap is where the lifter gives up honestly.** An undefined word, a breakpoint and the end of the image become an empty block that exits to the interpreter at that address, with the state exactly as it is, and the interpreter reports why. The lifted code never has to guess.
 
-Two jumps are resolved from the image. A switch is whatever jump table region the analysis found eight bytes after the load, as [ADR 0023](adr/0023-switches-and-tables-of-functions-are-recognised-by-shape.md) describes. A load of the program counter from the word that follows it is a branch to a constant, which the compiler uses to reach a function too far away for a branch, and it is a jump or a tail call to that constant. That is true in the main executable, whose text is mapped read-only and never relocated. It is not true in a module, where the loader writes the final address into the literal, so the builder takes a flag for it and a module's literals stay loads.
+One jump is resolved from the image. A switch is whatever jump table region the analysis found eight bytes after the load, as [ADR 0023](adr/0023-switches-and-tables-of-functions-are-recognised-by-shape.md) describes.
+
+A jump through a literal is not resolved, although it looks as if it could be. The main executable has 234 import stubs, each a load of the program counter from the word after it, and it is tempting to read that word as the constant it is in the file and call the stub a branch. The first run of lifted code showed it is not: `ldr:ro` writes the addresses of a module's functions into those words when the module is loaded, so a stub that went to a resolver at the start of the run goes to module code afterwards. The main executable's text is mapped read-only for the game, and the loader still rewrites its literals. `FlowContext::literals_are_constant` says whether a caller knows better, and nothing in the real pipeline does. A stub is an indirect jump, and the lifted code loads the word each time.
 
 ## What the main executable looks like
 
@@ -55,15 +57,15 @@ How the blocks end:
 | Return | 27,969 |
 | Fallthrough | 25,516 |
 | Indirect call | 13,406 |
-| Indirect jump | 3,846 |
-| Tail call | 2,066 |
+| Indirect jump | 4,170 |
+| Tail call | 1,742 |
 | System call | 914 |
 | Switch | 518, with 5,680 cases |
 | Trap | 17 |
 
 **Indirect calls** are 13,406 blocks, 16 percent of the calls, and are a virtual call or a call through a function pointer. The lifted code needs a way from a guest address to a function that is cheap, because it is on the path of every one of them.
 
-**Indirect jumps** are 3,846, and all but 5 are `bx` through a register that is not the link register: a virtual call made as a tail call, or the return of a function that kept its return address somewhere else. The 5 are computed adds of the program counter. They leave the lifted code and go through the dispatcher or the interpreter.
+**Indirect jumps** are 4,170. 324 are import stubs, as above. Of the rest all but 5 are `bx` through a register that is not the link register: a virtual call made as a tail call, or the return of a function that kept its return address somewhere else. The 5 are computed adds of the program counter. They leave the lifted code and go through the dispatcher or the interpreter.
 
 **The 17 traps** are in 17 functions, and several are the addresses the analysis reports as instruction set conflicts. They are the places where two paths disagree about what a byte is.
 
@@ -104,3 +106,24 @@ What is left, by how much it runs, is floating point (`vldr`, `vstr`, `vmul`, `v
 Each function has a header comment with its address, instruction set and block count, a switch that jumps to the block an address names, and then a label for each block. A block opens with the check that the slice has enough ticks left and the charge, then has a braced group for each instruction with its address and mnemonic in a comment, then its exit. What a group does is a call to the primitive the interpreter calls, on the state in `cpu`. The functions that are not translated are one call that has the interpreter execute the instruction.
 
 `Engine` in `engine.h` is `arm::Run` with the faster path. Given the same state and limit it stops for the same reason, leaves the same state and counts the same number of instructions, and a test checks that for generated sample functions at every limit from one instruction to sixty-nine. The sample functions are built from machine code the test writes, lifted and emitted by a program the build runs (`sample_generator`), and compiled into the test: a loop, a call and a return, a switch through a jump table, loads and stores, block transfers, conditional execution, a thread ID read and an instruction the lifter leaves to the interpreter.
+
+## Building and running it
+
+```sh
+hexlith-lift --work-dir ~/recomp-data/work --emit
+scripts/build-lifted.sh ~/recomp-data/work/<title>/lift
+hexlith-boot --work-dir ~/recomp-data/work --rom-dir ~/recomp-data/rom --new-game \
+    --lifted ~/recomp-data/work/<title>/lift/build/libhexlith_lifted.so
+```
+
+[ADR 0026](adr/0026-lifted-code-is-built-in-the-workspace-and-loaded-as-a-library.md) has why it is shaped like this. For the main executable the output is 22,489 functions in 273 source files, 11.7 million lines and 469 MB, and a cold build takes about eight minutes on eight cores and 54 minutes of processor time. The library is 90 MB.
+
+## First results
+
+On 2026-11-02, from a new game to the first frame after the title appears, with the input script `100 tap a`, `200 tap a`: 41,972,790 instructions.
+
+- **The golden trace of the lifted run is byte for byte the interpreter's.** So are the instruction count and the tick count, 1,017,217,878, which is the clock the kernel's timed events run on. Lifted code enters the clock a block at a time and the run agrees with the interpreter's to the tick.
+- 99.4 percent of the instructions ran as lifted code. The 0.6 percent that did not, 251,885, are the interpreter's: the floating point instructions, the exclusive pair, the supervisor calls, and the code of the language selection module, which is not lifted.
+- Time spent running the game's code, as `hexlith-boot` now reports it, apart from the system calls and services: the interpreter 2.7 to 3.1 seconds, 14 to 16 million instructions a second; lifted code 0.6 to 0.7 seconds, 58 to 69 million. About four and a half times faster, with the registers still in memory, every guest memory access a call into the binary, and no instruction translated beyond what ADR 0024 lists. The boot as a whole is about three times faster, because a great deal of its time is the GPU memory fills and the start-up.
+
+A bug the run found is in ADR 0026: the import stubs of the main executable are rewritten by the module loader.

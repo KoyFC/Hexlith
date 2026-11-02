@@ -23,9 +23,11 @@ constexpr std::string_view GoldenOption = "--golden";
 constexpr std::string_view InputOption = "--input";
 constexpr std::string_view StopAfterOption = "--stop-after";
 constexpr std::string_view SurveyOption = "--survey";
+constexpr std::string_view EmitOption = "--emit";
 constexpr std::string_view ExecutedOption = "--executed";
 constexpr std::string_view RecordGpuOption = "--record-gpu";
 constexpr std::string_view RecordExecutedOption = "--record-executed";
+constexpr std::string_view LiftedOption = "--lifted";
 
 constexpr std::string_view LoadEvent = "cro-load:";
 constexpr std::string_view UnloadEvent = "cro-unload:";
@@ -206,6 +208,10 @@ core::Result<LiftOptions> ParseLiftCommandLine(std::span<const std::string_view>
             options.survey = true;
             continue;
         }
+        if (argument == EmitOption) {
+            options.emit = true;
+            continue;
+        }
 
         core::Status taken;
         if (argument == WorkDirectoryOption) {
@@ -214,6 +220,8 @@ core::Result<LiftOptions> ParseLiftCommandLine(std::span<const std::string_view>
             taken = TakeValue(arguments, index, options.extraction);
         } else if (argument == ExecutedOption) {
             taken = TakeValue(arguments, index, options.executed);
+        } else if (argument == OutputOption) {
+            taken = TakeValue(arguments, index, options.output);
         } else if (argument.starts_with("-")) {
             return core::Error{std::format("{} is not an option this tool knows", argument)};
         } else {
@@ -240,6 +248,8 @@ std::string LiftUsage() {
         "  {}              cut every function into blocks and print what the control\n"
         "                       flow of the whole executable looks like\n"
         "  {} <path>      weigh it by a table of executed instructions\n"
+        "  {}                write the lifted C++ into the workspace\n"
+        "  {} <path>        where it goes, instead of the lift directory beside the extraction\n"
         "  {}                this text\n"
         "\n"
         "The work directory is taken from the command line first, then from {},\n"
@@ -248,6 +258,8 @@ std::string LiftUsage() {
         ExtractionOption,
         SurveyOption,
         ExecutedOption,
+        EmitOption,
+        OutputOption,
         HelpOption,
         WorkDirectoryVariable);
 }
@@ -353,6 +365,8 @@ core::Result<BootOptions> ParseBootCommandLine(std::span<const std::string_view>
             taken = TakeValue(arguments, index, options.golden);
         } else if (argument == InputOption) {
             taken = TakeValue(arguments, index, options.input);
+        } else if (argument == LiftedOption) {
+            taken = TakeValue(arguments, index, options.lifted);
         } else if (argument == StopAfterOption) {
             taken = TakeStopPoint(arguments, index, options.stop_after);
         } else if (argument.starts_with("-")) {
@@ -397,6 +411,7 @@ std::string BootUsage() {
         "                       or once frame:<number> has begun\n"
         "  {}         record the GPU's work under <work-dir>/<title>/gpu\n"
         "  {}   count the instructions executed, by address, under <work-dir>/<title>/observed\n"
+        "  {} <path>      run through the lifted library at that path where it covers the code\n"
         "  {}               this text\n"
         "\n"
         "Without {} the save data under <work-dir>/<title>/save is read at the start and\n"
@@ -417,6 +432,7 @@ std::string BootUsage() {
         StopAfterOption,
         RecordGpuOption,
         RecordExecutedOption,
+        LiftedOption,
         HelpOption,
         NewGameOption,
         RomDirectoryVariable,

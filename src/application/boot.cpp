@@ -1,5 +1,6 @@
 #include "application/boot.h"
 
+#include "core/sha256.h"
 #include "domain/ctr/backwards_lzss.h"
 #include "domain/ctr/exefs.h"
 #include "domain/ctr/ncch.h"
@@ -154,6 +155,7 @@ core::Result<std::unique_ptr<BootedTitle>> BootedTitle::FromCartridge(core::Byte
 }
 
 core::Status BootedTitle::Start(core::ByteSpan code) {
+    code_digest_ = core::Sha256::Of(code).ToHex();
     const core::Result<kernel::MainThreadStart> start =
         kernel::LoadExecutable(kernel_.Space(), header_, code, kernel_.Pages());
     if (!start) {

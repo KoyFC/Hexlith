@@ -78,10 +78,7 @@ KernelStop Kernel::Run(std::uint64_t instructions) {
         }
 
         std::uint64_t executed = 0;
-        const arm::Stop stop =
-            execution_observer_ == nullptr
-                ? arm::Run(thread->context, space_.Memory(), slice, executed)
-                : arm::Run(thread->context, space_.Memory(), slice, executed, *execution_observer_);
+        const arm::Stop stop = RunSlice(*thread, slice, executed);
         done += executed;
         executed_ += executed;
         scheduler_.Advance(executed);
@@ -103,6 +100,20 @@ KernelStop Kernel::Run(std::uint64_t instructions) {
         }
     }
     return StopFor(KernelStopReason::BudgetSpent);
+}
+
+arm::Stop Kernel::RunSlice(Thread& thread, std::uint64_t slice, std::uint64_t& executed) {
+    const auto began = std::chrono::steady_clock::now();
+    arm::Stop stop;
+    if (lifted_ != nullptr) {
+        stop = lifted_->Run(thread.context, space_.Memory(), slice, executed);
+    } else if (execution_observer_ != nullptr) {
+        stop = arm::Run(thread.context, space_.Memory(), slice, executed, *execution_observer_);
+    } else {
+        stop = arm::Run(thread.context, space_.Memory(), slice, executed);
+    }
+    guest_time_ += std::chrono::steady_clock::now() - began;
+    return stop;
 }
 
 std::optional<KernelStop> Kernel::AnswerSystemCall(Thread& thread, std::uint32_t number) {

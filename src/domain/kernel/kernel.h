@@ -12,8 +12,10 @@
 #include "domain/kernel/region_allocator.h"
 #include "domain/kernel/scheduler.h"
 #include "domain/kernel/system_pages.h"
+#include "domain/lift/engine.h"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -157,6 +159,22 @@ public:
         execution_observer_ = observer;
     }
 
+    // Runs the game's threads through lifted code where there is some, instead of
+    // through the interpreter alone. Null goes back to the interpreter. The
+    // engine must outlive the run, and an observer of execution is ignored while
+    // there is one: the lifted code does not report instruction by instruction.
+    void UseLiftedCode(const lift::Engine* engine) {
+        lifted_ = engine;
+    }
+
+    // Wall-clock time spent running the game's code, as opposed to answering its
+    // system calls and the services behind them. What the speed of the
+    // interpreter or of lifted code is measured by: a boot spends a great deal of
+    // its time elsewhere, filling memory for the GPU among other things.
+    [[nodiscard]] std::chrono::nanoseconds GuestTime() const {
+        return guest_time_;
+    }
+
     // Every instruction run so far, which is also the clock in ticks.
     [[nodiscard]] std::uint64_t Executed() const {
         return executed_;
@@ -257,6 +275,7 @@ private:
 
     // Answers the system call a thread stopped at, and says whether Run has to
     // stop for it.
+    arm::Stop RunSlice(Thread& thread, std::uint64_t slice, std::uint64_t& executed);
     std::optional<KernelStop> AnswerSystemCall(Thread& thread, std::uint32_t number);
     [[nodiscard]] std::shared_ptr<Thread> ResolveThread(Handle handle) const;
     [[nodiscard]] std::shared_ptr<WaitObject> ResolveWaitObject(Handle handle) const;
@@ -332,6 +351,8 @@ private:
     std::uint64_t executed_ = 0;
     Thread* last_run_ = nullptr;
     arm::ExecutionObserver* execution_observer_ = nullptr;
+    const lift::Engine* lifted_ = nullptr;
+    std::chrono::nanoseconds guest_time_{0};
     Outcome outcome_ = Outcome::Continue;
     std::uint32_t break_reason_ = 0;
     std::string unimplemented_service_;

@@ -3,12 +3,15 @@
 
 #include "domain/arm/cpu_state.h"
 #include "domain/arm/interpreter/interpreter.h"
-#include "domain/lift/runtime.h"
 #include "domain/memory/process_memory.h"
 
 #include <cstdint>
 
 namespace hexlith::domain::lift {
+
+namespace runtime {
+class EntryTable;
+}  // namespace runtime
 
 // Runs a thread's code natively where it has been lifted and through the
 // interpreter where it has not, and tells the caller what the interpreter alone
@@ -22,6 +25,16 @@ namespace hexlith::domain::lift {
 // interpreter whenever it cannot do exactly what the interpreter would.
 class Engine {
 public:
+    // What the engine did, for knowing how much of a run was lifted.
+    struct Statistics {
+        // Instructions the interpreter executed because nothing lifted covered
+        // them, or because lifted code gave up at them.
+        std::uint64_t interpreted = 0;
+
+        // Times lifted code was entered.
+        std::uint64_t entries = 0;
+    };
+
     // The table must outlive the engine.
     explicit Engine(const runtime::EntryTable& entries) : entries_(&entries) {}
 
@@ -30,8 +43,13 @@ public:
                   std::uint64_t limit,
                   std::uint64_t& executed) const;
 
+    [[nodiscard]] const Statistics& Counted() const {
+        return statistics_;
+    }
+
 private:
     const runtime::EntryTable* entries_;
+    mutable Statistics statistics_;
 };
 
 }  // namespace hexlith::domain::lift

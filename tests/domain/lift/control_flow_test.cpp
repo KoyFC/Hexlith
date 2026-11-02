@@ -83,6 +83,13 @@ Function Build(const ImageBuilder& image,
     return BuildFunction(image.Image(), Base, set, context);
 }
 
+// For the tests that fold a literal: a caller who knows the bytes do not change.
+Function BuildWithConstantLiterals(const ImageBuilder& image,
+                                   const std::unordered_set<std::uint32_t>& entries) {
+    const FlowContext context{.entries = &entries, .regions = {}, .literals_are_constant = true};
+    return BuildFunction(image.Image(), Base, arm::InstructionSet::Arm, context);
+}
+
 TEST(BuildFunction, ACallStraightThroughIsOneBlockEndingInAReturn) {
     ImageBuilder image;
     image.Arm(ArmPush);
@@ -322,7 +329,7 @@ TEST(BuildFunction, ALoadFromTheLiteralAfterItIsABranchToAConstant) {
     image.Arm(Base + 0x40);            // Base + 4, the literal
 
     const std::unordered_set<std::uint32_t> entries = {Base, Base + 0x40};
-    const Function function = Build(image, arm::InstructionSet::Arm, entries);
+    const Function function = BuildWithConstantLiterals(image, entries);
     ASSERT_EQ(function.blocks.size(), 1U);
     EXPECT_EQ(function.blocks.front().exit.kind, ExitKind::TailCall);
     EXPECT_EQ(function.blocks.front().exit.target, Base + 0x40);
@@ -334,13 +341,14 @@ TEST(BuildFunction, TheInterworkingBitOfALiteralChoosesTheInstructionSet) {
     image.Arm(ArmJumpThroughLiteral);
     image.Arm((Base + 0x40) | 1U);
 
-    const Function function = Build(image);
+    const Function function = BuildWithConstantLiterals(image, {});
     EXPECT_EQ(function.blocks.front().exit.target, Base + 0x40);
     EXPECT_EQ(function.blocks.front().exit.target_set, arm::InstructionSet::Thumb);
 }
 
-TEST(BuildFunction, LeavesALiteralJumpAloneWhenTheLiteralIsNotAConstant) {
-    // In a module the loader writes the address after the file is read.
+TEST(BuildFunction, LeavesALiteralJumpAloneUnlessTheCallerSaysTheLiteralIsConstant) {
+    // In a module, and in the import stubs of the main executable, the loader
+    // writes the address after the file is read.
     ImageBuilder image;
     image.Arm(ArmJumpThroughLiteral);
     image.Arm(Base + 0x40);

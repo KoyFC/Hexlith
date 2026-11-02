@@ -13,6 +13,7 @@ hexlith_add_test(
     ../domain/services/service_harness.cpp
     ../domain/services/service_harness.h
     input_script_test.cpp
+    lift_emit_test.cpp
     lift_survey_test.cpp
     manifest_test.cpp
     save_storage_test.cpp

@@ -1,0 +1,4 @@
+# The sample functions are machine code the test writes out, and the fixtures
+# are encodings and the indexes of the instructions around them.
+InheritParentConfig: true
+Checks: "-readability-magic-numbers"

@@ -1,0 +1,6 @@
+# The library this opens is generated against the ARM primitives, and the header
+# it shares with the generated code includes them. They are written in bit
+# positions, which is why src/domain/arm turns this check off, and the
+# diagnostics follow the header into every file that includes it.
+InheritParentConfig: true
+Checks: "-readability-magic-numbers"

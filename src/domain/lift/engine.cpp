@@ -1,5 +1,7 @@
 #include "domain/lift/engine.h"
 
+#include "domain/lift/runtime.h"
+
 namespace hexlith::domain::lift {
 
 arm::Stop Engine::Run(arm::CpuState& state,
@@ -25,6 +27,7 @@ arm::Stop Engine::Run(arm::CpuState& state,
         // answers say the lifted code gave up, and have the interpreter run the
         // instruction at r15 or report why it stopped.
         if (const runtime::Function function = entries_->Find(pc, state.thumb)) {
+            ++statistics_.entries;
             const runtime::Pc next = function(context, pc);
             if (next == runtime::Stopped) {
                 return finish(context.stop);
@@ -40,6 +43,7 @@ arm::Stop Engine::Run(arm::CpuState& state,
         }
 
         const arm::Stop stop = arm::Step(state, memory);
+        ++statistics_.interpreted;
         if (stop.Stopped()) {
             // A supervisor call has completed: r15 is already past it.
             if (stop.reason == arm::StopReason::SupervisorCall) {

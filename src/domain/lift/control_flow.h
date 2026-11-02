@@ -151,11 +151,15 @@ struct FlowContext {
     // eight bytes after it.
     std::span<const analysis::Region> regions;
 
-    // Whether a literal in the image can be read as the constant it is. It can
-    // in the main executable, whose text is mapped read-only and is never
-    // relocated. It cannot in a module, where the loader writes the final
-    // address into the literal after the file is read.
-    bool literals_are_constant = true;
+    // Whether a literal in the image can be read as the constant it is. It cannot
+    // in a module, where the loader writes the final address into the literal
+    // after the file is read, and it cannot in the main executable either, which
+    // the first run of lifted code found out: ldr:ro writes the addresses of a
+    // module's functions into the literals of the main executable's import
+    // stubs, so a stub that jumps through a literal goes somewhere else once the
+    // module is loaded. True only where the bytes are known not to change, as in
+    // the tests.
+    bool literals_are_constant = false;
 };
 
 // The largest function the builder will follow. A function this long is a sign

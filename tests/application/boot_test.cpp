@@ -135,6 +135,14 @@ TEST(ParseBootCommandLine, RecordsTheExecutedInstructionsWhenAsked) {
     EXPECT_TRUE(options.Value().record_executed);
 }
 
+TEST(ParseBootCommandLine, TakesTheLiftedLibrary) {
+    const std::vector<std::string_view> arguments = {"--lifted", "/work/lift/libx.so"};
+    const core::Result<BootOptions> options = ParseBootCommandLine(arguments);
+    ASSERT_TRUE(options.Ok());
+    EXPECT_EQ(options.Value().lifted, "/work/lift/libx.so");
+    EXPECT_FALSE(ParseBootCommandLine({}).Value().lifted.has_value());
+}
+
 TEST(ParseBootCommandLine, StopsAtAFrame) {
     const std::vector<std::string_view> arguments = {"--stop-after", "frame:600"};
     const core::Result<BootOptions> options = ParseBootCommandLine(arguments);

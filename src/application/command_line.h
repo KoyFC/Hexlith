@@ -58,6 +58,12 @@ struct LiftOptions {
     // control flow of the whole executable looks like.
     bool survey = false;
 
+    // Writes the lifted C++ of the main executable into the workspace.
+    bool emit = false;
+
+    // Where, instead of the lift directory beside the extraction.
+    std::optional<std::string> output;
+
     // The table of executed instructions to weigh the survey by, instead of the
     // one hexlith-boot --record-executed left beside the extraction.
     std::optional<std::string> executed;
@@ -116,6 +122,10 @@ struct BootOptions {
     // under <work-dir>/<title>/observed, as docs/analysis-tables.md describes.
     // Slows the run by a virtual call per instruction.
     bool record_executed = false;
+
+    // Runs the title through the lifted library at this path where it covers the
+    // code, and through the interpreter elsewhere.
+    std::optional<std::string> lifted;
 
     bool help = false;
 };

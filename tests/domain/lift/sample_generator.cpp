@@ -1,5 +1,9 @@
 // Writes the C++ for the sample functions, for the build to compile into the
-// test that runs it. Usage: sample_generator OUTPUT.cpp
+// test that runs it. Usage: sample_generator OUTPUT.cpp [CODE-DIGEST]
+//
+// With a digest the file also exports the two functions a lifted library does,
+// so that it can be built as one and opened the way the real one is.
+#include "application/lift_emit.h"
 #include "domain/lift/control_flow.h"
 #include "domain/lift/emit.h"
 
@@ -35,8 +39,8 @@ std::vector<std::uint8_t> Bytes() {
 
 int main(int argc, char** argv) {
     const std::span<char*> arguments{argv, static_cast<std::size_t>(argc)};
-    if (arguments.size() != 2) {
-        std::fputs("usage: sample_generator OUTPUT.cpp\n", stderr);
+    if (arguments.size() < 2 || arguments.size() > 3) {
+        std::fputs("usage: sample_generator OUTPUT.cpp [CODE-DIGEST]\n", stderr);
         return 2;
     }
 
@@ -89,5 +93,18 @@ int main(int argc, char** argv) {
     }
     registration += "}\n\n}  // namespace hexlith::domain::lift::sample_lifted\n";
     out << registration;
+    if (arguments.size() == 3) {
+        // The version is the lifter's, and the library is refused when it is not
+        // the one that is running, so the tests that open it say it by name.
+        out << std::format(
+            "\nextern \"C\" {{\n"
+            "const char* hexlith_lifted_manifest() {{ return \"lifter={} code={} functions=4\"; }}\n"
+            "void hexlith_lifted_register(void* table) {{\n"
+            "    hexlith::domain::lift::sample_lifted::Register(\n"
+            "        *static_cast<hexlith::domain::lift::runtime::EntryTable*>(table));\n"
+            "}}\n}}\n",
+            hexlith::application::LifterVersion,
+            arguments[2]);
+    }
     return out.good() ? 0 : 1;
 }

@@ -5,6 +5,7 @@
 #include "adapters/filesystem/gpu_recording_directory.h"
 #include "adapters/filesystem/scripted_input.h"
 #include "adapters/filesystem/workspace_locator.h"
+#include "adapters/lifted/lifted_library.h"
 #include "application/boot.h"
 #include "application/command_line.h"
 #include "application/executed_table.h"
@@ -13,6 +14,7 @@
 #include "application/save_storage.h"
 #include "application/workspace.h"
 #include "domain/arm/interpreter/executed_addresses.h"
+#include "domain/lift/engine.h"
 #include "domain/profile/game_profile.h"
 #include "domain/profile/registry.h"
 
@@ -42,6 +44,7 @@
 namespace {
 
 namespace adapters = hexlith::adapters::filesystem;
+namespace lifted_adapters = hexlith::adapters::lifted;
 namespace application = hexlith::application;
 namespace core = hexlith::core;
 namespace kernel = hexlith::domain::kernel;
@@ -312,6 +315,31 @@ bool AttachSaves(const application::BootOptions& options,
     return true;
 }
 
+// The lifted library and the engine that runs it, kept alive for the run.
+struct LiftedCode {
+    std::unique_ptr<lifted_adapters::LiftedLibrary> library;
+    std::unique_ptr<hexlith::domain::lift::Engine> engine;
+};
+
+bool AttachLifted(const application::BootOptions& options,
+                  application::BootedTitle& title,
+                  LiftedCode& lifted) {
+    if (!options.lifted.has_value()) {
+        return true;
+    }
+    core::Result<std::unique_ptr<lifted_adapters::LiftedLibrary>> opened =
+        lifted_adapters::LiftedLibrary::Open(*options.lifted, title.CodeDigest());
+    if (!opened) {
+        Report(opened.Failure().Message());
+        return false;
+    }
+    lifted.library = std::move(opened.Value());
+    lifted.engine = std::make_unique<hexlith::domain::lift::Engine>(lifted.library->Entries());
+    title.Kernel().UseLiftedCode(lifted.engine.get());
+    std::cout << std::format("lifted  {}, {}\n", *options.lifted, lifted.library->Manifest());
+    return true;
+}
+
 // The main executable's share of what the run executed, written beside the
 // other things derived from the title.
 core::Status WriteExecuted(const application::Workspace& workspace,
@@ -404,6 +432,11 @@ int Run(const application::BootOptions& options) {
         running.ObserveExecution(&executed);
     }
 
+    LiftedCode lifted_code;
+    if (!AttachLifted(options, title, lifted_code)) {
+        return Failure;
+    }
+
     const auto began = std::chrono::steady_clock::now();
     const kernel::KernelStop stop = running.Run(options.instruction_limit);
     const double seconds =
@@ -433,6 +466,20 @@ int Run(const application::BootOptions& options) {
                              seconds,
                              static_cast<double>(running.Executed()) / seconds / Million);
 
+    const double guest_seconds = std::chrono::duration<double>(running.GuestTime()).count();
+    std::cout << std::format(
+        "guest   {:.2f} s running the game's code: {:.1f} million instructions a second\n",
+        guest_seconds,
+        static_cast<double>(running.Executed()) / guest_seconds / Million);
+    if (lifted_code.engine != nullptr) {
+        const auto& counted = lifted_code.engine->Counted();
+        std::cout << std::format("lifted  {} entries into lifted code, {} instructions interpreted "
+                                 "({:.2f}%)\n",
+                                 counted.entries,
+                                 counted.interpreted,
+                                 100.0 * static_cast<double>(counted.interpreted) /
+                                     static_cast<double>(running.Executed()));
+    }
     if (options.compare.has_value() && !Compare(title, *options.compare)) {
         return Failure;
     }

@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace hexlith::application {
@@ -73,6 +74,12 @@ public:
     // it is in. The source must outlive the title.
     void UseInput(ports::InputSource& source);
 
+    // SHA-256 of the executable's code as it was loaded, which lifted code is
+    // checked against.
+    [[nodiscard]] const std::string& CodeDigest() const {
+        return code_digest_;
+    }
+
     // gsp::Gpu, which keeps the count of frames.
     [[nodiscard]] const domain::services::Graphics& Gpu() const {
         return *graphics_;
@@ -88,6 +95,7 @@ private:
     core::Status Start(core::ByteSpan code);
 
     domain::ctr::ExHeader header_;
+    std::string code_digest_;
     core::ByteSpan romfs_;
     domain::kernel::Kernel kernel_;
     domain::services::ServiceRegistry registry_;

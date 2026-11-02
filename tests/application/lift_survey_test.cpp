@@ -97,8 +97,16 @@ TEST(ParseLiftCommandLine, TakesTheSurveyAndTheWorkDirectory) {
     EXPECT_EQ(options.Value().work_directory, "/work");
 }
 
+TEST(ParseLiftCommandLine, TakesEmitAndWhereToPutIt) {
+    const std::vector<std::string_view> arguments = {"--emit", "--out", "/work/lift"};
+    const core::Result<LiftOptions> options = ParseLiftCommandLine(arguments);
+    ASSERT_TRUE(options.Ok()) << options.Failure().Message();
+    EXPECT_TRUE(options.Value().emit);
+    EXPECT_EQ(options.Value().output, "/work/lift");
+}
+
 TEST(ParseLiftCommandLine, RefusesWhatItDoesNotKnow) {
-    const std::vector<std::string_view> unknown = {"--emit"};
+    const std::vector<std::string_view> unknown = {"--lift"};
     EXPECT_FALSE(ParseLiftCommandLine(unknown).Ok());
     const std::vector<std::string_view> loose = {"/work"};
     EXPECT_FALSE(ParseLiftCommandLine(loose).Ok());
