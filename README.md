@@ -6,7 +6,7 @@ The goal is to run the game natively rather than emulate it: translate its ARM11
 
 ## Status
 
-Early. Nothing is playable, and the game runs only as far as its first module, interpreted and with no picture or sound.
+Early. Nothing is playable yet. The game boots to its title screen and can be shown in a window as it runs, its main executable as lifted C++ and its modules interpreted, with no sound.
 
 What works is extraction. `hexlith-extract` validates a cartridge image against a game profile and writes its contents into a working directory: the extended header, the ExeFS with its executable decompressed, the RomFS as a directory tree, and a manifest of every file with its hash. Two runs produce identical manifests. [`docs/extraction.md`](docs/extraction.md) describes it.
 
@@ -14,13 +14,17 @@ Analysis works too. `hexlith-analyze` reads an extraction and works out which by
 
 Under it is a complete ARMv6K, Thumb and VFPv2 decoder, checked against an independent disassembler over five million random words and over the whole executable, which agrees on every instruction and on every branch target. [`docs/arm-decoder.md`](docs/arm-decoder.md) records what that comparison caught.
 
-On top of the decoder is an interpreter for ARM, Thumb and VFPv2 floating point, the executable reference the generated code will be held to. It shares one library of primitive operations with the code the lifter will emit, and it agrees with Unicorn's ARM11 model on every one of 811,391 random and real instructions it was compared on. [`docs/arm-interpreter.md`](docs/arm-interpreter.md) describes it and what the comparison caught.
+On top of the decoder is an interpreter for ARM, Thumb and VFPv2 floating point, the executable reference the lifted code is held to. It shares one library of primitive operations with the code the lifter emits, and it agrees with Unicorn's ARM11 model on every one of 811,391 random and real instructions it was compared on. [`docs/arm-interpreter.md`](docs/arm-interpreter.md) describes it and what the comparison caught.
 
 The CRO modules can be linked offline the way the console's `ldr:ro` service links them: given the modules and the addresses chosen for them, Hexlith works out what every relocated word holds. Its reading of the import tables agrees with every count Azahar logged over three runs, and the words it computes agree with the memory of a module Azahar had loaded, on all 2,880 that were compared. [`docs/cro-linking.md`](docs/cro-linking.md) describes it.
 
 The game boots to its title screen. `hexlith-boot` runs it from its entry point on the interpreter, under a reimplemented kernel with a deterministic scheduler and the services its boot reaches, with the player's input read from a script of frames. A new game formats its save data, goes through the language selection on two presses of A, unloads that module and loads the title screen's three, 42 million instructions and 227 frames in about two seconds. Each module, header and tables included, and the buffer the unload gives back match Azahar's memory at the same instant byte for byte, and two runs give the same instructions and the same golden trace. The run can write a golden trace to compare with Azahar's and a recording of the GPU's work for drawing later. [`docs/ipc.md`](docs/ipc.md), [`docs/cro-linking.md`](docs/cro-linking.md) and [`docs/golden-traces.md`](docs/golden-traces.md) describe it.
 
-The repository also holds the project's guardrails, its build skeleton, its architecture and decision records, and verified notes on the cartridge formats. Lifting is the next piece of work.
+The screens are drawn. A reference renderer that, sampling textures as Azahar does, agrees with Azahar's software renderer on every step of a recording, and a Vulkan backend held to it within a measured tolerance, draw what the title asks for, and `hexlith-boot --window` shows both screens as the title runs, with the player at the keyboard and mouse. [`docs/gpu-reference.md`](docs/gpu-reference.md) describes how the two are held to each other.
+
+The main executable is lifted. `hexlith-lift` writes its functions out as C++, over 22,000 of them, which is built into a library in the workspace and run by `hexlith-boot --lifted`, with the interpreter taking the instructions the lifter does not translate. The boot to the title screen executes the same 41,972,790 instructions as on the interpreter, with every thread and every mapped page agreeing, and spends about 0.3 s in the game's own code against 1.6 s interpreted. [`docs/lifter.md`](docs/lifter.md) describes it and what it measured.
+
+The repository also holds the project's guardrails, its build skeleton, its architecture and decision records, and verified notes on the cartridge formats. Lifting the 133 CRO modules is the next piece of work.
 
 The design is documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), the decisions behind it in [`docs/adr/`](docs/adr/), and the formats in [`docs/formats/`](docs/formats/). Those documents mark what exists against what is planned.
 
@@ -40,11 +44,12 @@ It is not affiliated with or endorsed by Nintendo, Game Freak or The Pokémon Co
 
 ## Building
 
-Requires a C++20 compiler, CMake 3.25 or later, Ninja, OpenSSL, Vulkan, glslang and GoogleTest. On Fedora:
+Requires a C++20 compiler, CMake 3.25 or later, Ninja, OpenSSL, Vulkan, glslang, SDL3 and GoogleTest. On Fedora:
 
 ```sh
 sudo dnf install gcc-c++ cmake ninja-build gtest-devel openssl-devel ccache pre-commit \
-    vulkan-headers vulkan-loader-devel glslang-devel mesa-vulkan-drivers vulkan-validation-layers
+    vulkan-headers vulkan-loader-devel glslang-devel sdl3-devel \
+    mesa-vulkan-drivers vulkan-validation-layers
 ```
 
 ```sh
@@ -54,7 +59,34 @@ cmake --build --preset debug
 ctest --preset debug
 ```
 
-[`AGENTS.md`](AGENTS.md) covers the conventions, the workflow and the commit rules.
+[`AGENTS.md`](AGENTS.md) covers the conventions, the workflow and the commit rules, and the tools the oracle comparisons need beyond the build.
+
+## Running it
+
+You need a decrypted image of your own Pokémon X cartridge. The tools read it from a ROM directory and write everything derived from it into a work directory, both outside this repository. Name them once in `~/.config/hexlith/workspace.conf`:
+
+```
+rom_dir = /path/to/rom
+work_dir = /path/to/work
+```
+
+`--rom-dir` and `--work-dir`, or `HEXLITH_ROM_DIR` and `HEXLITH_WORK_DIR`, do the same for one run. [ADR 0008](docs/adr/0008-workspace-configuration.md) has the rules. Then, from the build directory:
+
+```sh
+tools/hexlith-extract/hexlith-extract               # unpack the cartridge into the work directory
+tools/hexlith-analyze/hexlith-analyze               # find the code and the functions
+tools/hexlith-boot/hexlith-boot --window            # run it, interpreted, in a window
+```
+
+To run the main executable as lifted code, write it out, build it, and give `hexlith-boot` the library:
+
+```sh
+tools/hexlith-lift/hexlith-lift --emit              # into <work>/<title>/lift
+../../scripts/build-lifted.sh <work>/<title>/lift   # about six minutes on eight cores
+tools/hexlith-boot/hexlith-boot --window --lifted <work>/<title>/lift/build/libhexlith_lifted.so
+```
+
+Every tool takes `--help`.
 
 ## License
 
