@@ -177,6 +177,111 @@ EntriesOutsideEveryFunction(std::span<const analysis::FunctionRange> functions,
     return entries;
 }
 
+// The entry point, plus every exported function with the instruction set its
+// exported address settled.
+std::vector<analysis::WalkSeed> SeedsFromImage(const domain::profile::GameProfile& profile,
+                                               const analysis::SeededTables& seeded) {
+    std::vector<analysis::WalkSeed> seeds;
+    seeds.reserve(seeded.functions.size() + 1);
+    seeds.push_back(analysis::WalkSeed{.address = profile.text.address,
+                                       .instruction_set = domain::arm::InstructionSet::Arm,
+                                       .source = analysis::Provenance::ExHeader});
+    for (const analysis::FunctionRange& function : seeded.functions) {
+        seeds.push_back(analysis::WalkSeed{.address = function.address,
+                                           .instruction_set = function.instruction_set,
+                                           .source = analysis::Provenance::CrsExport});
+    }
+    return seeds;
+}
+
+analysis::WalkOptions WalkOptionsFor(const AnalyzeRequest& request) {
+    const domain::profile::GameProfile& profile = *request.profile;
+    analysis::WalkOptions options;
+    options.follow_literal_pointers = true;
+    options.code_begin = profile.text.address;
+    options.code_end = profile.text.address + profile.text.size;
+    if (request.sweep_data_for_entry_points) {
+        options.pointer_scan_begin = profile.read_only.address;
+        options.pointer_scan_end =
+            static_cast<std::uint32_t>(profile.text.address + request.code.size());
+    }
+    return options;
+}
+
+// Every seed is the start of a function as well as a place to walk from. The
+// walk records only the functions it finds by following a call, so an
+// exported function nothing in the image calls would otherwise have no
+// record. The seeds come first, so that where both name an address, the
+// record keeps the provenance of the seed.
+std::vector<analysis::FunctionRange> EntriesOf(std::span<const analysis::WalkSeed> seeds,
+                                               const analysis::WalkResult& walked) {
+    std::vector<analysis::FunctionRange> entries;
+    entries.reserve(seeds.size() + walked.functions.size());
+    for (const analysis::WalkSeed& seed : seeds) {
+        // Having run says nothing about where a function starts. The runs no
+        // function covers are made entries later, once the extents are known.
+        if (seed.source == analysis::Provenance::Observed) {
+            continue;
+        }
+        entries.push_back(analysis::FunctionRange{.address = seed.address,
+                                                  .size = analysis::UnknownSize,
+                                                  .instruction_set = seed.instruction_set,
+                                                  .alternate_entries = {},
+                                                  .source = seed.source});
+    }
+    entries.insert(entries.end(), walked.functions.begin(), walked.functions.end());
+    return entries;
+}
+
+// The functions' extents, with an entry made for each run of executed
+// instructions that starts outside every function.
+//
+// A run that starts outside every function the image gave or a guess found
+// is code that something enters which nothing in the image names. Lifted
+// code can be entered at any of its blocks (ADR 0025), and only a function
+// is lifted, so the start of such a run becomes an entry of its own. Runs
+// that start inside a known function are left to it.
+//
+// A run can hold more than one function, one ending where the next
+// begins, and only the extent of the first is measured from its start; so
+// this is repeated until every executed instruction is in some extent, or
+// the rounds run out.
+// An entry whose extent cannot be measured stays outside every extent, so
+// what was added once is not added again.
+analysis::BoundsResult BoundsWithObservedEntries(const analysis::WalkImage& image,
+                                                 std::vector<analysis::FunctionRange>& entries,
+                                                 const analysis::WalkResult& walked,
+                                                 std::span<const analysis::WalkSeed> observed,
+                                                 AnalyzeReport& report) {
+    analysis::BoundsResult bounds = analysis::FindFunctionBounds(image, entries, walked.regions);
+    constexpr int MostRounds = 8;
+    std::set<std::uint32_t> added;
+    for (int round = 0; round < MostRounds; ++round) {
+        std::vector<analysis::FunctionRange> unclaimed =
+            EntriesOutsideEveryFunction(bounds.functions, observed);
+        std::erase_if(unclaimed, [&added](const analysis::FunctionRange& entry) {
+            return !added.insert(entry.address).second;
+        });
+        if (unclaimed.empty()) {
+            break;
+        }
+        report.observed_functions += unclaimed.size();
+        entries.insert(entries.end(), unclaimed.begin(), unclaimed.end());
+        bounds = analysis::FindFunctionBounds(image, entries, walked.regions);
+    }
+    return bounds;
+}
+
+std::uint32_t CodeBytes(std::span<const analysis::Region> regions) {
+    std::uint32_t bytes = 0;
+    for (const analysis::Region& region : regions) {
+        if (region.kind == analysis::RegionKind::Code) {
+            bytes += region.size;
+        }
+    }
+    return bytes;
+}
+
 // One line per address that two paths disagree about, with how many paths ran
 // into it and the instruction set a run executed it in, if one did, so that
 // each one can be read and checked against another tool.
@@ -243,18 +348,7 @@ Analyze(const AnalyzeRequest& request, const ExistingTables& existing, ports::Bl
             profile.text.size)};
     }
 
-    // The entry point, plus every exported function with the instruction set its
-    // exported address settled.
-    std::vector<analysis::WalkSeed> seeds;
-    seeds.reserve(seeded.Value().functions.size() + 1);
-    seeds.push_back(analysis::WalkSeed{.address = profile.text.address,
-                                       .instruction_set = domain::arm::InstructionSet::Arm,
-                                       .source = analysis::Provenance::ExHeader});
-    for (const analysis::FunctionRange& function : seeded.Value().functions) {
-        seeds.push_back(analysis::WalkSeed{.address = function.address,
-                                           .instruction_set = function.instruction_set,
-                                           .source = analysis::Provenance::CrsExport});
-    }
+    std::vector<analysis::WalkSeed> seeds = SeedsFromImage(profile, seeded.Value());
 
     // What the modules import from the main executable's code. These are facts
     // the loader acts on, unlike the words the sweep below guesses at.
@@ -280,78 +374,17 @@ Analyze(const AnalyzeRequest& request, const ExistingTables& existing, ports::Bl
     report.observed_seeds = observed_seeds.size();
     seeds.insert(seeds.end(), observed_seeds.begin(), observed_seeds.end());
 
-    const auto image_end = static_cast<std::uint32_t>(profile.text.address + request.code.size());
-    analysis::WalkOptions options;
-    options.follow_literal_pointers = true;
-    options.code_begin = profile.text.address;
-    options.code_end = profile.text.address + profile.text.size;
-    if (request.sweep_data_for_entry_points) {
-        options.pointer_scan_begin = profile.read_only.address;
-        options.pointer_scan_end = image_end;
-    }
-
-    const analysis::WalkResult walked = analysis::WalkCode(image, seeds, options);
+    const analysis::WalkResult walked = analysis::WalkCode(image, seeds, WalkOptionsFor(request));
     report.walk = walked.report;
 
-    // Every seed is the start of a function as well as a place to walk from. The
-    // walk records only the functions it finds by following a call, so an
-    // exported function nothing in the image calls would otherwise have no
-    // record. The seeds come first, so that where both name an address, the
-    // record keeps the provenance of the seed.
-    std::vector<analysis::FunctionRange> entries;
-    entries.reserve(seeds.size() + walked.functions.size());
-    for (const analysis::WalkSeed& seed : seeds) {
-        // Having run says nothing about where a function starts. The runs no
-        // function covers are made entries below, once the extents are known.
-        if (seed.source == analysis::Provenance::Observed) {
-            continue;
-        }
-        entries.push_back(analysis::FunctionRange{.address = seed.address,
-                                                  .size = analysis::UnknownSize,
-                                                  .instruction_set = seed.instruction_set,
-                                                  .alternate_entries = {},
-                                                  .source = seed.source});
-    }
-    entries.insert(entries.end(), walked.functions.begin(), walked.functions.end());
-
-    analysis::BoundsResult bounds = analysis::FindFunctionBounds(image, entries, walked.regions);
-
-    // A run that starts outside every function the image gave or a guess found
-    // is code that something enters which nothing in the image names. Lifted
-    // code can be entered at any of its blocks (ADR 0025), and only a function
-    // is lifted, so the start of such a run becomes an entry of its own. Runs
-    // that start inside a known function are left to it.
-    //
-    // A run can hold more than one function, one ending where the next
-    // begins, and only the extent of the first is measured from its start; so
-    // this is repeated until every executed instruction is in some extent, or
-    // the rounds run out.
-    // An entry whose extent cannot be measured stays outside every extent, so
-    // what was added once is not added again.
-    constexpr int MostRounds = 8;
-    std::set<std::uint32_t> added;
-    for (int round = 0; round < MostRounds; ++round) {
-        std::vector<analysis::FunctionRange> unclaimed =
-            EntriesOutsideEveryFunction(bounds.functions, observed_seeds);
-        std::erase_if(unclaimed, [&added](const analysis::FunctionRange& entry) {
-            return !added.insert(entry.address).second;
-        });
-        if (unclaimed.empty()) {
-            break;
-        }
-        report.observed_functions += unclaimed.size();
-        entries.insert(entries.end(), unclaimed.begin(), unclaimed.end());
-        bounds = analysis::FindFunctionBounds(image, entries, walked.regions);
-    }
+    std::vector<analysis::FunctionRange> entries = EntriesOf(seeds, walked);
+    const analysis::BoundsResult bounds =
+        BoundsWithObservedEntries(image, entries, walked, observed_seeds, report);
     report.bounds = bounds.report;
     CountSettledConflicts(report, observed.Value());
 
     report.text_bytes = profile.text.size;
-    for (const analysis::Region& region : walked.regions) {
-        if (region.kind == analysis::RegionKind::Code) {
-            report.code_bytes += region.size;
-        }
-    }
+    report.code_bytes = CodeBytes(walked.regions);
 
     // Everything derived is merged into what is already written, which keeps a
     // name a person gave an address from being replaced by one derived for it.
