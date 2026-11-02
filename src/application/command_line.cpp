@@ -26,6 +26,9 @@ constexpr std::string_view SurveyOption = "--survey";
 constexpr std::string_view EmitOption = "--emit";
 constexpr std::string_view ExecutedOption = "--executed";
 constexpr std::string_view RecordGpuOption = "--record-gpu";
+constexpr std::string_view WindowOption = "--window";
+constexpr std::string_view BackendOption = "--backend";
+constexpr std::string_view DeviceOption = "--device";
 constexpr std::string_view RecordExecutedOption = "--record-executed";
 constexpr std::string_view LiftedOption = "--lifted";
 
@@ -333,7 +336,35 @@ bool* BootFlag(BootOptions& options, std::string_view argument) {
     if (argument == RecordExecutedOption) {
         return &options.record_executed;
     }
+    if (argument == WindowOption) {
+        return &options.window;
+    }
     return nullptr;
+}
+
+core::Status
+TakeBackend(std::span<const std::string_view> arguments, std::size_t& index, bool& vulkan) {
+    std::optional<std::string> name;
+    const core::Status taken = TakeValue(arguments, index, name);
+    if (!taken) {
+        return taken;
+    }
+    if (*name != "reference" && *name != "vulkan") {
+        return core::Error{
+            std::format("{} is either reference or vulkan, not '{}'", BackendOption, *name)};
+    }
+    vulkan = *name == "vulkan";
+    return {};
+}
+
+core::Status
+TakeDevice(std::span<const std::string_view> arguments, std::size_t& index, std::string& device) {
+    std::optional<std::string> name;
+    const core::Status taken = TakeValue(arguments, index, name);
+    if (taken) {
+        device = *name;
+    }
+    return taken;
 }
 
 }  // namespace
@@ -369,6 +400,10 @@ core::Result<BootOptions> ParseBootCommandLine(std::span<const std::string_view>
             taken = TakeValue(arguments, index, options.lifted);
         } else if (argument == StopAfterOption) {
             taken = TakeStopPoint(arguments, index, options.stop_after);
+        } else if (argument == BackendOption) {
+            taken = TakeBackend(arguments, index, options.vulkan);
+        } else if (argument == DeviceOption) {
+            taken = TakeDevice(arguments, index, options.device);
         } else if (argument.starts_with("-")) {
             return core::Error{std::format("{} is not an option this tool knows", argument)};
         } else {
@@ -382,6 +417,12 @@ core::Result<BootOptions> ParseBootCommandLine(std::span<const std::string_view>
         }
     }
 
+    if (options.window && options.record_gpu) {
+        return core::Error{std::format("{} and {} both take the GPU's events, so only one of them "
+                                       "can be given",
+                                       WindowOption,
+                                       RecordGpuOption)};
+    }
     if (limit.has_value()) {
         const core::Result<std::uint64_t> count = ParseCount(LimitOption, *limit);
         if (!count) {
@@ -410,6 +451,9 @@ std::string BootUsage() {
         "  {} <event>  stop once ldr:ro has done cro-load:<module> or cro-unload:<module>,\n"
         "                       or once frame:<number> has begun\n"
         "  {}         record the GPU's work under <work-dir>/<title>/gpu\n"
+        "  {}               show the screens in a window as the title draws them\n"
+        "  {} <name>       what draws for the window: reference (the default) or vulkan\n"
+        "  {} <name>        the Vulkan device to use, by a part of its name\n"
         "  {}   count the instructions executed, by address, under <work-dir>/<title>/observed\n"
         "  {} <path>      run through the lifted library at that path where it covers the code\n"
         "  {}               this text\n"
@@ -431,6 +475,9 @@ std::string BootUsage() {
         InputOption,
         StopAfterOption,
         RecordGpuOption,
+        WindowOption,
+        BackendOption,
+        DeviceOption,
         RecordExecutedOption,
         LiftedOption,
         HelpOption,

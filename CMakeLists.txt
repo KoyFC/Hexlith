@@ -36,6 +36,9 @@ find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 find_package(Vulkan REQUIRED)
 find_package(glslang CONFIG REQUIRED)
 
+# The window the live display is shown in. ADR 0027.
+find_package(SDL3 CONFIG REQUIRED)
+
 include(HexlithCompilerCache)
 include(HexlithWarnings)
 

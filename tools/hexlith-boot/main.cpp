@@ -6,11 +6,15 @@
 #include "adapters/filesystem/scripted_input.h"
 #include "adapters/filesystem/workspace_locator.h"
 #include "adapters/lifted/lifted_library.h"
+#include "adapters/sdl/sdl_window.h"
+#include "adapters/vulkan/vulkan_backend.h"
 #include "application/boot.h"
 #include "application/command_line.h"
 #include "application/executed_table.h"
 #include "application/golden_trace.h"
 #include "application/gpu_recording.h"
+#include "application/gpu_render.h"
+#include "application/live_display.h"
 #include "application/save_storage.h"
 #include "application/workspace.h"
 #include "domain/arm/interpreter/executed_addresses.h"
@@ -276,14 +280,27 @@ bool AttachGolden(const application::BootOptions& options,
     return true;
 }
 
+// What is asked of every vertical blank: stop at the frame --stop-after named,
+// and stop when the window is closed.
+void WatchVerticalBlanks(const application::BootOptions& options,
+                         application::BootedTitle& title,
+                         const hexlith::ports::ScreenSink* sink) {
+    using Kind = application::BootStopPoint::Kind;
+    const bool at_frame = options.stop_after.has_value() && options.stop_after->kind == Kind::Frame;
+    if (!at_frame && sink == nullptr) {
+        return;
+    }
+    const std::uint64_t frame_to_stop = at_frame ? options.stop_after->frame : 0;
+    title.Gpu().OnVerticalBlank([at_frame, frame_to_stop, sink, &title](std::uint64_t frame) {
+        if ((at_frame && frame == frame_to_stop) || (sink != nullptr && sink->StopRequested())) {
+            title.Kernel().RequestStop();
+        }
+    });
+}
+
 void StopAfter(const application::BootStopPoint& point, application::BootedTitle& title) {
     using Kind = application::BootStopPoint::Kind;
     if (point.kind == Kind::Frame) {
-        title.Gpu().OnVerticalBlank([point, &title](std::uint64_t frame) {
-            if (frame == point.frame) {
-                title.Kernel().RequestStop();
-            }
-        });
         return;
     }
     using Event = hexlith::domain::services::RelocatableObjects::ModuleEvent;
@@ -294,6 +311,62 @@ void StopAfter(const application::BootStopPoint& point, application::BootedTitle
             title.Kernel().RequestStop();
         }
     });
+}
+
+// What shows the title on screen while it runs: the memory and the backend that
+// draw into it, the window, and the display that feeds them. Kept alive for the
+// run, in the order they depend on each other.
+struct Display {
+    std::unique_ptr<hexlith::domain::gpu::GpuMemory> memory;
+    std::unique_ptr<hexlith::adapters::vulkan::VulkanContext> context;
+    std::unique_ptr<hexlith::ports::GpuBackend> backend;
+    std::unique_ptr<hexlith::adapters::sdl::SdlWindow> window;
+    std::unique_ptr<hexlith::application::LiveDisplay> display;
+    std::unique_ptr<application::GpuRecording> feed;
+};
+
+constexpr int WindowScale = 2;
+
+bool AttachWindow(const application::BootOptions& options,
+                  application::BootedTitle& title,
+                  Display& shown) {
+    namespace gpu = hexlith::domain::gpu;
+    namespace vulkan = hexlith::adapters::vulkan;
+    if (!options.window) {
+        return true;
+    }
+    shown.memory = std::make_unique<gpu::GpuMemory>();
+    if (options.vulkan) {
+        auto made = vulkan::VulkanContext::Create({.device = options.device, .validation = false});
+        if (!made) {
+            Report(made.Failure().Message());
+            return false;
+        }
+        shown.context = std::move(made.Value());
+        auto backend = vulkan::VulkanGpuBackend::Create(*shown.context,
+                                                        *shown.memory,
+                                                        gpu::Sampling::Hardware,
+                                                        vulkan::VertexShading::GpuWherePossible);
+        if (!backend) {
+            Report(backend.Failure().Message());
+            return false;
+        }
+        shown.backend = std::move(backend.Value());
+    } else {
+        shown.backend = std::make_unique<application::ReferenceGpuBackend>(*shown.memory,
+                                                                           gpu::Sampling::Hardware);
+    }
+    auto window = hexlith::adapters::sdl::SdlWindow::Create("Hexlith", WindowScale);
+    if (!window) {
+        Report(window.Failure().Message());
+        return false;
+    }
+    shown.window = std::move(window.Value());
+    shown.display =
+        std::make_unique<application::LiveDisplay>(*shown.memory, *shown.backend, *shown.window);
+    shown.feed = std::make_unique<application::GpuRecording>(title, *shown.display);
+    std::cout << std::format("window  {}\n", shown.display->Describe());
+    return true;
 }
 
 // The save data outlives the run unless this is a new game.
@@ -415,6 +488,11 @@ int Run(const application::BootOptions& options) {
     if (options.stop_after.has_value()) {
         StopAfter(*options.stop_after, title);
     }
+    Display shown;
+    if (!AttachWindow(options, title, shown)) {
+        return Failure;
+    }
+    WatchVerticalBlanks(options, title, shown.window.get());
     adapters::GpuRecordingDirectory gpu{workspace.Value().work_directory.path /
                                         profile::WorkspaceDirectoryName(*target) / GpuDirectory};
     std::unique_ptr<application::GpuRecording> recording;
@@ -450,6 +528,13 @@ int Run(const application::BootOptions& options) {
             Report(finished.Failure().Message());
         }
         PrintRecording(recording->Summary(), gpu.Describe());
+    }
+    if (shown.feed != nullptr) {
+        const core::Status finished = shown.feed->Finish();
+        if (!finished) {
+            Report(finished.Failure().Message());
+        }
+        std::cout << std::format("window  {} frames shown\n", shown.display->Presented());
     }
     if (options.record_executed) {
         const core::Status written = WriteExecuted(workspace.Value(), *target, title, executed);

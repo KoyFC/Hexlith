@@ -63,6 +63,8 @@ OpenSSL's development package (`openssl-devel` on Fedora) is required, not optio
 
 Vulkan and glslang are required in the same way, for the GPU backend: `vulkan-headers`, `vulkan-loader-devel` and `glslang-devel` on Fedora. Running what draws needs a Vulkan 1.2 driver, `mesa-vulkan-drivers` at least, whose llvmpipe needs no GPU; `vulkan-validation-layers` lets the tools and tests count validation messages, which have to be none. A test that needs a device skips itself when there is none. ADR 0020.
 
+SDL3 is required for the window `hexlith-boot --window` opens: `sdl3-devel` on Fedora. The tests of the window use SDL's dummy video driver and need no display. ADR 0027.
+
 ## Game data
 
 Facts about the game are fine and are the point of the GameProfile: program IDs, product codes, hashes, addresses, segment layouts, symbol names. Bytes from the cartridge are not: no cartridge image, no extracted content, no CRO module, no disassembly, no decompiled source, no lifted or generated code, no assets.
@@ -91,7 +93,7 @@ tools  ->  adapters  ->  ports  ->  application  ->  domain  ->  core
 - `src/domain` holds pure logic: the ARM model, the memory map, kernel abstractions, the CTR container and CRO formats, the analysis types, the GameProfile. No I/O lives here, which is what makes it testable with synthetic data.
 - `src/application` holds use cases such as extract, validate and analyze.
 - `src/ports` holds the interfaces the outside world is reached through: `RomSource`, `BlobSink`, `GpuBackend`, `AudioSink`, `InputSource`.
-- `src/adapters` holds the implementations of those ports: the filesystem, Vulkan, SDL. `src/adapters/vulkan` is a library of its own, so that only what draws links Vulkan and glslang.
+- `src/adapters` holds the implementations of those ports: the filesystem, Vulkan, SDL. `src/adapters/vulkan` is a library of its own, so that only what draws links Vulkan and glslang, and `src/adapters/sdl` is one so that only what opens a window links SDL.
 - `tools` holds the command-line programs, listed below.
 
 The abstraction belongs at system boundaries. Hot paths, meaning lifted code, memory access and GPU command processing, avoid per-instruction virtual dispatch and use static polymorphism with flat data structures instead. Every such exception is documented where it is made.
@@ -111,7 +113,7 @@ Decisions with consequences are recorded in `docs/adr/` rather than argued again
 - `hexlith-oracle-run` runs a directory of cases through Hexlith's code, so that a script can compare the results with the same cases run through Azahar's.
 - `hexlith-gpu-replay` draws what a GPU recording's screens show in chosen frames, with the reference renderer or the Vulkan backend.
 - `hexlith-lift` cuts the analysed code into blocks and writes the lifted C++ into the workspace.
-- `hexlith-boot` runs the title from its entry point under the HLE kernel and services until something stops it. It can compare the memory it leaves with a capture from Azahar, take its input from a script, keep or ignore the save data, run the lifted library, and write a golden trace, a recording of the GPU's work and a count of the instructions it executed into the workspace.
+- `hexlith-boot` runs the title from its entry point under the HLE kernel and services until something stops it. It can compare the memory it leaves with a capture from Azahar, take its input from a script, keep or ignore the save data, run the lifted library, and write a golden trace, a recording of the GPU's work and a count of the instructions it executed into the workspace, and with `--window` shows the screens in a window as the title draws them.
 
 ## Writing code a human can read
 

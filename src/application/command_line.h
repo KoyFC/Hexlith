@@ -118,6 +118,15 @@ struct BootOptions {
     // docs/formats/gpu-recording.md describes.
     bool record_gpu = false;
 
+    // Shows the screens in a window as the title draws them. It takes the GPU's
+    // events in the place of --record-gpu, which it cannot be combined with.
+    bool window = false;
+
+    // What draws for the window: the reference renderer, or the Vulkan backend
+    // on the device whose name has this in it, or the first one when it is empty.
+    bool vulkan = false;
+    std::string device;
+
     // Counts every instruction the run executes by address and writes the table
     // under <work-dir>/<title>/observed, as docs/analysis-tables.md describes.
     // Slows the run by a virtual call per instruction.

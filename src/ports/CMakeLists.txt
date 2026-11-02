@@ -15,5 +15,6 @@ target_sources(
                                                                            gpu_recording_source.h
                                                                            input_source.h
                                                                            rom_source.h
+                                                                           screen_sink.h
                                                                            tree_store.h
 )

@@ -127,6 +127,27 @@ TEST(ParseBootCommandLine, RunsLongEnoughByDefault) {
     EXPECT_EQ(options.Value().instruction_limit, DefaultBootInstructionLimit);
 }
 
+TEST(ParseBootCommandLine, ShowsAWindowDrawnByTheChosenBackend) {
+    EXPECT_FALSE(ParseBootCommandLine({}).Value().window);
+    const std::vector<std::string_view> arguments = {
+        "--window", "--backend", "vulkan", "--device", "llvmpipe"};
+    const core::Result<BootOptions> options = ParseBootCommandLine(arguments);
+    ASSERT_TRUE(options.Ok()) << options.Failure().Message();
+    EXPECT_TRUE(options.Value().window);
+    EXPECT_TRUE(options.Value().vulkan);
+    EXPECT_EQ(options.Value().device, "llvmpipe");
+}
+
+TEST(ParseBootCommandLine, RefusesABackendItDoesNotKnow) {
+    const std::vector<std::string_view> arguments = {"--backend", "opengl"};
+    EXPECT_FALSE(ParseBootCommandLine(arguments).Ok());
+}
+
+TEST(ParseBootCommandLine, RefusesAWindowAndARecordingTogether) {
+    const std::vector<std::string_view> arguments = {"--window", "--record-gpu"};
+    EXPECT_FALSE(ParseBootCommandLine(arguments).Ok());
+}
+
 TEST(ParseBootCommandLine, RecordsTheExecutedInstructionsWhenAsked) {
     EXPECT_FALSE(ParseBootCommandLine({}).Value().record_executed);
     const std::vector<std::string_view> arguments = {"--record-executed"};
@@ -177,6 +198,9 @@ TEST(BootUsage, NamesEveryOption) {
                                           "--input",
                                           "--stop-after",
                                           "--record-gpu",
+                                          "--window",
+                                          "--backend",
+                                          "--device",
                                           "--help"}) {
         EXPECT_NE(usage.find(option), std::string::npos) << option;
     }
