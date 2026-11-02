@@ -187,3 +187,28 @@ Weighed by a run of two billion instructions, what lifted code still left to the
 Floating point, the exclusive pair, the doubleword transfers, the long and halfword multiplies and the count of leading zeros now lower to one operation, `Execute`: the interpreter's handler for the instruction does its work, called through `arm::ExecuteHandler`. The condition is checked as for any lowered instruction, the operands were checked when it was lowered, and an instruction of these families that writes r15 still goes to the interpreter whole. The generated code writes the decoded instruction out as a `constexpr` literal of `arm::Instruction`, field by field, so the dispatch on the operation is resolved by the compiler. The evaluator runs the same function, so the random differential covers it: 500,000 ARM words and 500,000 Thumb halfwords agreed with the interpreter, as did the boot to frame 227 under `hexlith-lift-verify`.
 
 The gain is small, about four percent of the lifted time: 0.321 to 0.308 s for the boot to frame 227, a ratio of 5.11 to 5.32 on a performance core over eleven runs each. At `-O1` the compiler inlines the dispatch but not the family handlers behind it, `ExecuteFloatingPoint`, `ExecuteTransfer` and the rest, so the registers an instruction names are still read from the instruction at run time. Inlining those as well is the next step for these instructions, and it has to be weighed against the size and the build time of 65,000 sites. The library builds in under six minutes on eight cores.
+
+## Where Phase 8 ended
+
+The phase lifted the main executable and stopped there; the modules are Phase 9. Measured on 2026-11-02, from a new game with the input script `100 tap a`, `200 tap a`:
+
+| | |
+| --- | --- |
+| Boot to frame 227 | 41,972,790 instructions, the same count and the same 1,017,217,878 ticks as the interpreter |
+| Its time in the game's own code | 0.305 s lifted against 1.6 s interpreted, 5.1 to 5.3 times faster on a performance core over eleven runs, 4.8 on an efficiency core |
+| Left to the interpreter outside lifted code | 0.47 percent |
+| Agreement with the interpreter | every thread and every mapped page, compared every 100,000 instructions to frame 227 and every million to 500 million |
+| Executed instructions within a function the analysis knows | 100.00 percent of 729.5 million, over two billion instructions |
+| Boot to frame 1101 | 3.87 billion instructions, 104 s, of which 64 percent interpreted, nearly all of it module code |
+| Building the library | 279 shards, about six minutes on eight cores with ccache, eight to nine cold |
+| The title's screens in a window to frame 227 | 12.6 s on the Intel GPU, 23 s on llvmpipe |
+
+The machine ran faster in the afternoon than in the morning, the interpreter alone by a third, so times from different parts of the day are not comparable with each other and the ratios are.
+
+What is not done, and why:
+
+- **Registers and flags in local variables.** Lifted code reads and writes every register in `CpuState`, and a store to guest memory is a store through a pointer to bytes, which the compiler has to assume may change `CpuState`, so it reads the registers again after each one. It is the largest lever left, and a change to every instruction the emitter writes and to every place lifted code leaves, so it was not started once the gate was met.
+- **The handlers behind the dispatch.** `Execute` calls them out of line at `-O1`; inlining them is the next step for floating point and the exclusive pair, to be weighed against the size of 65,000 call sites.
+- **The fifteen conflicts nothing executes.** Their verdicts are in [`classification.md`](classification.md#the-conflicts-read); one region and a few function records still hold the losing side, at no cost at run time.
+- **The modules**, which are Phase 9 and [ADR 0029](adr/0029-cro-modules-are-lifted-against-a-base-the-loader-gives.md).
+

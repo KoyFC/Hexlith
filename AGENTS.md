@@ -23,9 +23,9 @@ Everything written into the repository is in English: code, identifiers, comment
 
 ## Status
 
-Phase 8, the lifter, for the main executable only. The 133 CRO modules are Phase 9. The phase stops and reports if lifted code runs less than five times faster than the interpreter, or if building the lifted library takes longer than an hour.
+Phase 9, lifting the 133 CRO modules, is next and waits for a plan the maintainer approves. [ADR 0029](docs/adr/0029-cro-modules-are-lifted-against-a-base-the-loader-gives.md) is its starting design, provisional on a count to make first.
 
-Phases 0 to 7 are closed. What each one settled is in `docs/adr/` and the history.
+Phases 0 to 8 are closed. What each one settled is in `docs/adr/` and the history; where Phase 8 ended is at the end of `docs/lifter.md`.
 
 Each phase starts from a plan the maintainer approves, with its scope, its sequence of commits and a milestone that can be checked. Work stops when the milestone is met and the result is reported. When a phase closes, this section is rewritten. It stays a few lines long; findings belong in `docs/` and decisions in `docs/adr/`.
 
