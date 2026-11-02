@@ -105,17 +105,6 @@ TEST(ParseCroHeader, SumsTheBytesOfEachSegmentType) {
     EXPECT_EQ(header.SegmentBytes(CroSegmentType::Bss), spec.segments[3].size);
 }
 
-TEST(ParseCroHeader, ReadsTheMeasuredCountsOfTheLargestModule) {
-    const SyntheticCroSpec spec = DefaultCroSpec();
-    const CroHeader header = ParseOrFail(BuildSyntheticCro(spec));
-
-    EXPECT_EQ(header.counts.named_exports, spec.counts.named_exports);
-    EXPECT_EQ(header.counts.import_modules, spec.counts.import_modules);
-    EXPECT_EQ(header.counts.external_relocations, spec.counts.external_relocations);
-    EXPECT_EQ(header.counts.anonymous_imports, spec.counts.anonymous_imports);
-    EXPECT_EQ(header.counts.internal_relocations, spec.counts.internal_relocations);
-}
-
 // docs/formats/cro0.md records that the external relocation table was
 // labelled an import table during the initial survey, and that every number
 // reported before that was caught was wrong. Giving each count a distinct

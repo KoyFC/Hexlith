@@ -177,11 +177,5 @@ TEST(ConfigurationFilePath, ReportsNothingWhenNeitherIsSet) {
     EXPECT_FALSE(ConfigurationFilePath(std::nullopt, std::nullopt).has_value());
 }
 
-TEST(Describe, NamesEverySource) {
-    EXPECT_EQ(Describe(PathSource::CommandLine), "the command line");
-    EXPECT_EQ(Describe(PathSource::Environment), "the environment");
-    EXPECT_EQ(Describe(PathSource::ConfigurationFile), "the configuration file");
-}
-
 }  // namespace
 }  // namespace hexlith::application

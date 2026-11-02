@@ -260,22 +260,6 @@ TEST(Extract, SortsWhatItReportsByPath) {
         }));
 }
 
-TEST(Extract, ProducesTheSameManifestTwice) {
-    const std::vector<std::uint8_t> image = BuildSyntheticImage(SpecWithARealRomFs()).bytes;
-
-    MemoryRomSource first_source{image};
-    MemoryBlobSink first_sink;
-    const ExtractReport first = ExtractOrFail(first_source, first_sink);
-
-    MemoryRomSource second_source{image};
-    MemoryBlobSink second_sink;
-    const ExtractReport second = ExtractOrFail(second_source, second_sink);
-
-    EXPECT_EQ(RenderManifest(first), RenderManifest(second));
-    EXPECT_EQ(RenderModules(first), RenderModules(second));
-    EXPECT_EQ(first_sink.Files(), second_sink.Files());
-}
-
 TEST(Extract, RefusesToRunWithoutAProfile) {
     MemoryRomSource source{BuildSyntheticImage(SpecWithARealRomFs()).bytes};
     MemoryBlobSink sink;

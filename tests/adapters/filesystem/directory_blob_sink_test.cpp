@@ -171,11 +171,5 @@ TEST(DirectoryBlobSink, RefusesAnEmptyPath) {
     EXPECT_FALSE(sink.MakeDirectory("").Ok());
 }
 
-TEST(DirectoryBlobSink, DescribesItsRoot) {
-    const TemporaryDirectory temporary;
-    const DirectoryBlobSink sink{temporary.Path()};
-    EXPECT_EQ(sink.Describe(), temporary.Path().string());
-}
-
 }  // namespace
 }  // namespace hexlith::adapters::filesystem

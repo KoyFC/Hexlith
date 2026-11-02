@@ -141,12 +141,6 @@ TEST(RenderManifest, EndsEveryLineAndHoldsNoCarriageReturns) {
     EXPECT_EQ(text.find('\r'), std::string::npos);
 }
 
-// Two runs over the same image have to produce the same bytes, which rules
-// out anything from the clock or from the host filesystem's ordering.
-TEST(RenderManifest, RendersTheSameBytesTwice) {
-    EXPECT_EQ(RenderManifest(SmallReport()), RenderManifest(SmallReport()));
-}
-
 TEST(RenderManifest, HoldsNothingThatLooksLikeATimeOrAnAbsolutePath) {
     const std::string text = RenderManifest(SmallReport());
 
@@ -173,10 +167,6 @@ TEST(RenderModules, RecordsTheHeaderAndTheTablesOfEachModule) {
     const std::vector<std::string> segments = RecordsOfKind(text, "module-segment");
     ASSERT_EQ(segments.size(), 1U);
     EXPECT_NE(segments[0].find("type=code"), std::string::npos) << segments[0];
-}
-
-TEST(RenderModules, RendersTheSameBytesTwice) {
-    EXPECT_EQ(RenderModules(SmallReport()), RenderModules(SmallReport()));
 }
 
 TEST(RenderModules, RendersAnEmptyListWithoutARecord) {

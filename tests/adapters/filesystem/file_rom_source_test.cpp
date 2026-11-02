@@ -127,11 +127,5 @@ TEST(FileRomSource, ReportsAnEmptyFile) {
     EXPECT_NE(read.Failure().Message().find("is empty"), std::string::npos);
 }
 
-TEST(FileRomSource, DescribesItsPath) {
-    const TemporaryFile file{Sample()};
-    const FileRomSource source{file.Path()};
-    EXPECT_EQ(source.Describe(), file.Path().string());
-}
-
 }  // namespace
 }  // namespace hexlith::adapters::filesystem

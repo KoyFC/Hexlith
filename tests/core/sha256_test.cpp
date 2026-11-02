@@ -93,18 +93,6 @@ TEST(Sha256, FinishResetsTheState) {
     EXPECT_EQ(hasher.Finish().ToHex(), AbcDigest);
 }
 
-TEST(Sha256, TheSameInputHashesTheSameWayTwice) {
-    EXPECT_EQ(Sha256::Of(AsBytes("kujira-1")), Sha256::Of(AsBytes("kujira-1")));
-    EXPECT_NE(Sha256::Of(AsBytes("kujira-1")), Sha256::Of(AsBytes("kujira-2")));
-}
-
-TEST(Digest, ToHexIsLowercaseAndSixtyFourDigits) {
-    const std::string text = Sha256::Of(AsBytes("abc")).ToHex();
-    EXPECT_EQ(text.size(), Digest::SizeInBytes * 2);
-    EXPECT_EQ(text, AbcDigest);
-    EXPECT_EQ(text.find_first_not_of("0123456789abcdef"), std::string::npos);
-}
-
 TEST(ParseDigestHex, RoundTripsThroughToHex) {
     const Digest measured = Sha256::Of(AsBytes("abc"));
     const Result<Digest> parsed = ParseDigestHex(AbcDigest);

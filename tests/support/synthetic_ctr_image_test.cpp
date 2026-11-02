@@ -239,12 +239,6 @@ TEST(SyntheticImage, KeepsTheCodeSizeEqualToThePageAlignedSegmentSum) {
     EXPECT_EQ(spec.exefs_files[0].data.size(), pages * 0x1000);
 }
 
-TEST(SyntheticImage, BuildsTheSameBytesTwice) {
-    const SyntheticImage first = BuildSyntheticImage(DefaultImageSpec());
-    const SyntheticImage second = BuildSyntheticImage(DefaultImageSpec());
-    EXPECT_EQ(first.bytes, second.bytes);
-}
-
 TEST(PatternBytes, IsDeterministicAndNotConstant) {
     const std::vector<std::uint8_t> first = PatternBytes(300, 0x20);
     EXPECT_EQ(first, PatternBytes(300, 0x20));

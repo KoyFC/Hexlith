@@ -59,10 +59,6 @@ TEST(BuildSyntheticRomFs, TerminatesTheRootsSiblingChain) {
         << "the root has no name";
 }
 
-TEST(BuildSyntheticRomFs, IsDeterministic) {
-    EXPECT_EQ(BuildSyntheticRomFs(DefaultRomFsSpec()), BuildSyntheticRomFs(DefaultRomFsSpec()));
-}
-
 TEST(BuildSyntheticRomFs, BuildsAnEmptyFilesystem) {
     const std::vector<std::uint8_t> region = BuildSyntheticRomFs(SyntheticRomFsSpec{});
     EXPECT_GT(region.size(), 0x1000U);

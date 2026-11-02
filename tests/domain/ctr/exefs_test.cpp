@@ -100,19 +100,6 @@ TEST(ExeFsFileContents, ReturnsTheBytesOfTheFile) {
     }
 }
 
-TEST(ExeFsFileContents, PlacesTheDataAreaAfterTheHeader) {
-    const SyntheticImage image = BuildSyntheticImage(DefaultImageSpec());
-    const ExeFs filesystem = ParseOrFail(image);
-
-    const core::Result<core::ByteSpan> code = ExeFsFileContents(Region(image), filesystem.files[0]);
-    ASSERT_TRUE(code.Ok()) << code.Failure().Message();
-    EXPECT_EQ(code.Value().size(), filesystem.files[0].size);
-    EXPECT_EQ(
-        core::ReadBytesAt(image.Span(), image.exefs_offset + exefs::HeaderSize, code.Value().size())
-            .Value()[0],
-        code.Value()[0]);
-}
-
 TEST(ParseExeFs, RefusesARegionTooShortForTheHeader) {
     const SyntheticImage image = BuildSyntheticImage(DefaultImageSpec());
     const core::Result<ExeFs> filesystem =

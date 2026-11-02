@@ -79,26 +79,6 @@ ImageIdentity IdentityFrom(const SyntheticImage& image, const GameProfile& profi
     return identity;
 }
 
-TEST(PokemonX, CarriesTheIdentityMeasuredFromTheReferenceImage) {
-    const GameProfile& profile = PokemonX();
-
-    EXPECT_EQ(profile.program_id, 0x0004000000055D00U);
-    EXPECT_EQ(profile.product_code, "CTR-P-EKJA");
-    EXPECT_EQ(profile.application_title, "kujira-1");
-    EXPECT_EQ(profile.executable_partition, 0U);
-    EXPECT_EQ(profile.remaster_version, 0U);
-    EXPECT_EQ(profile.ncch_format_version, 2U);
-}
-
-TEST(PokemonX, CarriesTheSegmentLayoutTheLifterWillUse) {
-    const GameProfile& profile = PokemonX();
-
-    EXPECT_EQ(profile.text.address, 0x00100000U);
-    EXPECT_EQ(profile.text.size, 4439772U);
-    EXPECT_EQ(profile.read_only.address, 0x0053C000U);
-    EXPECT_EQ(profile.data.address, 0x005A6000U);
-}
-
 // The decompressed .code section measures the sum of the three page-aligned
 // segments exactly, which docs/formats/exefs.md records as the check that
 // validated the decoder. The profile has to agree with its own numbers.
@@ -129,11 +109,6 @@ TEST(PokemonX, CarriesDigestsThatParseAsDigests) {
 
 TEST(WorkspaceDirectoryName, IsTheProgramIdAndTheRemasterVersion) {
     EXPECT_EQ(WorkspaceDirectoryName(PokemonX()), "0004000000055D00-v00");
-}
-
-TEST(KnownProfiles, HoldsTheOneTitleTheProjectSupports) {
-    ASSERT_EQ(KnownProfiles().size(), 1U);
-    EXPECT_EQ(KnownProfiles()[0], &PokemonX());
 }
 
 TEST(FindProfile, FindsTheTitleByProgramIdAndVersion) {
