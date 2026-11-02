@@ -86,6 +86,16 @@ tools/hexlith-lift/hexlith-lift --emit              # into <work>/<title>/lift
 tools/hexlith-boot/hexlith-boot --window --lifted <work>/<title>/lift/build/libhexlith_lifted.so
 ```
 
+To play it, draw with the Vulkan backend, run the lifted library, and raise the limit of two billion instructions after which a run otherwise stops:
+
+```sh
+tools/hexlith-boot/hexlith-boot --window --backend vulkan --device <name> \
+    --lifted <work>/<title>/lift/build/libhexlith_lifted.so \
+    --limit 18446744073709551615
+```
+
+Without `--backend vulkan` the window is drawn by the reference renderer, which works in software one pixel at a time and is far slower. `--device` chooses the Vulkan device by a part of its name. `llvmpipe` needs no GPU and is what the measurements so far were made with; a GPU with a Vulkan driver should draw faster. The save data is kept under `<work>/<title>/save` between runs, and `--new-game` starts without it and writes none. If the lifter changes, emit and build the library again, or the run uses lifted code that no longer matches it.
+
 Every tool takes `--help`.
 
 ## License
