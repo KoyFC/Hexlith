@@ -89,7 +89,7 @@ It implements no decryption and handles no keys. An encrypted partition is an er
 
 It verifies no hashes beyond the ones it uses for identity. The RomFS IVFC tree and the CRR module hashes are not checked, and the parsers skip them: verifying title integrity would need the keys the project refuses to handle, and nothing downstream depends on it.
 
-It reads no relocation or import table. The CRO parser records the count each one declares, which is a plain header field, and stops there. Those entry layouts are not written down in [`formats/`](formats/) yet, and nothing is read out of a format this project has not recorded. The lifter and the `ldr:ro` reimplementation are what need them, and that is where they will be verified.
+It reads no relocation or import table. The extractor records the count each one declares, which is a plain header field, and stops there, since nothing it writes depends on them. The tables themselves are read by the analysis and by the linker the `ldr:ro` service is built on, which is where they were verified; [`formats/cro0.md`](formats/cro0.md) records their layout and [`cro-linking.md`](cro-linking.md) the checks.
 
 ## Measured against the reference cartridge
 
