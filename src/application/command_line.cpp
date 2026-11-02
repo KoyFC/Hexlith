@@ -461,6 +461,11 @@ std::string BootUsage() {
         "Without {} the save data under <work-dir>/<title>/save is read at the start and\n"
         "written each time the title commits it, and when the run stops.\n"
         "\n"
+        "With {} and no {}, the player is at the keyboard: the arrows are the D-pad, X and Z\n"
+        "are A and B, S and A are X and Y, Q and W are L and R, Enter is Start, Backspace is\n"
+        "Select, I, J, K and L push the circle pad, and the left mouse button touches the\n"
+        "bottom screen.\n"
+        "\n"
         "Paths are taken from the command line first, then from {} and {},\n"
         "then from the configuration file, the same way hexlith-extract takes them.\n",
         RomDirectoryOption,
@@ -482,6 +487,8 @@ std::string BootUsage() {
         LiftedOption,
         HelpOption,
         NewGameOption,
+        WindowOption,
+        InputOption,
         RomDirectoryVariable,
         WorkDirectoryVariable);
 }

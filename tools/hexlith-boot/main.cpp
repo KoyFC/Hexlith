@@ -364,6 +364,11 @@ bool AttachWindow(const application::BootOptions& options,
     shown.display =
         std::make_unique<application::LiveDisplay>(*shown.memory, *shown.backend, *shown.window);
     shown.display->Watch(title.Gpu());
+    // A script makes a run repeatable, so it wins over the keyboard.
+    if (!options.input.has_value()) {
+        title.UseInput(*shown.window);
+        std::cout << "input   the keyboard and mouse, in the window\n";
+    }
     std::cout << std::format("window  {}\n", shown.display->Describe());
     return true;
 }
