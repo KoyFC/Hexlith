@@ -53,7 +53,7 @@ Presets are the local path. CI configures explicitly with `-DCMAKE_CXX_COMPILER`
 
 `clang-tidy` is not run by CI, but the configuration is kept correct and the tree is kept clean against it.
 
-The ARM, video and GPU code and their tests turn off `readability-magic-numbers` in a `.clang-tidy` of their own, with the reason in the file. A decoder or a pixel format is written in bit positions and its tests in encodings, and naming those would hide what the line says.
+The ARM, video, GPU and lifter code, the Vulkan and lifted-code adapters, and their tests turn off `readability-magic-numbers` in a `.clang-tidy` of their own, with the reason in the file. A decoder or a pixel format is written in bit positions and its tests in encodings, and naming those would hide what the line says.
 
 `src/domain/services` turns off the two checks that would make a command handler static or const. Handlers sit in one table of pointers to member functions, so they all keep the same signature whether or not they touch the service's state.
 
@@ -83,17 +83,17 @@ Tools read those locations from configuration and never hardcode them. Precedenc
 
 ## Architecture
 
-Dependencies point inward. A layer may use the one below it and never the one above.
+Dependencies point inward. A layer may use those below it and never one above.
 
 ```
-tools  ->  adapters  ->  ports  ->  application  ->  domain  ->  core
+tools  ->  adapters  ->  application  ->  ports  ->  domain  ->  core
 ```
 
-- `src/core` holds small utilities: a `Result` type, bounds-checked byte reading, SHA-256. Its one external dependency is OpenSSL's libcrypto, linked privately by the SHA-256 wrapper. ADR 0009 records why.
+- `src/core` holds small utilities: a `Result` type, bounds-checked byte reading, SHA-256, UTF-16 transcoding and `key = value` text. Its one external dependency is OpenSSL's libcrypto, linked privately by the SHA-256 wrapper. ADR 0009 records why.
 - `src/domain` holds pure logic: the ARM model, the memory map, kernel abstractions, the CTR container and CRO formats, the analysis types, the GameProfile. No I/O lives here, which is what makes it testable with synthetic data.
 - `src/application` holds use cases such as extract, validate and analyze.
-- `src/ports` holds the interfaces the outside world is reached through: `RomSource`, `BlobSink`, `GpuBackend`, `AudioSink`, `InputSource`.
-- `src/adapters` holds the implementations of those ports: the filesystem, Vulkan, SDL. `src/adapters/vulkan` is a library of its own, so that only what draws links Vulkan and glslang, and `src/adapters/sdl` is one so that only what opens a window links SDL.
+- `src/ports` holds the interfaces the outside world is reached through: `RomSource`, `BlobSink`, `TreeStore`, `InputSource`, `ScreenSink`, `GpuBackend`, `GpuRecorder`, `GpuRecordingSource`. The use cases depend on them and the adapters implement them.
+- `src/adapters` holds the implementations of those ports: the filesystem, Vulkan, SDL, and the loader of the lifted library. `src/adapters/vulkan` is a library of its own, so that only what draws links Vulkan and glslang, and `src/adapters/sdl` is one so that only what opens a window links SDL.
 - `tools` holds the command-line programs, listed below.
 
 The abstraction belongs at system boundaries. Hot paths, meaning lifted code, memory access and GPU command processing, avoid per-instruction virtual dispatch and use static polymorphism with flat data structures instead. Every such exception is documented where it is made.
