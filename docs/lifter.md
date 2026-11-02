@@ -96,3 +96,11 @@ A block transfer that faults part of the way is the case worth stating. The inte
 | After | 6.2 percent interpreted | 4.61 percent interpreted |
 
 What is left, by how much it runs, is floating point (`vldr`, `vstr`, `vmul`, `vmov`, `vcvt`, `vldm`, `vmla` and the rest of VFP), the exclusive pair `ldrex` and `strex`, the doubleword transfers, the long multiplies and the supervisor call. Floating point is the largest part of it.
+
+## The generated code
+
+`src/domain/lift/emit` writes one function as C++, and `runtime.h` is what that C++ includes. [ADR 0025](adr/0025-lifted-code-answers-where-the-guest-continues.md) has the protocol: a function answers the address the guest continues at, can be entered at any block, and charges the clock a block at a time.
+
+Each function has a header comment with its address, instruction set and block count, a switch that jumps to the block an address names, and then a label for each block. A block opens with the check that the slice has enough ticks left and the charge, then has a braced group for each instruction with its address and mnemonic in a comment, then its exit. What a group does is a call to the primitive the interpreter calls, on the state in `cpu`. The functions that are not translated are one call that has the interpreter execute the instruction.
+
+`Engine` in `engine.h` is `arm::Run` with the faster path. Given the same state and limit it stops for the same reason, leaves the same state and counts the same number of instructions, and a test checks that for generated sample functions at every limit from one instruction to sixty-nine. The sample functions are built from machine code the test writes, lifted and emitted by a program the build runs (`sample_generator`), and compiled into the test: a loop, a call and a return, a switch through a jump table, loads and stores, block transfers, conditional execution, a thread ID read and an instruction the lifter leaves to the interpreter.
