@@ -332,3 +332,39 @@ After the work above, with the tables regenerated, the same run:
 | Within the extent of a function | 99.84 percent |
 | Outside every function extent | 65,348 instructions, 11,920 addresses |
 | Functions executed | 2,472 of 22,487 |
+
+## What a run executed, as a fact
+
+`hexlith-analyze` reads `observed/executed.txt` beside the extraction when it is there, and treats every instruction in it as a fact of the strongest kind, recorded with `source=observed`: the processor ran it, in that instruction set.
+
+Each executed instruction is a place to walk from. They are walked last of all, after every guess. Walked first, as the facts they are, they cost the analysis 195 functions: the sweep of data takes a word pointing into code already walked for a case label rather than a function, a run executes exactly the functions a table of virtual calls points at, and 258 words of such tables were refused. Walked last, they fill in only what nothing else reached. Seeding only the first instruction of each run of consecutive executed addresses is not enough either, because a function that starts where another ends makes one run of the two.
+
+Having run says nothing about where a function begins, so an executed instruction is not made a function record on that account alone. The exception is a run that starts outside every function the image and the guesses gave: something enters it, and since only functions are lifted and lifted code can be entered at any block, its first instruction becomes an entry. That is repeated, up to eight rounds, until every executed instruction lies in some function's extent.
+
+Measured on 2026-11-02 with a run of two billion instructions from a new game, to about frame 684, through the interpreter:
+
+| | Before | Boot to frame 227 observed | Two billion observed |
+| --- | --- | --- | --- |
+| Text segment reached | 92.2 percent | 93.4 percent | 93.5 percent |
+| Functions | 22,489 | 22,577 | 23,127, of which 594 observed |
+| Executed in a region classified as code, of the long run | 96.76 percent | | 100.00 percent |
+| Executed within a function's extent, of the long run | 96.76 percent, 23.7 million instructions outside | | 100.00 percent, 4,345 instructions outside |
+
+The long run executes 729.5 million instructions in the main executable at 137,004 addresses. Of the boot to frame 227 alone, 99.84 percent of the instructions were within a function's extent before, and 99.90 percent with that boot observed.
+
+### The conflicts, read
+
+The 36 conflict reports are 16 addresses. The long run executed one of them, `0x00100048`, as Thumb, which settles it. The other fifteen are not executed in two billion instructions, so they cost nothing at run time and a run cannot settle them. Read statically, by decoding a few dozen bytes from each in both instruction sets, one reading reaches a return and the other an undefined word within a handful of instructions, or the address is a halfword in the middle of ARM code:
+
+| Address | Verdict | Evidence | The tables |
+| --- | --- | --- | --- |
+| `0x00100048` | Thumb | executed as Thumb; ARM is undefined at the third word | Thumb |
+| `0x001000BC`, `0x001000C0` | Thumb | Thumb reaches a return; ARM is undefined within two words | Thumb |
+| `0x00101C90`, `0x00101CB8` | Thumb | Thumb reaches a return; ARM is undefined | Thumb |
+| `0x00100184` | ARM | a module imports it as ARM; Thumb is undefined at the second halfword | ARM |
+| `0x0019660C` | ARM | ARM reaches a return; Thumb is undefined within eight halfwords | **Thumb** |
+| `0x001FBFBC`, `0x001FD320` | ARM | ARM reaches a return; Thumb is undefined | ARM |
+| `0x00209FF8`, `0x00470048` | ARM | thirty-two ARM words decode; Thumb is undefined within eight halfwords | ARM |
+| `0x001FE362`, `0x001FFFFE`, `0x0020C49A`, `0x00269EC2`, `0x003FFFFE` | ARM | a halfword inside an ARM instruction; Thumb from it is undefined within twenty | ARM |
+
+The regions agree with the verdict everywhere but `0x0019660C`, where a guessed Thumb path claimed the bytes first. Some function records at these addresses are guesses that make no sense: ARM functions at `0x001FE362`, `0x001FFFFE`, `0x00269EC2` and `0x003FFFFE`, which are not word aligned, and a Thumb function at `0x0020C49A` inside ARM code. `0x001FFFFE` and `0x003FFFFE` look like a round number less two read as a pointer. Nothing executes any of them, so they stay as they are until a rule of the walk can settle them as a run would.

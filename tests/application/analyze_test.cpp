@@ -100,7 +100,8 @@ AnalyzeRequest Request(const std::vector<std::uint8_t>& code,
                           .static_module = module,
                           .modules = {},
                           .profile = &chosen,
-                          .sweep_data_for_entry_points = true};
+                          .sweep_data_for_entry_points = true,
+                          .executed = {}};
 }
 
 TEST(Analyze, WritesTheFourTables) {
@@ -223,6 +224,78 @@ ExistingTables OutputOf(const MemoryBlobSink& sink) {
         .regions = sink.Text(analysis::RegionsFileName).value_or(""),
         .pointers = sink.Text(analysis::PointersFileName).value_or(""),
     };
+}
+
+// The return at 0x0010000C is reached by nothing in the image. A run that
+// executed it settles that it is code, and since no function covers it, that
+// something enters it: it becomes an entry of its own, so that it is lifted.
+constexpr std::uint32_t Unreached = TextAddress + 0xC;
+
+AnalyzeRequest RequestWithUnreachedExecuted(const std::vector<std::uint8_t>& code,
+                                            const std::vector<std::uint8_t>& module,
+                                            const profile::GameProfile& chosen) {
+    AnalyzeRequest request = Request(code, module, chosen);
+    request.executed = "format version=1\n0x0010000C isa=arm count=2\n";
+    return request;
+}
+
+TEST(Analyze, CountsWhatARunExecutedOutsideEveryFunction) {
+    const std::vector<std::uint8_t> code = CodeImage();
+    const std::vector<std::uint8_t> module = StaticModule();
+    const profile::GameProfile chosen = TestProfile();
+
+    MemoryBlobSink sink;
+    const core::Result<AnalyzeReport> report =
+        Analyze(RequestWithUnreachedExecuted(code, module, chosen), ExistingTables{}, sink);
+    ASSERT_TRUE(report.Ok()) << report.Failure().Message();
+    EXPECT_EQ(report.Value().observed_seeds, 1U);
+    EXPECT_EQ(report.Value().observed_functions, 1U);
+}
+
+TEST(Analyze, MakesAnEntryOfWhatARunExecutedOutsideEveryFunction) {
+    const std::vector<std::uint8_t> code = CodeImage();
+    const std::vector<std::uint8_t> module = StaticModule();
+    const profile::GameProfile chosen = TestProfile();
+
+    MemoryBlobSink sink;
+    ASSERT_TRUE(
+        Analyze(RequestWithUnreachedExecuted(code, module, chosen), ExistingTables{}, sink).Ok());
+
+    const core::Result<std::vector<analysis::FunctionRange>> parsed =
+        analysis::ParseFunctions(sink.Text(analysis::FunctionsFileName).value_or(""));
+    ASSERT_TRUE(parsed.Ok()) << parsed.Failure().Message();
+    const std::vector<analysis::FunctionRange>& functions = parsed.Value();
+    const auto found = std::ranges::find_if(
+        functions, [](const auto& function) { return function.address == Unreached; });
+    ASSERT_NE(found, functions.end());
+    EXPECT_EQ(found->source, analysis::Provenance::Observed);
+    EXPECT_EQ(found->size, 4U);
+}
+
+// A run inside a function the image already gave says nothing new about where
+// functions start.
+TEST(Analyze, LeavesWhatARunExecutedInsideAFunctionToIt) {
+    const std::vector<std::uint8_t> code = CodeImage();
+    const std::vector<std::uint8_t> module = StaticModule();
+    const profile::GameProfile chosen = TestProfile();
+    AnalyzeRequest request = Request(code, module, chosen);
+    request.executed = "format version=1\n0x00100004 isa=arm count=1\n";
+
+    MemoryBlobSink sink;
+    const core::Result<AnalyzeReport> report = Analyze(request, ExistingTables{}, sink);
+    ASSERT_TRUE(report.Ok()) << report.Failure().Message();
+    EXPECT_EQ(report.Value().observed_functions, 0U);
+}
+
+TEST(Analyze, RefusesAnExecutedTableInAnInstructionSetItDoesNotKnow) {
+    const std::vector<std::uint8_t> code = CodeImage();
+    const std::vector<std::uint8_t> module = StaticModule();
+    const profile::GameProfile chosen = TestProfile();
+    AnalyzeRequest request = Request(code, module, chosen);
+    request.executed = "format version=1\n0x0010000C isa=jazelle count=1\n";
+
+    MemoryBlobSink sink;
+    EXPECT_FALSE(Analyze(request, ExistingTables{}, sink).Ok());
 }
 
 TEST(Analyze, WritesTheSameBytesTwice) {

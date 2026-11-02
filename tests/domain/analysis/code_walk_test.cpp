@@ -248,6 +248,50 @@ TEST(WalkCode, WalksAStatedSeedBeforeAGuessAtTheSameAddress) {
         << "the guess is the path that stops";
 }
 
+// A function nothing in the image calls or points at, which a run executed.
+TEST(WalkCode, WalksWhatARunExecutedWithoutCallingItAFunction) {
+    ImageBuilder image;
+    image.Arm(ArmPush);  // 0x00100000
+    image.Arm(ArmMove);
+    image.Arm(ArmPop);
+
+    const std::vector<WalkSeed> seeds = {WalkSeed{.address = Base,
+                                                  .instruction_set = arm::InstructionSet::Arm,
+                                                  .source = Provenance::Observed}};
+    const WalkResult result =
+        WalkCode(WalkImage{.bytes = image.Bytes(), .base = Base}, seeds, Options(image));
+
+    const Region* region = RegionAt(result, Base);
+    ASSERT_NE(region, nullptr);
+    EXPECT_EQ(region->size, 12U);
+    EXPECT_TRUE(result.functions.empty()) << "running an address does not make it an entry";
+}
+
+// What a run executed is walked after every guess, so that the sweep of data
+// judges its words against what the image alone reached.
+TEST(WalkCode, WalksWhatARunExecutedAfterAGuess) {
+    ImageBuilder image;
+    image.Arm(ArmPush);  // 0x00100000, decodes in Thumb too
+    image.Arm(ArmPop);
+
+    const std::vector<WalkSeed> seeds = {
+        WalkSeed{.address = Base,
+                 .instruction_set = arm::InstructionSet::Arm,
+                 .source = Provenance::Observed},
+        WalkSeed{.address = Base,
+                 .instruction_set = arm::InstructionSet::Thumb,
+                 .source = Provenance::Heuristic},
+    };
+    const WalkResult result =
+        WalkCode(WalkImage{.bytes = image.Bytes(), .base = Base}, seeds, Options(image));
+
+    const Region* region = RegionAt(result, Base);
+    ASSERT_NE(region, nullptr);
+    EXPECT_EQ(region->instruction_set, arm::InstructionSet::Thumb);
+    EXPECT_EQ(result.report.instruction_set_conflicts, std::vector<std::uint32_t>{Base})
+        << "the conflict is reported, and the run says which side is right";
+}
+
 TEST(WalkCode, MarksALiteralPoolWordAsDataAndFollowsWhatItPointsAt) {
     ImageBuilder image;
     image.Arm(ArmLoadLiteral);  // 0x00100000, reads 0x00100008

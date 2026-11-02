@@ -10,6 +10,8 @@ std::string_view Describe(Provenance source) {
         return "exheader";
     case Provenance::Relocation:
         return "relocation";
+    case Provenance::Observed:
+        return "observed";
     case Provenance::Ghidra:
         return "ghidra";
     case Provenance::Heuristic:
@@ -30,6 +32,9 @@ std::optional<Provenance> ParseProvenance(std::string_view text) {
     if (text == "relocation") {
         return Provenance::Relocation;
     }
+    if (text == "observed") {
+        return Provenance::Observed;
+    }
     if (text == "ghidra") {
         return Provenance::Ghidra;
     }
@@ -47,6 +52,7 @@ bool IsDerivedFromTheImage(Provenance source) {
     case Provenance::CrsExport:
     case Provenance::ExHeader:
     case Provenance::Relocation:
+    case Provenance::Observed:
     case Provenance::Heuristic:
         return true;
     case Provenance::Ghidra:

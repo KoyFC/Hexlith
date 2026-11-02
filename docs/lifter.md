@@ -169,3 +169,13 @@ On 2026-11-02 the machine was a laptop with four performance and four efficiency
 | 3, performance | 11 | 2.422 s | 0.494 s | 4.90 |
 
 Lifted runs spread by about 15 percent from fastest to slowest, the interpreter's by less. The ratio sits on the gate, between 4.8 and 5.2, and this machine cannot place it more finely than that. The instruction count was 41,972,790 in every run.
+
+After the analysis took in what a run executed ([`classification.md`](classification.md#what-a-run-executed-as-a-fact)), the lifted library covers 594 more functions, and the instructions the boot to frame 227 leaves to the interpreter fall from 251,885 to 196,063. Measured the same way, later the same day, with the lifted runs now spreading by a few percent:
+
+| Core | Runs | Interpreter, median | Lifted, median | Ratio |
+| --- | --- | --- | --- | --- |
+| 3, performance | 7 | 1.614 s | 0.305 s | 5.29 |
+| 3, performance | 11 | 1.640 s | 0.321 s | 5.11 |
+| 7, efficiency | 7 | 1.434 s | 0.297 s | 4.83 |
+
+The interpreter, which the library does not touch, ran a third faster than in the morning's measurements, so the machine was in another state of clock and power, and only the ratios are comparable. On a performance core lifted code is now five times faster than the interpreter, by a margin of a few percent; on an efficiency core it is not.

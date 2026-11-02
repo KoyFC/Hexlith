@@ -1,15 +1,21 @@
 #include "application/analyze.h"
 
 #include "domain/analysis/export_seed.h"
+#include "domain/analysis/record_text.h"
 #include "domain/analysis/tables.h"
 #include "domain/ctr/cro.h"
 #include "domain/ctr/cro_link_tables.h"
 #include "domain/ctr/layout.h"
 
+#include <algorithm>
 #include <format>
+#include <iterator>
 #include <map>
 #include <set>
 #include <span>
+#include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace hexlith::application {
@@ -47,16 +53,147 @@ PositionsImportedFromStatic(std::span<const core::ByteSpan> modules) {
     return positions;
 }
 
+// The instructions a run executed inside the text segment, from the table
+// hexlith-boot --record-executed writes. Empty text is no run.
+core::Result<std::vector<analysis::ObservedInstruction>>
+ObservedInText(std::string_view text, const domain::profile::GameProfile& profile) {
+    std::vector<analysis::ObservedInstruction> observed;
+    if (text.empty()) {
+        return observed;
+    }
+    const core::Result<analysis::RecordFile> parsed = analysis::ParseRecordText(text);
+    if (!parsed) {
+        return parsed.Failure();
+    }
+    for (const analysis::Record& record : parsed.Value().records) {
+        const core::Result<std::string_view> isa = analysis::RequiredField(record, "isa");
+        if (!isa) {
+            return isa.Failure();
+        }
+        if (isa.Value() != "arm" && isa.Value() != "thumb") {
+            return core::Error{std::format("0x{:08X} was executed in an instruction set called {}",
+                                           record.address,
+                                           isa.Value())};
+        }
+        if (record.address < profile.text.address ||
+            record.address - profile.text.address >= profile.text.size) {
+            continue;
+        }
+        observed.push_back(analysis::ObservedInstruction{
+            .address = record.address,
+            .instruction_set = isa.Value() == "thumb" ? domain::arm::InstructionSet::Thumb
+                                                      : domain::arm::InstructionSet::Arm});
+    }
+    return observed;
+}
+
+// What a run executed at each address, for saying which conflicts it settles.
+std::map<std::uint32_t, std::string_view>
+ExecutedSets(std::span<const analysis::ObservedInstruction> observed) {
+    std::map<std::uint32_t, std::string_view> sets;
+    for (const analysis::ObservedInstruction& instruction : observed) {
+        const std::string_view name =
+            instruction.instruction_set == domain::arm::InstructionSet::Thumb ? "thumb" : "arm";
+        auto [at, added] = sets.emplace(instruction.address, name);
+        if (!added && at->second != name) {
+            at->second = "arm and thumb";
+        }
+    }
+    return sets;
+}
+
+void CountSettledConflicts(AnalyzeReport& report,
+                           std::span<const analysis::ObservedInstruction> observed) {
+    const std::set<std::uint32_t> addresses(report.walk.instruction_set_conflicts.begin(),
+                                            report.walk.instruction_set_conflicts.end());
+    const std::map<std::uint32_t, std::string_view> executed = ExecutedSets(observed);
+    report.conflict_addresses = addresses.size();
+    report.conflicts_settled_by_observation = static_cast<std::size_t>(std::ranges::count_if(
+        addresses, [&executed](std::uint32_t address) { return executed.contains(address); }));
+    report.executed_at_conflicts.clear();
+    for (const std::uint32_t address : addresses) {
+        if (const auto found = executed.find(address); found != executed.end()) {
+            report.executed_at_conflicts.emplace(address, std::string{found->second});
+        }
+    }
+}
+
+// Where a run of executed instructions starts outside every function's
+// extent, as function entries. An instruction outside every extent whose
+// predecessor is too belongs to the same run and to the entry made for it.
+std::vector<analysis::FunctionRange>
+EntriesOutsideEveryFunction(std::span<const analysis::FunctionRange> functions,
+                            std::span<const analysis::WalkSeed> observed) {
+    // The extents merged into sorted, disjoint ranges, so that each place is
+    // one search.
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> covered;
+    for (const analysis::FunctionRange& function : functions) {
+        // A size of zero is a function whose extent could not be measured.
+        if (function.size != analysis::UnknownSize) {
+            covered.emplace_back(function.address, function.address + function.size);
+        }
+    }
+    std::ranges::sort(covered);
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> merged;
+    for (const auto& range : covered) {
+        if (!merged.empty() && range.first <= merged.back().second) {
+            merged.back().second = std::max(merged.back().second, range.second);
+        } else {
+            merged.push_back(range);
+        }
+    }
+    const auto inside = [&merged](std::uint32_t address) {
+        const auto after = std::ranges::upper_bound(
+            merged, address, {}, [](const auto& range) { return range.first; });
+        return after != merged.begin() && address < std::prev(after)->second;
+    };
+
+    std::set<std::pair<std::uint32_t, bool>> outside;
+    for (const analysis::WalkSeed& seed : observed) {
+        if (!inside(seed.address)) {
+            outside.emplace(seed.address,
+                            seed.instruction_set == domain::arm::InstructionSet::Thumb);
+        }
+    }
+    // An ARM instruction is four bytes, a Thumb one two or four.
+    constexpr std::uint32_t ArmSize = 4;
+    constexpr std::uint32_t ThumbHalf = 2;
+    std::vector<analysis::FunctionRange> entries;
+    for (const auto& [address, thumb] : outside) {
+        const bool continues = thumb ? outside.contains({address - ThumbHalf, true}) ||
+                                           outside.contains({address - (2 * ThumbHalf), true})
+                                     : outside.contains({address - ArmSize, false});
+        if (continues) {
+            continue;
+        }
+        entries.push_back(
+            analysis::FunctionRange{.address = address,
+                                    .size = analysis::UnknownSize,
+                                    .instruction_set = thumb ? domain::arm::InstructionSet::Thumb
+                                                             : domain::arm::InstructionSet::Arm,
+                                    .alternate_entries = {},
+                                    .source = analysis::Provenance::Observed});
+    }
+    return entries;
+}
+
 // One line per address that two paths disagree about, with how many paths ran
-// into it, so that each one can be read and checked against another tool.
-std::string RenderConflicts(const std::vector<std::uint32_t>& conflicts) {
+// into it and the instruction set a run executed it in, if one did, so that
+// each one can be read and checked against another tool.
+std::string RenderConflicts(const AnalyzeReport& report) {
     std::map<std::uint32_t, std::size_t> reports;
-    for (const std::uint32_t address : conflicts) {
+    for (const std::uint32_t address : report.walk.instruction_set_conflicts) {
         ++reports[address];
     }
     std::string text;
     for (const auto& [address, count] : reports) {
-        text.append(std::format("  conflict at 0x{:08X}, reported {} time(s)\n", address, count));
+        const auto executed = report.executed_at_conflicts.find(address);
+        text.append(std::format("  conflict at 0x{:08X}, reported {} time(s){}\n",
+                                address,
+                                count,
+                                executed == report.executed_at_conflicts.end()
+                                    ? std::string{}
+                                    : std::format(", executed as {}", executed->second)));
     }
     return text;
 }
@@ -131,6 +268,18 @@ Analyze(const AnalyzeRequest& request, const ExistingTables& existing, ports::Bl
     report.imported_functions = imported_seeds.size();
     seeds.insert(seeds.end(), imported_seeds.begin(), imported_seeds.end());
 
+    // What a run executed, which is walked from as a fact and settles what the
+    // bytes are where a guess disagrees.
+    const core::Result<std::vector<analysis::ObservedInstruction>> observed =
+        ObservedInText(request.executed, profile);
+    if (!observed) {
+        return observed.Failure().WithContext("executed.txt");
+    }
+    const std::vector<analysis::WalkSeed> observed_seeds =
+        analysis::SeedFromObservations(observed.Value());
+    report.observed_seeds = observed_seeds.size();
+    seeds.insert(seeds.end(), observed_seeds.begin(), observed_seeds.end());
+
     const auto image_end = static_cast<std::uint32_t>(profile.text.address + request.code.size());
     analysis::WalkOptions options;
     options.follow_literal_pointers = true;
@@ -152,6 +301,11 @@ Analyze(const AnalyzeRequest& request, const ExistingTables& existing, ports::Bl
     std::vector<analysis::FunctionRange> entries;
     entries.reserve(seeds.size() + walked.functions.size());
     for (const analysis::WalkSeed& seed : seeds) {
+        // Having run says nothing about where a function starts. The runs no
+        // function covers are made entries below, once the extents are known.
+        if (seed.source == analysis::Provenance::Observed) {
+            continue;
+        }
         entries.push_back(analysis::FunctionRange{.address = seed.address,
                                                   .size = analysis::UnknownSize,
                                                   .instruction_set = seed.instruction_set,
@@ -160,9 +314,37 @@ Analyze(const AnalyzeRequest& request, const ExistingTables& existing, ports::Bl
     }
     entries.insert(entries.end(), walked.functions.begin(), walked.functions.end());
 
-    const analysis::BoundsResult bounds =
-        analysis::FindFunctionBounds(image, entries, walked.regions);
+    analysis::BoundsResult bounds = analysis::FindFunctionBounds(image, entries, walked.regions);
+
+    // A run that starts outside every function the image gave or a guess found
+    // is code that something enters which nothing in the image names. Lifted
+    // code can be entered at any of its blocks (ADR 0025), and only a function
+    // is lifted, so the start of such a run becomes an entry of its own. Runs
+    // that start inside a known function are left to it.
+    //
+    // A run can hold more than one function, one ending where the next
+    // begins, and only the extent of the first is measured from its start; so
+    // this is repeated until every executed instruction is in some extent, or
+    // the rounds run out.
+    // An entry whose extent cannot be measured stays outside every extent, so
+    // what was added once is not added again.
+    constexpr int MostRounds = 8;
+    std::set<std::uint32_t> added;
+    for (int round = 0; round < MostRounds; ++round) {
+        std::vector<analysis::FunctionRange> unclaimed =
+            EntriesOutsideEveryFunction(bounds.functions, observed_seeds);
+        std::erase_if(unclaimed, [&added](const analysis::FunctionRange& entry) {
+            return !added.insert(entry.address).second;
+        });
+        if (unclaimed.empty()) {
+            break;
+        }
+        report.observed_functions += unclaimed.size();
+        entries.insert(entries.end(), unclaimed.begin(), unclaimed.end());
+        bounds = analysis::FindFunctionBounds(image, entries, walked.regions);
+    }
     report.bounds = bounds.report;
+    CountSettledConflicts(report, observed.Value());
 
     report.text_bytes = profile.text.size;
     for (const analysis::Region& region : walked.regions) {
@@ -210,7 +392,16 @@ std::string RenderAnalyzeSummary(const AnalyzeReport& report) {
                             "instruction\n",
                             report.walk.instruction_set_conflicts.size(),
                             report.walk.undefined_stops));
-    text.append(RenderConflicts(report.walk.instruction_set_conflicts));
+    if (report.observed_seeds > 0) {
+        text.append(std::format("{} place(s) walked from because a run executed them, {} of them "
+                                "outside every function and made entries; {} of {} conflict "
+                                "address(es) settled by what it executed\n",
+                                report.observed_seeds,
+                                report.observed_functions,
+                                report.conflicts_settled_by_observation,
+                                report.conflict_addresses));
+    }
+    text.append(RenderConflicts(report));
     text.append(std::format("{} jump table(s) of {} entries, {} dispatch(es) refused\n",
                             report.walk.jump_tables,
                             report.walk.jump_table_entries,

@@ -87,11 +87,12 @@ Every record carries one.
 | `crs-export` | A named export table of a CRO-family module |
 | `exheader` | The extended header: the entry point, the segment bounds |
 | `relocation` | A relocation or import table of a CRO module, which names an address without saying what is at it |
+| `observed` | An instruction a run of the title executed, in the instruction set it ran in, from `observed/executed.txt` |
 | `ghidra` | Imported from a decompiler project |
 | `heuristic` | This project's own analysis |
 | `manual` | A decision a person made |
 
-A regeneration pass replaces records it can derive from the cartridge again, which is the first four, and leaves `ghidra` and `manual` alone. The rule is not about how much a source is trusted. It is about whether the record can be produced a second time: rerunning the analysis reproduces everything that came out of the image, and a name from a person is the only copy there is.
+A regeneration pass replaces records it can derive from the cartridge again, which is every source but two, and leaves `ghidra` and `manual` alone. An `observed` record counts as derived: running the title with the same input produces it again. The rule is not about how much a source is trusted. It is about whether the record can be produced a second time: rerunning the analysis reproduces everything that came out of the image, and a name from a person is the only copy there is.
 
 ## Stability
 

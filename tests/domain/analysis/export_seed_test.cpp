@@ -1,8 +1,10 @@
 #include "domain/analysis/export_seed.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <gtest/gtest.h>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace hexlith::domain::analysis {
@@ -182,6 +184,25 @@ TEST(SeedFromImports, LeavesOutDataAndPositionsTheModuleDoesNotHave) {
         Position(1, 0x40), Position(0, SegmentSize), Position(UnknownSegmentRawType, 0)};
 
     EXPECT_TRUE(SeedFromImports(StaticHeader(), imported).empty());
+}
+
+TEST(SeedFromObservations, SeedsEveryExecutedInstructionAsObserved) {
+    constexpr std::uint32_t Arm = 0x00100000;
+    constexpr std::uint32_t Thumb = 0x00200000;
+    const std::vector<ObservedInstruction> executed = {
+        {.address = Arm, .instruction_set = arm::InstructionSet::Arm},
+        {.address = Arm + 4, .instruction_set = arm::InstructionSet::Arm},
+        {.address = Thumb, .instruction_set = arm::InstructionSet::Thumb},
+    };
+
+    const std::vector<WalkSeed> seeds = SeedFromObservations(executed);
+
+    ASSERT_EQ(seeds.size(), executed.size());
+    for (std::size_t index = 0; index < seeds.size(); ++index) {
+        EXPECT_EQ(seeds.at(index).address, executed.at(index).address);
+        EXPECT_EQ(seeds.at(index).instruction_set, executed.at(index).instruction_set);
+        EXPECT_EQ(seeds.at(index).source, Provenance::Observed);
+    }
 }
 
 }  // namespace

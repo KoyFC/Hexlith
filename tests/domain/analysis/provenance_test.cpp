@@ -7,9 +7,10 @@
 namespace hexlith::domain::analysis {
 namespace {
 
-constexpr std::array<Provenance, 6> AllSources = {Provenance::CrsExport,
+constexpr std::array<Provenance, 7> AllSources = {Provenance::CrsExport,
                                                   Provenance::ExHeader,
                                                   Provenance::Relocation,
+                                                  Provenance::Observed,
                                                   Provenance::Ghidra,
                                                   Provenance::Heuristic,
                                                   Provenance::Manual};
@@ -38,6 +39,8 @@ TEST(Provenance, AnalysisOutputIsDerivedFromTheImage) {
     EXPECT_TRUE(IsDerivedFromTheImage(Provenance::ExHeader));
     EXPECT_TRUE(IsDerivedFromTheImage(Provenance::Relocation));
     EXPECT_TRUE(IsDerivedFromTheImage(Provenance::Heuristic));
+    // A run of the title with the same input executes it again.
+    EXPECT_TRUE(IsDerivedFromTheImage(Provenance::Observed));
 }
 
 }  // namespace

@@ -52,6 +52,23 @@ core::Result<SeededTables> SeedFromExports(const ctr::CroHeader& header,
 std::vector<WalkSeed> SeedFromImports(const ctr::CroHeader& exporter,
                                       std::span<const ctr::CroSegmentTag> imported);
 
+// An instruction a run executed, in the instruction set it ran in.
+struct ObservedInstruction {
+    std::uint32_t address = 0;
+    arm::InstructionSet instruction_set = arm::InstructionSet::Arm;
+};
+
+// Turns what a run executed into walk seeds, one for every instruction. Most
+// are reached from the one before, and the walk passes over an instruction it
+// has decoded already at the cost of one check; seeding only where a run of
+// consecutive instructions starts misses a function that begins right after
+// another one ends, since a run of the two is one run.
+//
+// An executed instruction is a fact of the strongest kind: the processor ran
+// it, in that instruction set. It does not say that a function starts there,
+// so these seeds are walked from and not made into function records.
+std::vector<WalkSeed> SeedFromObservations(std::span<const ObservedInstruction> executed);
+
 }  // namespace hexlith::domain::analysis
 
 #endif  // HEXLITH_DOMAIN_ANALYSIS_EXPORT_SEED_H

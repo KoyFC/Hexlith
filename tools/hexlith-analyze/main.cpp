@@ -14,6 +14,7 @@
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <span>
@@ -221,11 +222,23 @@ int Run(const application::AnalyzeOptions& options) {
         return Failure;
     }
 
+    // What a run executed, if one was recorded: hexlith-boot --record-executed
+    // leaves it beside the extraction. Without it the analysis is the image's
+    // alone.
+    const std::filesystem::path executed_path = extraction / "observed" / "executed.txt";
+    std::string executed;
+    if (std::filesystem::exists(executed_path)) {
+        std::ifstream file{executed_path};
+        executed.assign(std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{});
+        std::cout << std::format("observed    {}\n\n", executed_path.string());
+    }
+
     const application::AnalyzeRequest request{.code = code_bytes.Value(),
                                               .static_module = module_bytes.Value(),
                                               .modules = modules.Value().bytes,
                                               .profile = chosen,
-                                              .sweep_data_for_entry_points = !options.no_sweep};
+                                              .sweep_data_for_entry_points = !options.no_sweep,
+                                              .executed = executed};
 
     const core::Result<application::AnalyzeReport> report =
         application::Analyze(request, existing, writing);

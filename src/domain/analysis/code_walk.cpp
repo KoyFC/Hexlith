@@ -66,12 +66,28 @@ arm::Instruction DecodeAt(const WalkImage& image, std::uint32_t address, arm::In
 // Every stated place, each a fact the image or a loader acts on, is walked
 // before anything found by following one, and everything followed from a fact
 // before any guess.
-enum class Confidence : std::uint8_t { Stated, Followed, Guessed };
+//
+// What a run executed is walked last of all, although it is the strongest fact
+// there is. The sweep of data judges a word that points into code already
+// walked to be a case label and not a function, which is right when the walk
+// so far came from the image and wrong when it came from a run: a run executes
+// the functions a table of virtual calls points at, and walking them first
+// cost the analysis 195 functions. So a run only fills in what nothing else
+// reached, and where a guess claimed bytes first, the analysis reports the
+// instruction set the run executed them in.
+enum class Confidence : std::uint8_t { Stated, Followed, Guessed, Observed };
 
-constexpr std::size_t ConfidenceLevels = 3;
+constexpr std::size_t ConfidenceLevels = 4;
 
 constexpr Confidence ConfidenceOf(Provenance source) {
-    return source == Provenance::Heuristic ? Confidence::Guessed : Confidence::Stated;
+    switch (source) {
+    case Provenance::Heuristic:
+        return Confidence::Guessed;
+    case Provenance::Observed:
+        return Confidence::Observed;
+    default:
+        return Confidence::Stated;
+    }
 }
 
 // A branch is as good as the path it was found on. A path from a fact may still
@@ -175,7 +191,7 @@ public:
         // code addresses that points into code already walked is the address
         // of a case or a label and not of a function, and only what points at
         // bytes nothing has reached is one.
-        DrainWhile([](Confidence confidence) { return confidence != Confidence::Guessed; });
+        DrainWhile([](Confidence confidence) { return confidence < Confidence::Guessed; });
         SweepForEntryPoints();
         DrainWhile([](Confidence) { return true; });
         result_.regions = BuildRegions();

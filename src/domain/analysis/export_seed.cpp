@@ -104,4 +104,15 @@ std::vector<WalkSeed> SeedFromImports(const ctr::CroHeader& exporter,
     return seeds;
 }
 
+std::vector<WalkSeed> SeedFromObservations(std::span<const ObservedInstruction> executed) {
+    std::vector<WalkSeed> seeds;
+    seeds.reserve(executed.size());
+    for (const ObservedInstruction& instruction : executed) {
+        seeds.push_back(WalkSeed{.address = instruction.address,
+                                 .instruction_set = instruction.instruction_set,
+                                 .source = Provenance::Observed});
+    }
+    return seeds;
+}
+
 }  // namespace hexlith::domain::analysis

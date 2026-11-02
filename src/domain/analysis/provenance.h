@@ -24,6 +24,10 @@ enum class Provenance : std::uint8_t {
     // naming what is at it.
     Relocation,
 
+    // An instruction a run of the title executed, in the instruction set it
+    // was executed in. Produced again by running the title with the same input.
+    Observed,
+
     // Imported from a decompiler project.
     Ghidra,
 

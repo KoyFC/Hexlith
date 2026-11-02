@@ -10,8 +10,10 @@
 #include "domain/profile/game_profile.h"
 #include "ports/blob_sink.h"
 
+#include <map>
 #include <span>
 #include <string>
+#include <string_view>
 
 namespace hexlith::application {
 
@@ -41,6 +43,11 @@ struct AnalyzeRequest {
     // address of a function. docs/classification.md has what it costs and what it
     // buys.
     bool sweep_data_for_entry_points = true;
+
+    // The table of instructions a run executed, observed/executed.txt in the
+    // grammar of docs/analysis-tables.md, or empty. Each run of executed
+    // instructions is walked from as a fact.
+    std::string_view executed;
 };
 
 struct AnalyzeReport {
@@ -50,6 +57,18 @@ struct AnalyzeReport {
     // Positions in the main executable's code that the modules import, each
     // one counted once.
     std::size_t imported_functions = 0;
+
+    // Places the walk started from because a run executed them, and how many of
+    // them lay outside every function and became entries of their own.
+    std::size_t observed_seeds = 0;
+    std::size_t observed_functions = 0;
+
+    // Addresses reported as an instruction set conflict, and how many of them a
+    // run executed, which settles what the bytes there are.
+    std::size_t conflict_addresses = 0;
+    std::size_t conflicts_settled_by_observation = 0;
+    // The instruction set the run executed each settled one in.
+    std::map<std::uint32_t, std::string> executed_at_conflicts;
 
     domain::analysis::WalkReport walk;
     domain::analysis::BoundsReport bounds;
