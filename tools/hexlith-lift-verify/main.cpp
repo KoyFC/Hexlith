@@ -92,6 +92,44 @@ application::VerifiedRunMaker MakerFor(const Inputs& inputs) {
     };
 }
 
+// The script of the player's input the options name, or none.
+core::Result<std::unique_ptr<adapters::ScriptedInput>>
+LoadInput(const application::LiftVerifyOptions& options) {
+    if (!options.input.has_value()) {
+        return std::unique_ptr<adapters::ScriptedInput>{};
+    }
+    return adapters::ScriptedInput::Load(*options.input);
+}
+
+// The lifted library, checked against the title's code digest. A run of the
+// title is made only to read the digest from.
+core::Result<std::unique_ptr<lifted_adapters::LiftedLibrary>>
+OpenLifted(const std::string& path, core::ByteSpan cartridge, const profile::GameProfile& target) {
+    const core::Result<std::unique_ptr<application::BootedTitle>> first =
+        application::BootedTitle::FromCartridge(cartridge, target.executable_partition);
+    if (!first) {
+        return first.Failure();
+    }
+    return lifted_adapters::LiftedLibrary::Open(path, first.Value()->CodeDigest());
+}
+
+// Says how far the two runs agreed, and where they parted if they did.
+int PrintVerification(const application::LiftVerification& result) {
+    if (!result.divergence.has_value()) {
+        std::cout << std::format("agreed  after {} instructions{}\n",
+                                 result.agreed,
+                                 result.stop.has_value() ? ", where both runs stopped alike" : "");
+        return Success;
+    }
+    const application::LiftDivergence& divergence = *result.divergence;
+    std::cout << std::format("agreed  after {} instructions, with a thread at {:08X}\n",
+                             result.agreed,
+                             divergence.last_agreed_pc);
+    std::cout << std::format(
+        "differ  after {}: {}\n", divergence.instructions, divergence.difference);
+    return Differed;
+}
+
 int Run(const application::LiftVerifyOptions& options) {
     if (profile::KnownProfiles().size() != 1) {
         Report("this build knows more than one profile and cannot choose between them");
@@ -120,41 +158,26 @@ int Run(const application::LiftVerifyOptions& options) {
         return Failure;
     }
 
-    std::unique_ptr<adapters::ScriptedInput> input;
-    if (options.input.has_value()) {
-        core::Result<std::unique_ptr<adapters::ScriptedInput>> loaded =
-            adapters::ScriptedInput::Load(*options.input);
-        if (!loaded) {
-            Report(loaded.Failure().Message());
-            return Failure;
-        }
-        input = std::move(loaded.Value());
-    }
-
-    // A run of the lifted library is checked against the title's code
-    // digest; the first run made is enough to read it from.
-    core::Result<std::unique_ptr<application::BootedTitle>> first =
-        application::BootedTitle::FromCartridge(contents.Value(), target.executable_partition);
-    if (!first) {
-        Report(first.Failure().Message());
+    const core::Result<std::unique_ptr<adapters::ScriptedInput>> input = LoadInput(options);
+    if (!input) {
+        Report(input.Failure().Message());
         return Failure;
     }
     // The parser refuses a command line without it.
     const std::string lifted_path = options.lifted.value_or("");
-    core::Result<std::unique_ptr<lifted_adapters::LiftedLibrary>> library =
-        lifted_adapters::LiftedLibrary::Open(lifted_path, first.Value()->CodeDigest());
+    const core::Result<std::unique_ptr<lifted_adapters::LiftedLibrary>> library =
+        OpenLifted(lifted_path, contents.Value(), target);
     if (!library) {
         Report(library.Failure().Message());
         return Failure;
     }
-    first.Value().reset();
     std::cout << std::format("lifted  {}, {}\n", lifted_path, library.Value()->Manifest());
     std::cout << std::format(
         "verify  {} instructions, compared every {}\n", options.instruction_limit, options.step);
 
     const Inputs inputs{.cartridge = contents.Value(),
                         .partition = target.executable_partition,
-                        .input = input.get(),
+                        .input = input.Value().get(),
                         .library = library.Value().get()};
     const core::Result<application::LiftVerification> verified =
         application::VerifyLiftedCode(MakerFor(inputs), options.instruction_limit, options.step);
@@ -162,20 +185,7 @@ int Run(const application::LiftVerifyOptions& options) {
         Report(verified.Failure().Message());
         return Failure;
     }
-    const application::LiftVerification& result = verified.Value();
-    if (!result.divergence.has_value()) {
-        std::cout << std::format("agreed  after {} instructions{}\n",
-                                 result.agreed,
-                                 result.stop.has_value() ? ", where both runs stopped alike" : "");
-        return Success;
-    }
-    const application::LiftDivergence& divergence = *result.divergence;
-    std::cout << std::format("agreed  after {} instructions, with a thread at {:08X}\n",
-                             result.agreed,
-                             divergence.last_agreed_pc);
-    std::cout << std::format(
-        "differ  after {}: {}\n", divergence.instructions, divergence.difference);
-    return Differed;
+    return PrintVerification(verified.Value());
 }
 
 }  // namespace
