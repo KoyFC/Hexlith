@@ -14,42 +14,17 @@ std::uint32_t Field(core::ByteSpan module, std::size_t index) {
     return core::ReadU32At(module, cro::FieldOffset(index)).Value();
 }
 
-// The table offsets in the order RebaseHeader in cro_helper.cpp requires them
-// to appear in the file, closed by the end of the data and the file size. A
-// module whose offsets go backwards is refused by the console's loader before
-// anything is read from it.
-constexpr std::array<std::size_t, 18> OffsetOrder = {
-    cro::CodeOffsetField,
-    cro::ModuleNameOffsetField,
-    cro::SegmentTableOffsetField,
-    cro::NamedExportTableOffsetField,
-    cro::ExportTreeTableOffsetField,
-    cro::IndexedExportTableOffsetField,
-    cro::ExportStringsOffsetField,
-    cro::ImportModuleTableOffsetField,
-    cro::ExternalRelocationTableOffsetField,
-    cro::NamedImportTableOffsetField,
-    cro::IndexedImportTableOffsetField,
-    cro::AnonymousImportTableOffsetField,
-    cro::ImportStringsOffsetField,
-    cro::StaticAnonymousSymbolTableOffsetField,
-    cro::InternalRelocationTableOffsetField,
-    cro::StaticRelocationTableOffsetField,
-    cro::DataOffsetField,
-    cro::FileSizeField,
-};
-
 core::Status RequireOffsetsInOrder(core::ByteSpan module) {
-    for (std::size_t index = 1; index < OffsetOrder.size(); ++index) {
-        const std::uint32_t before = Field(module, OffsetOrder.at(index - 1));
-        const std::uint32_t after = Field(module, OffsetOrder.at(index));
+    for (std::size_t index = 1; index < cro::OffsetOrder.size(); ++index) {
+        const std::uint32_t before = Field(module, cro::OffsetOrder.at(index - 1));
+        const std::uint32_t after = Field(module, cro::OffsetOrder.at(index));
         if (after < before) {
             return core::Error{std::format(
                 "header field {} holds {:#x}, which comes before field {} at {:#x}, and the "
                 "loader requires the tables in order",
-                OffsetOrder.at(index),
+                cro::OffsetOrder.at(index),
                 after,
-                OffsetOrder.at(index - 1),
+                cro::OffsetOrder.at(index - 1),
                 before)};
         }
     }

@@ -1,6 +1,7 @@
 #ifndef HEXLITH_DOMAIN_CTR_LAYOUT_H
 #define HEXLITH_DOMAIN_CTR_LAYOUT_H
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
@@ -515,6 +516,32 @@ constexpr std::size_t RelocationSymbolSegmentOffset = 0x5;
 // absolute virtual addresses rather than file offsets, because the segments
 // it describes are already mapped.
 constexpr std::string_view StaticModuleName = "|static|";
+
+// The table offsets in the order RebaseHeader in Azahar's cro_helper.cpp
+// requires them to appear in the file, closed by the end of the data and the
+// file size. It is not quite the order of the header. A module whose offsets
+// go backwards is refused by the console's loader before anything is read from
+// it.
+constexpr std::array<std::size_t, 18> OffsetOrder = {
+    CodeOffsetField,
+    ModuleNameOffsetField,
+    SegmentTableOffsetField,
+    NamedExportTableOffsetField,
+    ExportTreeTableOffsetField,
+    IndexedExportTableOffsetField,
+    ExportStringsOffsetField,
+    ImportModuleTableOffsetField,
+    ExternalRelocationTableOffsetField,
+    NamedImportTableOffsetField,
+    IndexedImportTableOffsetField,
+    AnonymousImportTableOffsetField,
+    ImportStringsOffsetField,
+    StaticAnonymousSymbolTableOffsetField,
+    InternalRelocationTableOffsetField,
+    StaticRelocationTableOffsetField,
+    DataOffsetField,
+    FileSizeField,
+};
 
 }  // namespace cro
 }  // namespace hexlith::domain::ctr

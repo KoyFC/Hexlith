@@ -38,29 +38,6 @@ constexpr std::array<std::uint32_t, 17> EntrySizes = {
     cro::RelocationEntrySize,
 };
 
-// The offsets RebaseHeader requires to be in ascending order, which is not
-// quite the order of the header.
-constexpr std::array<std::size_t, 18> OffsetOrder = {
-    cro::CodeOffsetField,
-    cro::ModuleNameOffsetField,
-    cro::SegmentTableOffsetField,
-    cro::NamedExportTableOffsetField,
-    cro::ExportTreeTableOffsetField,
-    cro::IndexedExportTableOffsetField,
-    cro::ExportStringsOffsetField,
-    cro::ImportModuleTableOffsetField,
-    cro::ExternalRelocationTableOffsetField,
-    cro::NamedImportTableOffsetField,
-    cro::IndexedImportTableOffsetField,
-    cro::AnonymousImportTableOffsetField,
-    cro::ImportStringsOffsetField,
-    cro::StaticAnonymousSymbolTableOffsetField,
-    cro::InternalRelocationTableOffsetField,
-    cro::StaticRelocationTableOffsetField,
-    cro::DataOffsetField,
-    cro::FileSizeField,
-};
-
 // The header field each fix level crops from: nothing at level 0, then the
 // static anonymous symbols on, the import tables on, and everything from the
 // export tables on. Source: FIX_BARRIERS in cro_helper.cpp.
@@ -177,8 +154,8 @@ core::Status RebaseHeader(Image& image) {
     if (image.Field(cro::CodeOffsetField) < cro::HeaderSize) {
         return FormatError("its code starts inside its header");
     }
-    for (std::size_t index = 1; index < OffsetOrder.size(); ++index) {
-        if (image.Field(OffsetOrder.at(index)) < image.Field(OffsetOrder.at(index - 1))) {
+    for (std::size_t index = 1; index < cro::OffsetOrder.size(); ++index) {
+        if (image.Field(cro::OffsetOrder.at(index)) < image.Field(cro::OffsetOrder.at(index - 1))) {
             return FormatError("its tables are out of order");
         }
     }
