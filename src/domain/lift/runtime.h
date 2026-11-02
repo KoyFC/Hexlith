@@ -12,7 +12,9 @@
 #include "domain/arm/primitives/transfer.h"
 #include "domain/memory/process_memory.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -56,6 +58,16 @@ class EntryTable {
 public:
     void Add(Pc address, bool thumb, Function function) {
         (thumb ? thumb_ : arm_).emplace(address, function);
+        lowest_ = std::min(lowest_, address);
+        highest_ = std::max(highest_, address);
+    }
+
+    // Whether an address lies between the lowest and the highest entry, either
+    // instruction set. Outside, Find answers nothing, and code the table does
+    // not cover, such as a module's, is spared a lookup for each instruction
+    // the interpreter runs.
+    [[nodiscard]] bool MayCover(Pc address) const {
+        return address >= lowest_ && address <= highest_;
     }
 
     [[nodiscard]] Function Find(Pc address, bool thumb) const {
@@ -71,6 +83,8 @@ public:
 private:
     std::unordered_map<Pc, Function> arm_;
     std::unordered_map<Pc, Function> thumb_;
+    Pc lowest_ = std::numeric_limits<Pc>::max();
+    Pc highest_ = 0;
 };
 
 struct Context {

@@ -26,7 +26,8 @@ arm::Stop Engine::Run(arm::CpuState& state,
         // guest continues. An address is somewhere to continue; the two other
         // answers say the lifted code gave up, and have the interpreter run the
         // instruction at r15 or report why it stopped.
-        if (const runtime::Function function = entries_->Find(pc, state.thumb)) {
+        if (const runtime::Function function =
+                entries_->MayCover(pc) ? entries_->Find(pc, state.thumb) : nullptr) {
             ++statistics_.entries;
             const runtime::Pc next = function(context, pc);
             if (next == runtime::Stopped) {
