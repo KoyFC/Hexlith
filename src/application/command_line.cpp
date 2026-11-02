@@ -347,8 +347,8 @@ bool* BootFlag(BootOptions& options, std::string_view argument) {
 core::Status
 TakeBackend(std::span<const std::string_view> arguments, std::size_t& index, bool& vulkan) {
     std::optional<std::string> name;
-    const core::Status taken = TakeValue(arguments, index, name);
-    if (!taken) {
+    core::Status taken = TakeValue(arguments, index, name);
+    if (!taken || !name.has_value()) {
         return taken;
     }
     if (*name != "reference" && *name != "vulkan") {
@@ -362,8 +362,8 @@ TakeBackend(std::span<const std::string_view> arguments, std::size_t& index, boo
 core::Status
 TakeDevice(std::span<const std::string_view> arguments, std::size_t& index, std::string& device) {
     std::optional<std::string> name;
-    const core::Status taken = TakeValue(arguments, index, name);
-    if (taken) {
+    core::Status taken = TakeValue(arguments, index, name);
+    if (taken && name.has_value()) {
         device = *name;
     }
     return taken;

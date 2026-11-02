@@ -121,6 +121,7 @@ Stop Write(Execution<Memory>& execution, RegisterIndex index, std::uint32_t valu
 
 template<class Memory>
 void SetResultFlags(Execution<Memory>& execution, std::uint32_t result) {
+    // NOLINTNEXTLINE(readability-magic-numbers): a bit position
     execution.state->negative = (result >> 31U) != 0;
     execution.state->zero = result == 0;
 }

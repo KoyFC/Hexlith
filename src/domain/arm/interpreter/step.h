@@ -47,6 +47,7 @@ std::variant<Instruction, Stop> Fetch(const CpuState& state, const Memory& memor
     // The first halfword of a branch with link is 11110 in its top five bits.
     constexpr std::uint16_t LinkPrefix = 0b11110;
     std::uint16_t second = 0;
+    // NOLINTNEXTLINE(readability-magic-numbers): a bit position
     if ((first.value() >> 11U) == LinkPrefix) {
         const std::optional<std::uint16_t> next = memory.Read16(address + 2);
         if (!next.has_value()) {
@@ -257,7 +258,7 @@ Stop RunLoop(CpuState& state,
              Memory& memory,
              std::uint64_t limit,
              std::uint64_t& executed,
-             Before&& before) {
+             const Before& before) {
     executed = 0;
     while (executed < limit) {
         before(state.registers.at(ProgramCounter), state.thumb);

@@ -417,9 +417,8 @@ void Graphics::FillRange(std::uint32_t start,
     for (std::size_t byte = 0; byte < width; ++byte) {
         pattern.at(byte) = static_cast<std::uint8_t>(value >> (8U * byte));
     }
-    std::uint8_t* out = bytes.data();
     for (std::size_t at = 0; at + width <= bytes.size(); at += width) {
-        std::memcpy(out + at, pattern.data(), width);
+        std::memcpy(&bytes[at], pattern.data(), width);
     }
     static_cast<void>(kernel_->Space().Memory().Load(start, bytes));
 }

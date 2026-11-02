@@ -400,13 +400,14 @@ TEST(RenderAnalyzeSummary, NamesTheNumbersWorthWatching) {
     constexpr std::uint32_t TextBytes = 100;
     constexpr std::uint32_t CodeBytes = 59;
     constexpr std::size_t Functions = 11824;
+    constexpr std::size_t JumpTables = 501;
 
     AnalyzeReport report;
     report.exported_symbols = ExportedSymbols;
     report.text_bytes = TextBytes;
     report.code_bytes = CodeBytes;
     report.bounds.functions = Functions;
-    report.walk.jump_tables = 501;
+    report.walk.jump_tables = JumpTables;
 
     const std::string summary = RenderAnalyzeSummary(report);
     EXPECT_NE(summary.find("501 jump table(s)"), std::string::npos);

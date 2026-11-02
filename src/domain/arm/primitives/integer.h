@@ -85,6 +85,7 @@ Shift(ShiftKind kind, std::uint32_t value, std::uint32_t amount, bool carry_in) 
 // rotated immediate sets it from bit 31 of the result; an immediate that was not
 // rotated leaves it alone. Source: ARMExpandImm_C.
 [[nodiscard]] constexpr bool ImmediateCarry(std::uint32_t immediate, bool rotated, bool carry_in) {
+    // NOLINTNEXTLINE(readability-magic-numbers): a bit position
     return rotated ? (immediate >> 31U) != 0 : carry_in;
 }
 

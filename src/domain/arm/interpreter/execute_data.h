@@ -131,6 +131,7 @@ Stop ExecuteLongMultiply(Execution<Memory>& execution) {
     execution.state->registers.at(low) = static_cast<std::uint32_t>(result);
     execution.state->registers.at(high) = static_cast<std::uint32_t>(result >> 32U);
     if (instruction.updates_flags) {
+        // NOLINTNEXTLINE(readability-magic-numbers): a bit position
         execution.state->negative = (result >> 63U) != 0;
         execution.state->zero = result == 0;
     }
