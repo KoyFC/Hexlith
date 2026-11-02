@@ -750,7 +750,8 @@ core::Status VulkanGpuBackend::Implementation::DrawGroup(std::size_t first, std:
     auto staging =
         HostBuffer::Create(*context_,
                            color_size + depth_size + stencil_size,
-                           VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+                           VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                           HostUse::ReadBack);
     auto vertices =
         HostBuffer::Create(*context_,
                            std::max<VkDeviceSize>(vertex_data_.size() * sizeof(float), 16),

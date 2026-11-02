@@ -111,11 +111,19 @@ private:
     std::string first_validation_message_;
 };
 
+// What the host does with a buffer's bytes. One it reads back is put in
+// memory the host caches where the device offers it: on an integrated GPU the
+// first host-visible type is often uncached, and reading a picture back from
+// it a pixel at a time costs far more than drawing the picture did.
+enum class HostUse : std::uint8_t { Write, ReadBack };
+
 // A buffer in memory the host can see, mapped for as long as it lives.
 class HostBuffer {
 public:
-    static core::Result<std::unique_ptr<HostBuffer>>
-    Create(VulkanContext& context, VkDeviceSize size, VkBufferUsageFlags usage);
+    static core::Result<std::unique_ptr<HostBuffer>> Create(VulkanContext& context,
+                                                            VkDeviceSize size,
+                                                            VkBufferUsageFlags usage,
+                                                            HostUse use = HostUse::Write);
 
     HostBuffer(const HostBuffer&) = delete;
     HostBuffer& operator=(const HostBuffer&) = delete;

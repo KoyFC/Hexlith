@@ -242,8 +242,10 @@ std::optional<std::uint32_t> VulkanContext::MemoryType(std::uint32_t allowed,
     return std::nullopt;
 }
 
-core::Result<std::unique_ptr<HostBuffer>>
-HostBuffer::Create(VulkanContext& context, VkDeviceSize size, VkBufferUsageFlags usage) {
+core::Result<std::unique_ptr<HostBuffer>> HostBuffer::Create(VulkanContext& context,
+                                                             VkDeviceSize size,
+                                                             VkBufferUsageFlags usage,
+                                                             HostUse use) {
     std::unique_ptr<HostBuffer> buffer{new HostBuffer(context)};
     buffer->size_ = size;
     VkBufferCreateInfo create{};
@@ -259,9 +261,16 @@ HostBuffer::Create(VulkanContext& context, VkDeviceSize size, VkBufferUsageFlags
     }
     VkMemoryRequirements requirements{};
     vkGetBufferMemoryRequirements(device, buffer->buffer_, &requirements);
-    const std::optional<std::uint32_t> type = context.MemoryType(
-        requirements.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    constexpr VkMemoryPropertyFlags Visible =
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    std::optional<std::uint32_t> type;
+    if (use == HostUse::ReadBack) {
+        type = context.MemoryType(requirements.memoryTypeBits,
+                                  Visible | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+    }
+    if (!type) {
+        type = context.MemoryType(requirements.memoryTypeBits, Visible);
+    }
     if (!type) {
         return core::Error{"no memory the host can see for a buffer"};
     }
