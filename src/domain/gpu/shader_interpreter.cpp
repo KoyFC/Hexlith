@@ -1,57 +1,15 @@
 #include "domain/gpu/shader_interpreter.h"
 
 #include "domain/gpu/shader_arithmetic.h"
+#include "domain/gpu/shader_encoding.h"
 
 #include <cmath>
 
 namespace hexlith::domain::gpu {
 namespace {
 
-// Opcodes, six bits from bit 26. Source: GBATEK, 3DS GPU Shader Instruction
-// Set - Opcode Summary. CMP takes two opcodes and MAD and MADI eight each,
-// their low bits being part of the operands.
-namespace opcode {
-constexpr std::uint32_t Add = 0x00;
-constexpr std::uint32_t Dp3 = 0x01;
-constexpr std::uint32_t Dp4 = 0x02;
-constexpr std::uint32_t Dph = 0x03;
-constexpr std::uint32_t Ex2 = 0x05;
-constexpr std::uint32_t Lg2 = 0x06;
-constexpr std::uint32_t Mul = 0x08;
-constexpr std::uint32_t Sge = 0x09;
-constexpr std::uint32_t Slt = 0x0A;
-constexpr std::uint32_t Flr = 0x0B;
-constexpr std::uint32_t Max = 0x0C;
-constexpr std::uint32_t Min = 0x0D;
-constexpr std::uint32_t Rcp = 0x0E;
-constexpr std::uint32_t Rsq = 0x0F;
-constexpr std::uint32_t Mova = 0x12;
-constexpr std::uint32_t Mov = 0x13;
-constexpr std::uint32_t Dphi = 0x18;
-constexpr std::uint32_t Sgei = 0x1A;
-constexpr std::uint32_t Slti = 0x1B;
-constexpr std::uint32_t Break = 0x20;
-constexpr std::uint32_t Nop = 0x21;
-constexpr std::uint32_t End = 0x22;
-constexpr std::uint32_t Breakc = 0x23;
-constexpr std::uint32_t Call = 0x24;
-constexpr std::uint32_t Callc = 0x25;
-constexpr std::uint32_t Callu = 0x26;
-constexpr std::uint32_t Ifu = 0x27;
-constexpr std::uint32_t Ifc = 0x28;
-constexpr std::uint32_t Loop = 0x29;
-constexpr std::uint32_t Emit = 0x2A;
-constexpr std::uint32_t SetEmit = 0x2B;
-constexpr std::uint32_t Jmpc = 0x2C;
-constexpr std::uint32_t Jmpu = 0x2D;
-constexpr std::uint32_t CmpPair = 0x2E >> 1;
-constexpr std::uint32_t MadiGroup = 0x30 >> 3;
-constexpr std::uint32_t MadGroup = 0x38 >> 3;
-}  // namespace opcode
-
-constexpr std::uint32_t Field(std::uint32_t word, unsigned low, unsigned width) {
-    return (word >> low) & ((1U << width) - 1);
-}
+namespace opcode = shader::opcode;
+using shader::Field;
 
 // The last word of code memory is taken as END whatever it holds, which is
 // what Azahar does to keep a program without one from running off the end.
@@ -113,31 +71,22 @@ struct LoopScope {
     std::int32_t previous_counter = 0;
 };
 
-// An operand descriptor. Source: GBATEK, Shader Operand descriptors: the
-// destination mask in bits 0 to 3 with x highest, then for each source a
-// negation bit and four two-bit selectors, component 0 highest.
+// An operand descriptor, applied to the sources it describes.
 class Descriptor {
 public:
     explicit Descriptor(std::uint32_t word) : word_(word) {}
 
     [[nodiscard]] bool Writes(std::size_t component) const {
-        return Field(word_, static_cast<unsigned>(3 - component), 1) != 0;
+        return shader::DescriptorWrites(word_, component);
     }
 
     // Source 0, 1 or 2 of the instruction.
     [[nodiscard]] Vec4 Apply(std::size_t source, const Vec4& value) const {
-        constexpr std::array<unsigned, 3> NegateBits = {4, 13, 22};
-        constexpr std::array<unsigned, 3> FirstSelector = {11, 20, 29};
+        const bool negated = shader::DescriptorNegates(word_, source);
         Vec4 result{};
         for (std::size_t component = 0; component < Components; ++component) {
-            const unsigned shift =
-                FirstSelector.at(source) - (2 * static_cast<unsigned>(component));
-            result.at(component) = value.at(Field(word_, shift, 2));
-        }
-        if (Field(word_, NegateBits.at(source), 1) != 0) {
-            for (float& element : result) {
-                element = -element;
-            }
+            const float selected = value.at(shader::DescriptorSelector(word_, source, component));
+            result.at(component) = negated ? -selected : selected;
         }
         return result;
     }
@@ -172,6 +121,14 @@ private:
     void CloseScopes(std::uint32_t old_counter);
 
     [[nodiscard]] Vec4 Source(std::uint32_t raw, std::uint32_t relative) const;
+
+    // Source `index` of an instruction, as its descriptor selects and negates it.
+    [[nodiscard]] Vec4 Operand(const shader::Operands& operands, std::size_t index) const {
+        const shader::Source& source = operands.sources.at(index);
+        return Descriptor{unit_->descriptors.at(operands.descriptor)}.Apply(
+            index, Source(source.index, source.relative));
+    }
+
     float* Destination(std::uint32_t raw);
     void Write(std::uint32_t raw, const Descriptor& descriptor, const Vec4& value);
     [[nodiscard]] bool Condition(std::uint32_t word) const;
@@ -212,10 +169,10 @@ void Machine::Step() {
 }
 
 void Machine::Execute(std::uint32_t word) {
-    const std::uint32_t code = Field(word, 26, 6);
-    if (Field(word, 29, 3) == opcode::MadGroup || Field(word, 29, 3) == opcode::MadiGroup) {
+    const std::uint32_t code = shader::OpcodeOf(word);
+    if (shader::IsMultiplyAdd(word)) {
         MultiplyAdd(word);
-    } else if (Field(word, 27, 5) == opcode::CmpPair) {
+    } else if (shader::IsCompare(word)) {
         Compare(word);
     } else if (code < opcode::Break) {
         Arithmetic(word, code);
@@ -302,16 +259,10 @@ float Componentwise(std::uint32_t code, float a, float b) {
 }
 
 void Machine::Arithmetic(std::uint32_t word, std::uint32_t code) {
-    // Format 1, or 1i for the inverted opcodes, whose second source is the
-    // seven-bit one. Source: GBATEK, Instruction formats.
-    const bool inverted = code == opcode::Dphi || code == opcode::Sgei || code == opcode::Slti;
-    const std::uint32_t relative = Field(word, 19, 2);
-    const Descriptor descriptor{unit_->descriptors.at(Field(word, 0, 7))};
-    const std::uint32_t destination = Field(word, 21, 5);
-    const Vec4 first = descriptor.Apply(
-        0, inverted ? Source(Field(word, 14, 5), 0) : Source(Field(word, 12, 7), relative));
-    const Vec4 second = descriptor.Apply(
-        1, inverted ? Source(Field(word, 7, 7), relative) : Source(Field(word, 7, 5), 0));
+    const shader::Operands operands = shader::ArithmeticOperands(word);
+    const Descriptor descriptor{unit_->descriptors.at(operands.descriptor)};
+    const Vec4 first = Operand(operands, 0);
+    const Vec4 second = Operand(operands, 1);
 
     Vec4 result{};
     switch (code) {
@@ -368,35 +319,29 @@ void Machine::Arithmetic(std::uint32_t word, std::uint32_t code) {
         result_.unsupported = true;
         return;
     }
-    Write(destination, descriptor, result);
+    Write(operands.destination, descriptor, result);
 }
 
-// Format 5 for MAD, 5i for MADI, whose third source is the seven-bit one.
 void Machine::MultiplyAdd(std::uint32_t word) {
-    const bool inverted = Field(word, 29, 3) == opcode::MadiGroup;
-    const std::uint32_t relative = Field(word, 22, 2);
-    const Descriptor descriptor{unit_->descriptors.at(Field(word, 0, 5))};
-    const Vec4 first = descriptor.Apply(0, Source(Field(word, 17, 5), 0));
-    const Vec4 second = descriptor.Apply(
-        1, inverted ? Source(Field(word, 12, 5), 0) : Source(Field(word, 10, 7), relative));
-    const Vec4 third = descriptor.Apply(
-        2, inverted ? Source(Field(word, 5, 7), relative) : Source(Field(word, 5, 5), 0));
+    const shader::Operands operands = shader::MultiplyAddOperands(word);
+    const Vec4 first = Operand(operands, 0);
+    const Vec4 second = Operand(operands, 1);
+    const Vec4 third = Operand(operands, 2);
     Vec4 result{};
     for (std::size_t c = 0; c < Components; ++c) {
         // Not fused: the product is rounded before the sum.
         result.at(c) = Round(ShaderMultiply(first.at(c), second.at(c))) + third.at(c);
     }
-    Write(Field(word, 24, 5), descriptor, result);
+    Write(operands.destination, Descriptor{unit_->descriptors.at(operands.descriptor)}, result);
 }
 
-// Format 1c: the operators for x in bits 24 to 26 and for y in 21 to 23.
 // Operators 6 and 7 always hold, as GBATEK observed; Azahar leaves the flag
 // as it was.
 void Machine::Compare(std::uint32_t word) {
-    const Descriptor descriptor{unit_->descriptors.at(Field(word, 0, 7))};
-    const Vec4 first = descriptor.Apply(0, Source(Field(word, 12, 7), Field(word, 19, 2)));
-    const Vec4 second = descriptor.Apply(1, Source(Field(word, 7, 5), 0));
-    const std::array<std::uint32_t, 2> operators = {Field(word, 24, 3), Field(word, 21, 3)};
+    const shader::Operands operands = shader::ArithmeticOperands(word);
+    const Vec4 first = Operand(operands, 0);
+    const Vec4 second = Operand(operands, 1);
+    const std::array<std::uint32_t, 2> operators = shader::CompareOperators(word);
     for (std::size_t c = 0; c < 2; ++c) {
         const float a = first.at(c);
         const float b = second.at(c);
@@ -427,13 +372,11 @@ void Machine::Compare(std::uint32_t word) {
     }
 }
 
-// Format 2's condition: each flag compared with its reference bit, the two
-// results combined by the operator in bits 22 and 23. Source: GBATEK,
-// Conditions.
 bool Machine::Condition(std::uint32_t word) const {
-    const bool x = (Field(word, 25, 1) != 0) == registers_->conditions.at(0);
-    const bool y = (Field(word, 24, 1) != 0) == registers_->conditions.at(1);
-    switch (Field(word, 22, 2)) {
+    const shader::Condition condition = shader::ConditionOf(word);
+    const bool x = condition.x_reference == registers_->conditions.at(0);
+    const bool y = condition.y_reference == registers_->conditions.at(1);
+    switch (condition.combine) {
     case 0:
         return x || y;
     case 1:
@@ -445,14 +388,12 @@ bool Machine::Condition(std::uint32_t word) const {
     }
 }
 
-// Format 3's bool uniform, numbered in bits 22 to 25.
 bool Machine::Bool(std::uint32_t word) const {
-    return ((unit_->bool_uniforms >> Field(word, 22, 4)) & 1U) != 0;
+    return ((unit_->bool_uniforms >> shader::BoolUniformOf(word)) & 1U) != 0;
 }
 
 void Machine::FlowControl(std::uint32_t word, std::uint32_t code) {
-    const std::uint32_t count = Field(word, 0, 8);
-    const std::uint32_t target = Field(word, 10, 12);
+    const auto [target, count] = shader::RangeOf(word);
     const auto call = [&] {
         calls_.Push({.end_address = target + count, .return_address = counter_ + 1});
         Jump(target);
@@ -510,7 +451,7 @@ void Machine::FlowControl(std::uint32_t word, std::uint32_t code) {
         // INT.x + 1 iterations, aL from INT.y stepping by INT.z. The integer
         // uniform is numbered in bits 22 and 23. The counter to restore is
         // the one the loop starts with, as Azahar records it.
-        const std::uint32_t parameters = unit_->int_uniforms.at(Field(word, 22, 2));
+        const std::uint32_t parameters = unit_->int_uniforms.at(shader::IntUniformOf(word));
         const auto start = static_cast<std::int32_t>(Field(parameters, 8, 8));
         registers_->address.at(2) = start;
         loops_.Push({.entry_address = counter_ + 1,
@@ -528,13 +469,11 @@ void Machine::FlowControl(std::uint32_t word, std::uint32_t code) {
         registers_->output_bank ^= 1U;
         break;
     case opcode::SetEmit:
-        // Format 4: the vertex in bits 24 and 25, a primitive in bit 23, the
-        // winding reversed in bit 22.
         if (run_->emitter == nullptr) {
             result_.unsupported = true;
         } else {
-            run_->emitter->Configure(
-                Field(word, 24, 2), Field(word, 23, 1) != 0, Field(word, 22, 1) != 0);
+            const shader::EmitSetup setup = shader::EmitSetupOf(word);
+            run_->emitter->Configure(setup.vertex, setup.primitive, setup.reversed);
         }
         break;
     default:

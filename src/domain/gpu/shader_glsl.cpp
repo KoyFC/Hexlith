@@ -1,5 +1,7 @@
 #include "domain/gpu/shader_glsl.h"
 
+#include "domain/gpu/shader_encoding.h"
+
 #include <array>
 #include <format>
 #include <set>
@@ -9,50 +11,7 @@
 namespace hexlith::domain::gpu {
 namespace {
 
-// The opcodes and fields are the interpreter's; shader_interpreter.cpp cites
-// GBATEK for each.
-namespace opcode {
-constexpr std::uint32_t Add = 0x00;
-constexpr std::uint32_t Dp3 = 0x01;
-constexpr std::uint32_t Dp4 = 0x02;
-constexpr std::uint32_t Dph = 0x03;
-constexpr std::uint32_t Ex2 = 0x05;
-constexpr std::uint32_t Lg2 = 0x06;
-constexpr std::uint32_t Mul = 0x08;
-constexpr std::uint32_t Sge = 0x09;
-constexpr std::uint32_t Slt = 0x0A;
-constexpr std::uint32_t Flr = 0x0B;
-constexpr std::uint32_t Max = 0x0C;
-constexpr std::uint32_t Min = 0x0D;
-constexpr std::uint32_t Rcp = 0x0E;
-constexpr std::uint32_t Rsq = 0x0F;
-constexpr std::uint32_t Mova = 0x12;
-constexpr std::uint32_t Mov = 0x13;
-constexpr std::uint32_t Dphi = 0x18;
-constexpr std::uint32_t Sgei = 0x1A;
-constexpr std::uint32_t Slti = 0x1B;
-constexpr std::uint32_t Break = 0x20;
-constexpr std::uint32_t Nop = 0x21;
-constexpr std::uint32_t End = 0x22;
-constexpr std::uint32_t Breakc = 0x23;
-constexpr std::uint32_t Call = 0x24;
-constexpr std::uint32_t Callc = 0x25;
-constexpr std::uint32_t Callu = 0x26;
-constexpr std::uint32_t Ifu = 0x27;
-constexpr std::uint32_t Ifc = 0x28;
-constexpr std::uint32_t Loop = 0x29;
-constexpr std::uint32_t Emit = 0x2A;
-constexpr std::uint32_t SetEmit = 0x2B;
-constexpr std::uint32_t Jmpc = 0x2C;
-constexpr std::uint32_t Jmpu = 0x2D;
-constexpr std::uint32_t CmpPair = 0x2E >> 1;
-constexpr std::uint32_t MadiGroup = 0x30 >> 3;
-constexpr std::uint32_t MadGroup = 0x38 >> 3;
-}  // namespace opcode
-
-constexpr std::uint32_t Field(std::uint32_t word, unsigned low, unsigned width) {
-    return (word >> low) & ((1U << width) - 1);
-}
+namespace opcode = shader::opcode;
 
 constexpr std::uint32_t LastInstruction = ShaderUnitState::CodeWords - 1;
 constexpr std::string_view Components = "xyzw";
@@ -185,28 +144,23 @@ uint pica_close_scopes(uint old_counter, bool breaking, uint counter) {
 }
 )";
 
-// An operand descriptor, as the interpreter reads it.
+// An operand descriptor, applied to the sources it describes.
 class Descriptor {
 public:
     explicit Descriptor(std::uint32_t word) : word_(word) {}
 
     [[nodiscard]] bool Writes(std::size_t component) const {
-        return Field(word_, static_cast<unsigned>(3 - component), 1) != 0;
+        return shader::DescriptorWrites(word_, component);
     }
 
     // A source with its selectors and negation applied.
     [[nodiscard]] std::string Apply(std::size_t source, const std::string& value) const {
-        constexpr std::array<unsigned, 3> NegateBits = {4, 13, 22};
-        constexpr std::array<unsigned, 3> FirstSelector = {11, 20, 29};
         std::string swizzle;
         for (std::size_t component = 0; component < Components.size(); ++component) {
-            const unsigned shift =
-                FirstSelector.at(source) - (2 * static_cast<unsigned>(component));
-            swizzle += Components.at(Field(word_, shift, 2));
+            swizzle += Components.at(shader::DescriptorSelector(word_, source, component));
         }
         const std::string selected = std::format("{}.{}", value, swizzle);
-        return Field(word_, NegateBits.at(source), 1) != 0 ? std::format("(-{})", selected)
-                                                           : selected;
+        return shader::DescriptorNegates(word_, source) ? std::format("(-{})", selected) : selected;
     }
 
 private:
@@ -251,9 +205,10 @@ Write(std::uint32_t destination, const Descriptor& descriptor, const std::string
 
 // Format 2's condition, its reference bits and operator known.
 std::string Condition(std::uint32_t word) {
-    std::string x = std::format("(pica_cmp.x == {})", Field(word, 25, 1) != 0 ? "true" : "false");
-    std::string y = std::format("(pica_cmp.y == {})", Field(word, 24, 1) != 0 ? "true" : "false");
-    switch (Field(word, 22, 2)) {
+    const shader::Condition condition = shader::ConditionOf(word);
+    std::string x = std::format("(pica_cmp.x == {})", condition.x_reference ? "true" : "false");
+    std::string y = std::format("(pica_cmp.y == {})", condition.y_reference ? "true" : "false");
+    switch (condition.combine) {
     case 0:
         return std::format("({} || {})", x, y);
     case 1:
@@ -266,7 +221,7 @@ std::string Condition(std::uint32_t word) {
 }
 
 std::string Bool(std::uint32_t word) {
-    return std::format("pica_bool({}u)", Field(word, 22, 4));
+    return std::format("pica_bool({}u)", shader::BoolUniformOf(word));
 }
 
 class Translator {
@@ -306,8 +261,8 @@ private:
     }
 
     [[nodiscard]] static bool IsFlow(std::uint32_t word) {
-        return Field(word, 29, 3) != opcode::MadGroup && Field(word, 29, 3) != opcode::MadiGroup &&
-               Field(word, 27, 5) != opcode::CmpPair && Field(word, 26, 6) >= opcode::Break;
+        return !shader::IsMultiplyAdd(word) && !shader::IsCompare(word) &&
+               shader::OpcodeOf(word) >= opcode::Break;
     }
 
     // Every address the counter can take: each instruction's successor, and
@@ -323,13 +278,12 @@ private:
                 continue;
             }
             const std::uint32_t word = Word(address);
-            if (IsFlow(word) && Field(word, 26, 6) == opcode::End) {
+            if (IsFlow(word) && shader::OpcodeOf(word) == opcode::End) {
                 continue;
             }
             pending.push_back(address + 1);
             if (IsFlow(word)) {
-                const std::uint32_t target = Field(word, 10, 12);
-                const std::uint32_t count = Field(word, 0, 8);
+                const auto [target, count] = shader::RangeOf(word);
                 pending.insert(pending.end(), {target, target + 1, target + count});
             }
         }
@@ -338,19 +292,26 @@ private:
 
     [[nodiscard]] std::string Instruction(std::uint32_t address) {
         const std::uint32_t word = Word(address);
-        if (Field(word, 29, 3) == opcode::MadGroup || Field(word, 29, 3) == opcode::MadiGroup) {
+        if (shader::IsMultiplyAdd(word)) {
             return MultiplyAdd(word);
         }
-        if (Field(word, 27, 5) == opcode::CmpPair) {
+        if (shader::IsCompare(word)) {
             return Compare(word);
         }
-        const std::uint32_t code = Field(word, 26, 6);
+        const std::uint32_t code = shader::OpcodeOf(word);
         return code < opcode::Break ? Arithmetic(word, code) : FlowControl(word, code, address);
     }
 
     std::string Unsupported() {
         unsupported_ = true;
         return "            pica_unsupported = true;\n";
+    }
+
+    // Source `index` of an instruction, as its descriptor selects and negates it.
+    [[nodiscard]] std::string Operand(const shader::Operands& operands, std::size_t index) const {
+        const shader::Source& source = operands.sources.at(index);
+        return Descriptor{unit_->descriptors.at(operands.descriptor)}.Apply(
+            index, SourceRegister(source.index, source.relative));
     }
 
     std::string Arithmetic(std::uint32_t word, std::uint32_t code);
@@ -364,18 +325,11 @@ private:
 };
 
 std::string Translator::Arithmetic(std::uint32_t word, std::uint32_t code) {
-    const bool inverted = code == opcode::Dphi || code == opcode::Sgei || code == opcode::Slti;
-    const std::uint32_t relative = Field(word, 19, 2);
-    const Descriptor descriptor{unit_->descriptors.at(Field(word, 0, 7))};
-    const std::string first =
-        descriptor.Apply(0,
-                         inverted ? SourceRegister(Field(word, 14, 5), 0)
-                                  : SourceRegister(Field(word, 12, 7), relative));
-    const std::string second =
-        descriptor.Apply(1,
-                         inverted ? SourceRegister(Field(word, 7, 7), relative)
-                                  : SourceRegister(Field(word, 7, 5), 0));
-    const std::uint32_t destination = Field(word, 21, 5);
+    const shader::Operands operands = shader::ArithmeticOperands(word);
+    const Descriptor descriptor{unit_->descriptors.at(operands.descriptor)};
+    const std::string first = Operand(operands, 0);
+    const std::string second = Operand(operands, 1);
+    const std::uint32_t destination = operands.destination;
     const auto dot = [&](std::size_t terms, bool homogeneous) {
         std::string text = std::format(
             "            vec4 left = {};\n            vec4 right = {};\n", first, second);
@@ -441,32 +395,23 @@ std::string Translator::Arithmetic(std::uint32_t word, std::uint32_t code) {
 
 // MAD and MADI: not fused, the product rounded before the sum.
 std::string Translator::MultiplyAdd(std::uint32_t word) {
-    const bool inverted = Field(word, 29, 3) == opcode::MadiGroup;
-    const std::uint32_t relative = Field(word, 22, 2);
-    const Descriptor descriptor{unit_->descriptors.at(Field(word, 0, 5))};
-    const std::string first = descriptor.Apply(0, SourceRegister(Field(word, 17, 5), 0));
-    const std::string second =
-        descriptor.Apply(1,
-                         inverted ? SourceRegister(Field(word, 12, 5), 0)
-                                  : SourceRegister(Field(word, 10, 7), relative));
-    const std::string third =
-        descriptor.Apply(2,
-                         inverted ? SourceRegister(Field(word, 5, 7), relative)
-                                  : SourceRegister(Field(word, 5, 5), 0));
-    return Write(Field(word, 24, 5),
-                 descriptor,
-                 std::format("pica_mul4({}, {}) + {}", first, second, third));
+    const shader::Operands operands = shader::MultiplyAddOperands(word);
+    return Write(operands.destination,
+                 Descriptor{unit_->descriptors.at(operands.descriptor)},
+                 std::format("pica_mul4({}, {}) + {}",
+                             Operand(operands, 0),
+                             Operand(operands, 1),
+                             Operand(operands, 2)));
 }
 
 // CMP's operators 6 and 7 always hold.
 std::string Translator::Compare(std::uint32_t word) {
     constexpr std::array<std::string_view, 6> Operators = {"==", "!=", "<", "<=", ">", ">="};
-    const Descriptor descriptor{unit_->descriptors.at(Field(word, 0, 7))};
-    std::string text =
-        std::format("            vec4 left = {};\n            vec4 right = {};\n",
-                    descriptor.Apply(0, SourceRegister(Field(word, 12, 7), Field(word, 19, 2))),
-                    descriptor.Apply(1, SourceRegister(Field(word, 7, 5), 0)));
-    const std::array<std::uint32_t, 2> operators = {Field(word, 24, 3), Field(word, 21, 3)};
+    const shader::Operands operands = shader::ArithmeticOperands(word);
+    std::string text = std::format("            vec4 left = {};\n            vec4 right = {};\n",
+                                   Operand(operands, 0),
+                                   Operand(operands, 1));
+    const std::array<std::uint32_t, 2> operators = shader::CompareOperators(word);
     for (std::size_t c = 0; c < 2; ++c) {
         const std::uint32_t op = operators.at(c);
         text += op < Operators.size()
@@ -481,8 +426,7 @@ std::string Translator::Compare(std::uint32_t word) {
 // A jump sets the counter one short of its target, since it steps on after
 // every instruction.
 std::string Translator::FlowControl(std::uint32_t word, std::uint32_t code, std::uint32_t address) {
-    const std::uint32_t count = Field(word, 0, 8);
-    const std::uint32_t target = Field(word, 10, 12);
+    const auto [target, count] = shader::RangeOf(word);
     const std::string jump = std::format("counter = {}u - 1u;", target);
     const std::string call =
         std::format("pica_push_call({}u, {}u); {}", target + count, address + 1, jump);
@@ -518,7 +462,7 @@ std::string Translator::FlowControl(std::uint32_t word, std::uint32_t code, std:
         return std::format("            pica_push_loop({}u, {}u, pica_int({}u));\n",
                            address + 1,
                            target + 1,
-                           Field(word, 22, 2));
+                           shader::IntUniformOf(word));
     case opcode::Emit:
     case opcode::SetEmit:
     default:

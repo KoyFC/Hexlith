@@ -22,6 +22,7 @@ target_sources(
             screen.cpp
             screen.h
             shader_arithmetic.h
+            shader_encoding.h
             shader_glsl.cpp
             shader_glsl.h
             shader_interpreter.cpp
