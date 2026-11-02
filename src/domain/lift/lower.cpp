@@ -43,6 +43,42 @@ bool IsArithmetic(arm::Operation operation) {
     }
 }
 
+// The operations HandledByTheInterpreter takes. The survey of what lifted code
+// left to the interpreter, weighed by a run, put these at the top.
+bool IsHandledByTheInterpreter(arm::Operation operation) {
+    using arm::Operation;
+    if (arm::IsFloatingPoint(operation)) {
+        return true;
+    }
+    switch (operation) {
+    case Operation::LoadExclusive:
+    case Operation::StoreExclusive:
+    case Operation::LoadExclusiveByte:
+    case Operation::StoreExclusiveByte:
+    case Operation::LoadExclusiveHalf:
+    case Operation::StoreExclusiveHalf:
+    case Operation::LoadExclusiveDouble:
+    case Operation::StoreExclusiveDouble:
+    case Operation::ClearExclusive:
+    case Operation::LoadDouble:
+    case Operation::StoreDouble:
+    case Operation::Umull:
+    case Operation::Umlal:
+    case Operation::Umaal:
+    case Operation::Smull:
+    case Operation::Smlal:
+    case Operation::SmulHalf:
+    case Operation::SmlaHalf:
+    case Operation::SmlalHalf:
+    case Operation::SmulwHalf:
+    case Operation::SmlawHalf:
+    case Operation::CountLeadingZeros:
+        return true;
+    default:
+        return false;
+    }
+}
+
 class Lowerer {
 public:
     explicit Lowerer(const PlacedInstruction& placed)
@@ -174,8 +210,22 @@ private:
         case Operation::MoveToCoprocessor:
             return ThreadIdAccess();
         default:
+            return HandledByTheInterpreter();
+        }
+    }
+
+    // An instruction whose handler in the interpreter does the work, called
+    // directly with the instruction as a constant: floating point, the
+    // exclusive pair, the doubleword transfers, the long and halfword
+    // multiplies and the count of leading zeros. Not one that writes r15, since
+    // the handler leaves moving r15 to its caller.
+    bool HandledByTheInterpreter() {
+        if (!IsHandledByTheInterpreter(instruction_.operation) ||
+            arm::WritesProgramCounter(instruction_)) {
             return false;
         }
+        Emit(OpKind::Execute, {});
+        return true;
     }
 
     // --- Emitting ----------------------------------------------------------------

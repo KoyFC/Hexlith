@@ -60,6 +60,8 @@ std::string_view Name(OpKind kind) {
         return "bail-if";
     case OpKind::Interpret:
         return "interpret";
+    case OpKind::Execute:
+        return "execute";
     }
     return "unknown";
 }

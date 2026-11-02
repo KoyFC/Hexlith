@@ -1,8 +1,10 @@
 #include "domain/lift/evaluate.h"
 
+#include "domain/arm/interpreter/step.h"
 #include "domain/arm/primitives/media.h"
 
 #include <optional>
+#include <variant>
 
 namespace hexlith::domain::lift {
 namespace {
@@ -209,6 +211,33 @@ bool PassesItsCondition(const ir::Instruction& instruction, const arm::CpuState&
     return primitives::ConditionPassed(instruction.condition, flags);
 }
 
+// The handler's own work, on the instruction fetched again from memory, as
+// lifted code does it with the instruction it decoded when it was lifted.
+//
+// The handler leaves r15 alone, as every other operation does, and the block
+// moves it on; r15 is only pointed at the instruction long enough to fetch it,
+// unless the handler stops there.
+template<memory::GuestMemory Memory>
+Early ApplyHandler(const ir::Instruction& instruction, arm::CpuState& state, Memory& memory) {
+    std::uint32_t& pc = state.registers.at(arm::ProgramCounter);
+    const std::uint32_t before = pc;
+    pc = instruction.address;
+    const std::variant<arm::Instruction, arm::Stop> fetched =
+        arm::interpreter::Fetch(state, memory);
+    pc = before;
+    if (const auto* stopped = std::get_if<arm::Stop>(&fetched)) {
+        return Early{Evaluation{.kind = EvaluationKind::Stopped, .stop = *stopped}};
+    }
+    const arm::Stop stop = arm::ExecuteHandler(
+        state, memory, std::get<arm::Instruction>(fetched), instruction.address);
+    if (stop.Stopped()) {
+        // Stopped at the instruction, as the interpreter leaves r15.
+        pc = instruction.address;
+        return Early{Evaluation{.kind = EvaluationKind::Stopped, .stop = stop}};
+    }
+    return std::nullopt;
+}
+
 template<memory::GuestMemory Memory>
 Early Apply(const ir::Instruction& instruction,
             const ir::Op& op,
@@ -241,6 +270,8 @@ Early Apply(const ir::Instruction& instruction,
         return stop.Stopped() ? Early{Evaluation{.kind = EvaluationKind::Stopped, .stop = stop}}
                               : std::nullopt;
     }
+    case OpKind::Execute:
+        return ApplyHandler(instruction, state, memory);
     default:
         ApplyArithmetic(op, t);
         return std::nullopt;

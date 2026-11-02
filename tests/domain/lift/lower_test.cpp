@@ -26,18 +26,20 @@ arm::Instruction Thumb(std::uint16_t halfword) {
     return arm::DecodeThumb(halfword, 0);
 }
 
-// Whether the instruction is translated or left whole to the interpreter. A
-// lowering that sent everything to the interpreter would agree with it
-// perfectly, so what a test expects is part of the test.
-enum class Expect : std::uint8_t { Translated, Interpreted };
+// Whether the instruction is translated, left whole to the interpreter, or
+// done by the interpreter's handler called directly. A lowering that sent
+// everything to the interpreter would agree with it perfectly, so what a test
+// expects is part of the test.
+enum class Expect : std::uint8_t { Translated, Interpreted, Handled };
 
 void ExpectAgreement(const arm::Instruction& instruction,
                      const test::Setup& setup = DefaultSetup,
                      Expect expected = Expect::Translated) {
     ASSERT_TRUE(arm::IsDefined(instruction));
-    const bool interpreted =
-        Lower(PlacedInstruction{.address = test::Code, .instruction = instruction}).IsInterpreted();
-    EXPECT_EQ(interpreted, expected == Expect::Interpreted);
+    const ir::Instruction lowered =
+        Lower(PlacedInstruction{.address = test::Code, .instruction = instruction});
+    EXPECT_EQ(lowered.IsInterpreted(), expected == Expect::Interpreted);
+    EXPECT_EQ(lowered.IsExecutedByAHandler(), expected == Expect::Handled);
     EXPECT_EQ(test::DisagreementForAllFlags(instruction, setup), "");
 }
 
@@ -277,8 +279,17 @@ TEST(Lower, ExtensionsWithAndWithoutAnAddend) {
 
 TEST(Lower, WhatIsNotTranslatedGoesToTheInterpreterWhole) {
     ExpectArm(0xEF000011, DefaultSetup, Expect::Interpreted);  // svc #0x11
-    ExpectArm(0xEE300A01, DefaultSetup, Expect::Interpreted);  // vadd.f32 s0, s0, s2
     EXPECT_TRUE(LowerArm(0xEF000011).IsInterpreted());
+}
+
+// The families whose work the interpreter's handler does, called directly.
+TEST(Lower, FloatingPointAndTheRarerTransfersGoToTheirHandler) {
+    ExpectArm(0xEE300A01, DefaultSetup, Expect::Handled);  // vadd.f32 s0, s0, s2
+    ExpectArm(0xE1910F9F, DefaultSetup, Expect::Handled);  // ldrex r0, [r1]
+    ExpectArm(0xE1812F90, DefaultSetup, Expect::Handled);  // strex r2, r0, [r1]
+    ExpectArm(0xE0810392, DefaultSetup, Expect::Handled);  // umull r0, r1, r2, r3
+    ExpectArm(0xE16F0F11, DefaultSetup, Expect::Handled);  // clz r0, r1
+    ExpectArm(0xE1C120F8, DefaultSetup, Expect::Handled);  // strd r2, r3, [r1, #8]
 }
 
 TEST(Lower, ARegisterCombinationTheArchitectureCallsUnpredictableGoesToTheInterpreter) {

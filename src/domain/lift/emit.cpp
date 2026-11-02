@@ -46,6 +46,103 @@ constexpr std::array<std::string_view, 5> WidthNames = {
 constexpr std::array<std::string_view, ir::FlagCount> FlagFields = {
     "negative", "zero", "carry", "overflow", "saturated"};
 
+std::string OperationName(std::uint32_t index);
+std::string Hex(std::uint32_t value);
+
+std::string_view ConditionName(arm::Condition condition) {
+    return condition == arm::Condition::Unconditional
+               ? "Unconditional"
+               : ConditionNames.at(static_cast<std::size_t>(condition));
+}
+
+constexpr std::array<std::string_view, 4> OperandFormNames = {
+    "None", "Immediate", "Register", "ShiftedRegister"};
+
+// The fields of a decoded instruction that differ from a default one, as the
+// designated initializers of arm::Instruction, in the order it declares them.
+std::string InstructionFields(const arm::Instruction& instruction) {
+    const arm::Instruction defaults{};
+    std::vector<std::string> fields;
+    const auto number = [&fields](std::string_view name, auto value, auto fallback) {
+        if (value != fallback) {
+            fields.emplace_back(std::format(".{} = {}", name, static_cast<std::int64_t>(value)));
+        }
+    };
+    const auto flag = [&fields](std::string_view name, bool value, bool fallback) {
+        if (value != fallback) {
+            fields.emplace_back(std::format(".{} = {}", name, value ? "true" : "false"));
+        }
+    };
+    const auto enumerated =
+        [&fields](std::string_view name, std::string_view type, auto value, auto fallback) {
+            if (value != fallback) {
+                fields.emplace_back(std::format(
+                    ".{} = static_cast<arm::{}>({})", name, type, static_cast<unsigned>(value)));
+            }
+        };
+    fields.emplace_back(std::format(".encoding = {}", Hex(instruction.encoding)));
+    fields.emplace_back(
+        std::format(".operation = arm::Operation::{}",
+                    OperationName(static_cast<std::uint32_t>(instruction.operation))));
+    if (instruction.condition != defaults.condition) {
+        fields.emplace_back(
+            std::format(".condition = arm::Condition::{}", ConditionName(instruction.condition)));
+    }
+    if (instruction.instruction_set != defaults.instruction_set) {
+        fields.emplace_back(".instruction_set = arm::InstructionSet::Thumb");
+    }
+    number("width", instruction.width, defaults.width);
+    number("destination", instruction.destination, defaults.destination);
+    number("destination_high", instruction.destination_high, defaults.destination_high);
+    number("first", instruction.first, defaults.first);
+    number("second", instruction.second, defaults.second);
+    number("third", instruction.third, defaults.third);
+    if (instruction.operand != defaults.operand) {
+        fields.emplace_back(
+            std::format(".operand = arm::OperandForm::{}",
+                        OperandFormNames.at(static_cast<std::size_t>(instruction.operand))));
+    }
+    number("immediate", instruction.immediate, defaults.immediate);
+    if (instruction.shift != defaults.shift) {
+        fields.emplace_back(
+            std::format(".shift = arm::ShiftKind::{}",
+                        ShiftNames.at(static_cast<std::size_t>(instruction.shift))));
+    }
+    number("shift_amount", instruction.shift_amount, defaults.shift_amount);
+    number("shift_register", instruction.shift_register, defaults.shift_register);
+    number("registers", instruction.registers, defaults.registers);
+    number("branch_offset", instruction.branch_offset, defaults.branch_offset);
+    flag("updates_flags", instruction.updates_flags, defaults.updates_flags);
+    flag("preindexed", instruction.preindexed, defaults.preindexed);
+    flag("add_offset", instruction.add_offset, defaults.add_offset);
+    flag("writes_back", instruction.writes_back, defaults.writes_back);
+    flag("saved_status", instruction.saved_status, defaults.saved_status);
+    flag("left_half_high", instruction.left_half_high, defaults.left_half_high);
+    flag("right_half_high", instruction.right_half_high, defaults.right_half_high);
+    number("coprocessor", instruction.coprocessor, defaults.coprocessor);
+    number("coprocessor_opcode1", instruction.coprocessor_opcode1, defaults.coprocessor_opcode1);
+    number("coprocessor_opcode2", instruction.coprocessor_opcode2, defaults.coprocessor_opcode2);
+    enumerated(
+        "parallel_prefix", "ParallelPrefix", instruction.parallel_prefix, defaults.parallel_prefix);
+    enumerated(
+        "parallel_shape", "ParallelShape", instruction.parallel_shape, defaults.parallel_shape);
+    number("vfp_destination", instruction.vfp_destination, defaults.vfp_destination);
+    number("vfp_first", instruction.vfp_first, defaults.vfp_first);
+    number("vfp_second", instruction.vfp_second, defaults.vfp_second);
+    flag("vfp_destination_double",
+         instruction.vfp_destination_double,
+         defaults.vfp_destination_double);
+    flag("vfp_sources_double", instruction.vfp_sources_double, defaults.vfp_sources_double);
+    number("vfp_count", instruction.vfp_count, defaults.vfp_count);
+    flag("integer_signed", instruction.integer_signed, defaults.integer_signed);
+    flag("rounds_towards_zero", instruction.rounds_towards_zero, defaults.rounds_towards_zero);
+    std::string text;
+    for (const std::string& field : fields) {
+        text.append(text.empty() ? "" : ", ").append(field);
+    }
+    return text;
+}
+
 std::string OperationName(std::uint32_t index) {
     using arm::Operation;
     switch (static_cast<Operation>(index)) {
@@ -97,6 +194,110 @@ std::string OperationName(std::uint32_t index) {
         return "Uxtb";
     case Operation::Uxth:
         return "Uxth";
+    case Operation::LoadExclusive:
+        return "LoadExclusive";
+    case Operation::StoreExclusive:
+        return "StoreExclusive";
+    case Operation::LoadExclusiveByte:
+        return "LoadExclusiveByte";
+    case Operation::StoreExclusiveByte:
+        return "StoreExclusiveByte";
+    case Operation::LoadExclusiveHalf:
+        return "LoadExclusiveHalf";
+    case Operation::StoreExclusiveHalf:
+        return "StoreExclusiveHalf";
+    case Operation::LoadExclusiveDouble:
+        return "LoadExclusiveDouble";
+    case Operation::StoreExclusiveDouble:
+        return "StoreExclusiveDouble";
+    case Operation::ClearExclusive:
+        return "ClearExclusive";
+    case Operation::LoadDouble:
+        return "LoadDouble";
+    case Operation::StoreDouble:
+        return "StoreDouble";
+    case Operation::Umull:
+        return "Umull";
+    case Operation::Umlal:
+        return "Umlal";
+    case Operation::Umaal:
+        return "Umaal";
+    case Operation::Smull:
+        return "Smull";
+    case Operation::Smlal:
+        return "Smlal";
+    case Operation::SmulHalf:
+        return "SmulHalf";
+    case Operation::SmlaHalf:
+        return "SmlaHalf";
+    case Operation::SmlalHalf:
+        return "SmlalHalf";
+    case Operation::SmulwHalf:
+        return "SmulwHalf";
+    case Operation::SmlawHalf:
+        return "SmlawHalf";
+    case Operation::CountLeadingZeros:
+        return "CountLeadingZeros";
+    case Operation::VfpMultiplyAccumulate:
+        return "VfpMultiplyAccumulate";
+    case Operation::VfpMultiplySubtract:
+        return "VfpMultiplySubtract";
+    case Operation::VfpNegatedMultiplyAccumulate:
+        return "VfpNegatedMultiplyAccumulate";
+    case Operation::VfpNegatedMultiplySubtract:
+        return "VfpNegatedMultiplySubtract";
+    case Operation::VfpMultiply:
+        return "VfpMultiply";
+    case Operation::VfpNegatedMultiply:
+        return "VfpNegatedMultiply";
+    case Operation::VfpAdd:
+        return "VfpAdd";
+    case Operation::VfpSubtract:
+        return "VfpSubtract";
+    case Operation::VfpDivide:
+        return "VfpDivide";
+    case Operation::VfpCopy:
+        return "VfpCopy";
+    case Operation::VfpAbsolute:
+        return "VfpAbsolute";
+    case Operation::VfpNegate:
+        return "VfpNegate";
+    case Operation::VfpSquareRoot:
+        return "VfpSquareRoot";
+    case Operation::VfpCompare:
+        return "VfpCompare";
+    case Operation::VfpCompareSignalling:
+        return "VfpCompareSignalling";
+    case Operation::VfpConvertPrecision:
+        return "VfpConvertPrecision";
+    case Operation::VfpConvertFromInteger:
+        return "VfpConvertFromInteger";
+    case Operation::VfpConvertToInteger:
+        return "VfpConvertToInteger";
+    case Operation::VfpMoveToSingle:
+        return "VfpMoveToSingle";
+    case Operation::VfpMoveFromSingle:
+        return "VfpMoveFromSingle";
+    case Operation::VfpMoveToHalf:
+        return "VfpMoveToHalf";
+    case Operation::VfpMoveFromHalf:
+        return "VfpMoveFromHalf";
+    case Operation::VfpMoveToPair:
+        return "VfpMoveToPair";
+    case Operation::VfpMoveFromPair:
+        return "VfpMoveFromPair";
+    case Operation::VfpMoveToSystem:
+        return "VfpMoveToSystem";
+    case Operation::VfpMoveFromSystem:
+        return "VfpMoveFromSystem";
+    case Operation::VfpLoad:
+        return "VfpLoad";
+    case Operation::VfpStore:
+        return "VfpStore";
+    case Operation::VfpLoadMultiple:
+        return "VfpLoadMultiple";
+    case Operation::VfpStoreMultiple:
+        return "VfpStoreMultiple";
     default:
         break;
     }
@@ -335,7 +536,22 @@ private:
         case OpKind::Interpret:
             Interpret(address, unexecuted);
             break;
+        case OpKind::Execute:
+            Execute(address, unexecuted);
+            break;
         }
+    }
+
+    // The interpreter's handler does the work, with the instruction a constant
+    // written out field by field, so that the compiler resolves which handler
+    // and sees the registers it names.
+    void Execute(std::uint32_t address, std::size_t unexecuted) {
+        Line(std::format("static constexpr arm::Instruction decoded{{{}}};",
+                         InstructionFields(placed_->instruction)));
+        Line(std::format("if (const arm::Stop stop = runtime::ExecuteHandled(c, {}, decoded); "
+                         "stop.Stopped()) return runtime::StoppedBy(c, stop, {});",
+                         Hex(address),
+                         unexecuted - 1));
     }
 
     // The interpreter runs what the lifter does not translate, and decoding is

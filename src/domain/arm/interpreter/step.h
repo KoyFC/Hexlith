@@ -57,8 +57,10 @@ std::variant<Instruction, Stop> Fetch(const CpuState& state, const Memory& memor
     return DecodeThumb(first.value(), second);
 }
 
+// Inlined wherever it is called, so that a caller whose instruction is a
+// constant, as lifted code's is, has the switch resolved by the compiler.
 template<class Memory>
-Stop Dispatch(Execution<Memory>& execution) {
+[[gnu::always_inline]] inline Stop Dispatch(Execution<Memory>& execution) {
     switch (execution.instruction.operation) {
     case Operation::And:
     case Operation::Eor:
@@ -186,6 +188,22 @@ Stop Dispatch(Execution<Memory>& execution) {
 }
 
 }  // namespace interpreter
+
+// An instruction's own work, done by its handler: no check of its condition or
+// its operands, and r15 not moved on. Lifted code calls this for the
+// instructions it leaves to the interpreter's handlers, having checked the
+// condition itself and the operands when it lifted them, with the instruction
+// a constant the compiler can see through. The caller has to know that the
+// instruction does not write r15.
+template<memory::GuestMemory Memory>
+[[gnu::always_inline]] inline Stop ExecuteHandler(CpuState& state,
+                                                  Memory& memory,
+                                                  const Instruction& instruction,
+                                                  std::uint32_t address) {
+    interpreter::Execution<Memory> execution{
+        .state = &state, .memory = &memory, .instruction = instruction, .address = address};
+    return interpreter::Dispatch(execution);
+}
 
 template<memory::GuestMemory Memory>
 Stop StepDecoded(CpuState& state, Memory& memory, const Instruction& instruction) {

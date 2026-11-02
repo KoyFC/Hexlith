@@ -25,7 +25,7 @@ namespace hexlith::application {
 
 // Bumped when the shape of the generated code or what it means changes, so that
 // a library built by an older lifter is not mistaken for a current one.
-constexpr int LifterVersion = 1;
+constexpr int LifterVersion = 2;
 
 // About how many guest instructions go in one source file. A file that is too
 // big is slow to compile and a file that is too small has little to optimise

@@ -6,6 +6,7 @@
 #include "domain/arm/decode_thumb.h"
 #include "domain/arm/instruction.h"
 #include "domain/arm/interpreter/interpreter.h"
+#include "domain/arm/interpreter/step.h"
 #include "domain/arm/primitives/alu.h"
 #include "domain/arm/primitives/integer.h"
 #include "domain/arm/primitives/media.h"
@@ -144,6 +145,17 @@ struct Context {
 ExecuteDecoded(Context& context, Pc address, const arm::Instruction& instruction) {
     context.cpu->registers[arm::ProgramCounter] = address;
     return arm::StepDecoded(*context.cpu, *context.memory, instruction);
+}
+
+// The interpreter's handler does the instruction's work. Its condition has
+// passed and its operands were checked when it was lifted, and it does not
+// write r15; the instruction is a constant, so the compiler picks the handler
+// and sees the registers it names. r15 is set as the interpreter would have it,
+// for a handler that reads it.
+[[nodiscard]] [[gnu::always_inline]] inline arm::Stop
+ExecuteHandled(Context& context, Pc address, const arm::Instruction& instruction) {
+    context.cpu->registers[arm::ProgramCounter] = address;
+    return arm::ExecuteHandler(*context.cpu, *context.memory, instruction, address);
 }
 
 // The interpreter stopped. The instruction that stopped it was not completed,

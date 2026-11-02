@@ -131,6 +131,12 @@ enum class OpKind : std::uint8_t {
     // not translate yet, and for the supervisor call, whose effect is the
     // kernel's. Always the only operation of its instruction.
     Interpret,
+
+    // The interpreter's handler for this instruction does its work, called
+    // directly: the condition is the instruction's, checked as for any other,
+    // the operands were checked when it was lowered, and it does not write r15.
+    // Always the only operation of its instruction.
+    Execute,
 };
 
 constexpr std::uint32_t NoTemporary = 0xFFFFFFFF;
@@ -166,6 +172,10 @@ struct Instruction {
 
     [[nodiscard]] bool IsInterpreted() const {
         return ops.size() == 1 && ops.front().kind == OpKind::Interpret;
+    }
+
+    [[nodiscard]] bool IsExecutedByAHandler() const {
+        return ops.size() == 1 && ops.front().kind == OpKind::Execute;
     }
 };
 
