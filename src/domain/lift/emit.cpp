@@ -33,6 +33,10 @@ constexpr std::array<std::string_view, 15> ConditionNames = {"Equal",
                                                              "LessOrEqual",
                                                              "Always"};
 
+// A 32-bit Thumb instruction keeps its second halfword above the first.
+constexpr std::uint32_t ThumbHalfwordBits = 16;
+constexpr std::uint32_t ThumbHalfwordMask = 0xFFFF;
+
 constexpr std::array<std::string_view, 5> ShiftNames = {
     "LogicalLeft", "LogicalRight", "ArithmeticRight", "RotateRight", "RotateRightExtended"};
 
@@ -190,6 +194,7 @@ private:
             ++indent_;
         }
         values_.clear();
+        placed_ = &placed;
         for (const ir::Op& op : lowered.ops) {
             Operation(op, placed.address, unexecuted);
         }
@@ -328,12 +333,27 @@ private:
                 "if ({}) return runtime::Bail(c, {}, {});", a, Hex(address), unexecuted));
             break;
         case OpKind::Interpret:
-            Line(std::format("if (const arm::Stop stop = runtime::ExecuteInterpreted(c, {}); "
-                             "stop.Stopped()) return runtime::StoppedBy(c, stop, {});",
-                             Hex(address),
-                             unexecuted - 1));
+            Interpret(address, unexecuted);
             break;
         }
+    }
+
+    // The interpreter runs what the lifter does not translate, and decoding is
+    // most of what that costs, so the instruction is decoded once, the first time
+    // the site runs, and kept.
+    void Interpret(std::uint32_t address, std::size_t unexecuted) {
+        const arm::Instruction& instruction = placed_->instruction;
+        const std::string decode =
+            instruction.instruction_set == arm::InstructionSet::Arm
+                ? std::format("arm::DecodeArm({})", Hex(instruction.encoding))
+                : std::format("arm::DecodeThumb({}, {})",
+                              Hex(instruction.encoding & ThumbHalfwordMask),
+                              Hex(instruction.encoding >> ThumbHalfwordBits));
+        Line(std::format("static const arm::Instruction decoded = {};", decode));
+        Line(std::format("if (const arm::Stop stop = runtime::ExecuteDecoded(c, {}, decoded); "
+                         "stop.Stopped()) return runtime::StoppedBy(c, stop, {});",
+                         Hex(address),
+                         unexecuted - 1));
     }
 
     void Shift(const ir::Op& op, const std::string& a, const std::string& b) {
@@ -512,6 +532,7 @@ private:
     std::string out_;
     std::size_t indent_ = 0;
     std::map<std::uint32_t, std::string> values_;
+    const PlacedInstruction* placed_ = nullptr;
 };
 
 }  // namespace

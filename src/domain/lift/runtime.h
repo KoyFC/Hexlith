@@ -2,6 +2,9 @@
 #define HEXLITH_DOMAIN_LIFT_RUNTIME_H
 
 #include "domain/arm/cpu_state.h"
+#include "domain/arm/decode_arm.h"
+#include "domain/arm/decode_thumb.h"
+#include "domain/arm/instruction.h"
 #include "domain/arm/interpreter/interpreter.h"
 #include "domain/arm/primitives/alu.h"
 #include "domain/arm/primitives/integer.h"
@@ -119,6 +122,14 @@ struct Context {
 [[nodiscard]] inline arm::Stop ExecuteInterpreted(Context& context, Pc address) {
     context.cpu->registers[arm::ProgramCounter] = address;
     return arm::Step(*context.cpu, *context.memory);
+}
+
+// The same for an instruction decoded once, where the lifted code is, and not
+// every time it runs.
+[[nodiscard]] inline arm::Stop
+ExecuteDecoded(Context& context, Pc address, const arm::Instruction& instruction) {
+    context.cpu->registers[arm::ProgramCounter] = address;
+    return arm::StepDecoded(*context.cpu, *context.memory, instruction);
 }
 
 // The interpreter stopped. The instruction that stopped it was not completed,

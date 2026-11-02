@@ -39,6 +39,9 @@ std::string_view Describe(StopReason reason) {
 template Stop Step<memory::PagedMemory>(CpuState&, memory::PagedMemory&);
 template Stop Run<memory::PagedMemory>(CpuState&, memory::PagedMemory&, std::uint64_t);
 template Stop Step<memory::ProcessMemory>(CpuState&, memory::ProcessMemory&);
+template Stop
+StepDecoded<memory::ProcessMemory>(CpuState&, memory::ProcessMemory&, const Instruction&);
+template Stop StepDecoded<memory::PagedMemory>(CpuState&, memory::PagedMemory&, const Instruction&);
 template Stop Run<memory::ProcessMemory>(CpuState&, memory::ProcessMemory&, std::uint64_t);
 template Stop
 Run<memory::PagedMemory>(CpuState&, memory::PagedMemory&, std::uint64_t, std::uint64_t&);

@@ -2,6 +2,7 @@
 #define HEXLITH_DOMAIN_ARM_INTERPRETER_INTERPRETER_H
 
 #include "domain/arm/cpu_state.h"
+#include "domain/arm/instruction.h"
 #include "domain/memory/guest_memory.h"
 #include "domain/memory/paged_memory.h"
 #include "domain/memory/process_memory.h"
@@ -100,6 +101,13 @@ public:
 template<memory::GuestMemory Memory>
 Stop Step(CpuState& state, Memory& memory);
 
+// The same for an instruction that has been fetched and decoded already, which
+// is at r15. What Step does after it has decoded, so a caller that runs one
+// instruction many times, as lifted code does for one it does not translate,
+// decodes it once.
+template<memory::GuestMemory Memory>
+Stop StepDecoded(CpuState& state, Memory& memory, const Instruction& instruction);
+
 // Executes instructions until one stops or the limit is reached.
 template<memory::GuestMemory Memory>
 Stop Run(CpuState& state, Memory& memory, std::uint64_t limit);
@@ -124,6 +132,10 @@ Stop Run(CpuState& state,
 extern template Stop Step<memory::PagedMemory>(CpuState&, memory::PagedMemory&);
 extern template Stop Run<memory::PagedMemory>(CpuState&, memory::PagedMemory&, std::uint64_t);
 extern template Stop Step<memory::ProcessMemory>(CpuState&, memory::ProcessMemory&);
+extern template Stop
+StepDecoded<memory::ProcessMemory>(CpuState&, memory::ProcessMemory&, const Instruction&);
+extern template Stop
+StepDecoded<memory::PagedMemory>(CpuState&, memory::PagedMemory&, const Instruction&);
 extern template Stop Run<memory::ProcessMemory>(CpuState&, memory::ProcessMemory&, std::uint64_t);
 extern template Stop
 Run<memory::PagedMemory>(CpuState&, memory::PagedMemory&, std::uint64_t, std::uint64_t&);

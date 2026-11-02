@@ -188,15 +188,9 @@ Stop Dispatch(Execution<Memory>& execution) {
 }  // namespace interpreter
 
 template<memory::GuestMemory Memory>
-Stop Step(CpuState& state, Memory& memory) {
+Stop StepDecoded(CpuState& state, Memory& memory, const Instruction& instruction) {
     using namespace interpreter;
 
-    const std::variant<Instruction, Stop> fetched = Fetch(state, memory);
-    if (const Stop* fault = std::get_if<Stop>(&fetched)) {
-        return *fault;
-    }
-
-    const auto& instruction = std::get<Instruction>(fetched);
     const std::uint32_t address = state.registers.at(ProgramCounter);
     Execution<Memory> execution{
         .state = &state, .memory = &memory, .instruction = instruction, .address = address};
@@ -226,6 +220,15 @@ Stop Step(CpuState& state, Memory& memory) {
         state.registers.at(ProgramCounter) = execution.Next();
     }
     return Completed();
+}
+
+template<memory::GuestMemory Memory>
+Stop Step(CpuState& state, Memory& memory) {
+    const std::variant<Instruction, Stop> fetched = interpreter::Fetch(state, memory);
+    if (const Stop* fault = std::get_if<Stop>(&fetched)) {
+        return *fault;
+    }
+    return StepDecoded(state, memory, std::get<Instruction>(fetched));
 }
 
 // The loop all the Run overloads share. `before` is called with the address and
