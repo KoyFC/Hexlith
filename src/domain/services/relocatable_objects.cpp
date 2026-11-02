@@ -12,11 +12,10 @@ namespace {
 
 namespace cro = ctr::cro;
 
-// A module has to be mapped inside the range the executable is loaded in.
-// Source: PROCESS_IMAGE_VADDR and PROCESS_IMAGE_MAX_SIZE in Azahar's memory.h,
-// which ldr_ro.cpp checks against.
-constexpr std::uint32_t ProcessImageBase = 0x00100000;
-constexpr std::uint32_t ProcessImageEnd = ProcessImageBase + 0x03F00000;
+// A module has to be mapped inside the range the executable is loaded in,
+// which starts at the image base. Source: PROCESS_IMAGE_VADDR and
+// PROCESS_IMAGE_MAX_SIZE in Azahar's memory.h, which ldr_ro.cpp checks against.
+constexpr std::uint32_t ProcessImageEnd = kernel::layout::ImageBase + 0x03F00000;
 
 constexpr std::uint32_t PageMask = kernel::layout::PageSize - 1;
 
@@ -79,7 +78,7 @@ kernel::ResultCode RelocatableObjects::CheckMapping(std::uint32_t buffer,
             return InvalidMemoryState;
         }
     }
-    if (address < ProcessImageBase || address + size > ProcessImageEnd) {
+    if (address < kernel::layout::ImageBase || address + size > ProcessImageEnd) {
         return IllegalAddress;
     }
     return kernel::result::Success;
