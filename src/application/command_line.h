@@ -14,6 +14,14 @@ namespace hexlith::application {
 // Two billion instructions, about eight seconds of the console's time.
 constexpr std::uint64_t DefaultBootInstructionLimit = 2'000'000'000;
 
+// What hexlith-lift-verify runs by default: a little more than the boot to the
+// title screen with the usual input script, which is 41,972,790 instructions.
+constexpr std::uint64_t DefaultVerifyInstructionLimit = 42'000'000;
+
+// How many instructions the two runs go between comparisons. Each comparison
+// reads every mapped page of both, so a step much shorter makes the run slow.
+constexpr std::uint64_t DefaultVerifyStep = 100'000;
+
 struct ExtractOptions {
     std::optional<std::string> rom_directory;
     std::optional<std::string> work_directory;
@@ -139,6 +147,23 @@ struct BootOptions {
     bool help = false;
 };
 
+struct LiftVerifyOptions {
+    std::optional<std::string> rom_directory;
+    std::optional<std::string> work_directory;
+    std::optional<std::string> image;
+
+    // The lifted library to verify, which is required.
+    std::optional<std::string> lifted;
+
+    // A script of the player's input, the same for both runs.
+    std::optional<std::string> input;
+
+    std::uint64_t instruction_limit = DefaultVerifyInstructionLimit;
+    std::uint64_t step = DefaultVerifyStep;
+
+    bool help = false;
+};
+
 // Parses the arguments of hexlith-extract.
 //
 // This lives in the application layer rather than in the tool so that it has
@@ -159,6 +184,11 @@ std::string LiftUsage();
 core::Result<BootOptions> ParseBootCommandLine(std::span<const std::string_view> arguments);
 
 std::string BootUsage();
+
+core::Result<LiftVerifyOptions>
+ParseLiftVerifyCommandLine(std::span<const std::string_view> arguments);
+
+std::string LiftVerifyUsage();
 
 }  // namespace hexlith::application
 

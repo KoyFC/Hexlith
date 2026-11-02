@@ -113,6 +113,7 @@ Decisions with consequences are recorded in `docs/adr/` rather than argued again
 - `hexlith-oracle-run` runs a directory of cases through Hexlith's code, so that a script can compare the results with the same cases run through Azahar's.
 - `hexlith-gpu-replay` draws what a GPU recording's screens show in chosen frames, with the reference renderer or the Vulkan backend.
 - `hexlith-lift` cuts the analysed code into blocks and writes the lifted C++ into the workspace.
+- `hexlith-lift-verify` runs the title through the interpreter and through the lifted library side by side and finds the first instruction after which the two differ.
 - `hexlith-boot` runs the title from its entry point under the HLE kernel and services until something stops it. It can compare the memory it leaves with a capture from Azahar, take its input from a script, keep or ignore the save data, run the lifted library, and write a golden trace, a recording of the GPU's work and a count of the instructions it executed into the workspace, and with `--window` shows the screens in a window as the title draws them, taking the player's input from the keyboard and mouse when no script gives it.
 
 ## Writing code a human can read

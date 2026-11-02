@@ -3,6 +3,7 @@
 #include "application/workspace.h"
 
 #include <format>
+#include <tuple>
 
 namespace hexlith::application {
 namespace {
@@ -16,6 +17,7 @@ constexpr std::string_view ExtractionOption = "--extraction";
 constexpr std::string_view OutputOption = "--out";
 constexpr std::string_view NoSweepOption = "--no-sweep";
 constexpr std::string_view LimitOption = "--limit";
+constexpr std::string_view StepOption = "--step";
 constexpr std::string_view CompareOption = "--compare";
 constexpr std::string_view TraceOption = "--trace";
 constexpr std::string_view NewGameOption = "--new-game";
@@ -491,6 +493,96 @@ std::string BootUsage() {
         InputOption,
         RomDirectoryVariable,
         WorkDirectoryVariable);
+}
+
+core::Result<LiftVerifyOptions>
+ParseLiftVerifyCommandLine(std::span<const std::string_view> arguments) {
+    LiftVerifyOptions options;
+    std::optional<std::string> limit;
+    std::optional<std::string> step;
+
+    for (std::size_t index = 0; index < arguments.size(); ++index) {
+        const std::string_view argument = arguments[index];
+        if (argument == HelpOption || argument == "-h") {
+            options.help = true;
+            continue;
+        }
+
+        core::Status taken;
+        if (argument == RomDirectoryOption) {
+            taken = TakeValue(arguments, index, options.rom_directory);
+        } else if (argument == WorkDirectoryOption) {
+            taken = TakeValue(arguments, index, options.work_directory);
+        } else if (argument == ImageOption) {
+            taken = TakeValue(arguments, index, options.image);
+        } else if (argument == LiftedOption) {
+            taken = TakeValue(arguments, index, options.lifted);
+        } else if (argument == InputOption) {
+            taken = TakeValue(arguments, index, options.input);
+        } else if (argument == LimitOption) {
+            taken = TakeValue(arguments, index, limit);
+        } else if (argument == StepOption) {
+            taken = TakeValue(arguments, index, step);
+        } else if (argument.starts_with("-")) {
+            return core::Error{std::format("{} is not an option this tool knows", argument)};
+        } else {
+            return core::Error{std::format(
+                "'{}' is not an option. Every path is given with the option it belongs to",
+                argument)};
+        }
+        if (!taken) {
+            return taken.Failure();
+        }
+    }
+
+    if (options.help) {
+        return options;
+    }
+    if (!options.lifted.has_value()) {
+        return core::Error{std::format("{} is required: the library to verify", LiftedOption)};
+    }
+    for (const auto& [option, text, value] :
+         {std::tuple{LimitOption, &limit, &options.instruction_limit},
+          std::tuple{StepOption, &step, &options.step}}) {
+        if (!text->has_value()) {
+            continue;
+        }
+        const core::Result<std::uint64_t> count = ParseCount(option, **text);
+        if (!count) {
+            return count.Failure();
+        }
+        if (count.Value() == 0) {
+            return core::Error{std::format("{} needs a number above zero", option)};
+        }
+        *value = count.Value();
+    }
+    return options;
+}
+
+std::string LiftVerifyUsage() {
+    return std::format(
+        "hexlith-lift-verify: runs the title through the interpreter and through the lifted\n"
+        "library side by side, from a new game, compares the two after every step of\n"
+        "instructions, and narrows the first difference down to the instruction.\n"
+        "\n"
+        "  {} <path>      where the cartridge image is\n"
+        "  {} <path>     the work directory, which the workspace requires\n"
+        "  {} <path>        a specific image, instead of the one in the ROM directory\n"
+        "  {} <path>       the lifted library to verify\n"
+        "  {} <path>        a script of the player's input, by frame, for both runs\n"
+        "  {} <count>       instructions to verify, {} by default\n"
+        "  {} <count>        instructions between comparisons, {} by default\n"
+        "  {}               this text\n",
+        RomDirectoryOption,
+        WorkDirectoryOption,
+        ImageOption,
+        LiftedOption,
+        InputOption,
+        LimitOption,
+        DefaultVerifyInstructionLimit,
+        StepOption,
+        DefaultVerifyStep,
+        HelpOption);
 }
 
 }  // namespace hexlith::application

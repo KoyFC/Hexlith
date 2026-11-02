@@ -111,6 +111,11 @@ public:
     core::Status Protect(std::uint32_t address, std::uint32_t size, Access access);
 
     [[nodiscard]] bool IsMapped(std::uint32_t address) const;
+
+    // The bytes of the page an address is in, whatever access it allows, or an
+    // empty span if it is not mapped. For comparing two address spaces, not for
+    // the game's accesses, which go through the checks above.
+    [[nodiscard]] std::span<const std::uint8_t> PageBytes(std::uint32_t address) const;
     [[nodiscard]] Access AccessAt(std::uint32_t address) const;
 
     // Where a mapped page points, or nothing. This is how an alias is made: map

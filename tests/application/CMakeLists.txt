@@ -15,6 +15,7 @@ hexlith_add_test(
     input_script_test.cpp
     lift_emit_test.cpp
     lift_survey_test.cpp
+    lift_verification_test.cpp
     live_display_test.cpp
     manifest_test.cpp
     save_storage_test.cpp

@@ -116,6 +116,14 @@ bool ProcessMemory::IsMapped(std::uint32_t address) const {
     return host_.at(PageNumber(address)) != nullptr;
 }
 
+std::span<const std::uint8_t> ProcessMemory::PageBytes(std::uint32_t address) const {
+    const std::uint8_t* host = host_.at(PageNumber(address));
+    if (host == nullptr) {
+        return {};
+    }
+    return {host, PageSize};
+}
+
 Access ProcessMemory::AccessAt(std::uint32_t address) const {
     return access_.at(PageNumber(address));
 }

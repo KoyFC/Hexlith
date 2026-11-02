@@ -26,6 +26,8 @@ add_library(
     lift_emit.h
     lift_survey.cpp
     lift_survey.h
+    lift_verification.cpp
+    lift_verification.h
     live_display.cpp
     live_display.h
     input_script.cpp

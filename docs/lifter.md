@@ -128,6 +128,21 @@ On 2026-11-02, from a new game to the first frame after the title appears, with 
 
 A bug the run found is in ADR 0026: the import stubs of the main executable are rewritten by the module loader.
 
+## Verifying it against the interpreter
+
+`hexlith-lift-verify` boots the title twice from a new game with the same input script, once through the interpreter and once through the lifted library, and runs the two side by side. After every step of instructions, 100,000 by default, it compares every thread's registers, flags, floating point registers, exclusive monitor and thread ID registers, and every mapped page of memory. Lifted code is meant to leave exactly what the interpreter leaves after any number of instructions, so the first step after which the two differ holds a mistake.
+
+That step is then narrowed down by booting both again and stopping them halfway through what is left, until one instruction separates the last count at which they agreed from the first at which they did not. The tool prints that count, where the thread was when they last agreed, and the first register or byte that differs. Lifted code runs a block only when the slice has all of the block's instructions left, so the instruction found is the last of the block that went wrong, and the address printed is where the block was entered or before.
+
+The search is `application::VerifyLiftedCode`, which takes a function that starts a run, so the tests drive it with small synthetic kernels and a lifted function written by hand to be wrong.
+
+```sh
+hexlith-lift-verify --rom-dir ~/recomp-data/rom --work-dir ~/recomp-data/work --input <script> \
+    --lifted ~/recomp-data/work/<title>/lift/build/libhexlith_lifted.so [--limit N] [--step N]
+```
+
+On 2026-11-02 the boot to frame 227, 42 million instructions, agreed throughout, compared every 100,000 instructions, in 18 seconds. So did the first 500 million, to about frame 400, compared every million, in 55 seconds.
+
 ## Measuring the speed
 
 The phase's gate compares the time the interpreter and lifted code take to run the game's own code. A boot to the title spends less than half a second of that time with lifted code, so a single run of each says little: a core changing clock or another program waking up moves it by a tenth. `scripts/measure_lift_speed.py` makes the comparison the same way every time:
