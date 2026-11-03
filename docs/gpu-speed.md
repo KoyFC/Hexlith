@@ -97,6 +97,7 @@ Measured on 2026-11-03 with a real window on the Wayland desktop, medians of fiv
 | Before the phase (3 runs) | 24.85 | +46% |
 | Generic fragment shader, after the CPU changes | 25.0 | +44% |
 | Fragment shader for each configuration | 23.85 | +37% |
+| Its pipeline made on another thread, the draw takes the generic one meanwhile | 23.07 (floor 18.0 that session) | +28% |
 | The milestone, 15% | 20.0 | +15% |
 
 What each change took off the boot to frame 1101 on the Intel GPU, seconds in the display's own accounting:
@@ -114,3 +115,5 @@ What each change took off the boot to frame 1101 on the Intel GPU, seconds in th
 - **Every one of those is time the game's thread spends waiting or working for the display.** A window within 15 percent of the floor needs the display's work to overlap the game's code rather than follow it, which means a list submitted without waiting for it and a display transfer the GPU can do. Both change what ADR 0030 says about when a group waits, and are not small.
 
 The pictures of frames 220, 400, 700, 1000 and 1100, saved from the live run with `--save-frames`, are within the tolerance of ADR 0021 as before, and `compare_pica_textures.py` and `compare_pica_rasterizer.py` agree with Azahar on 2,000 textures, 3,500 transfers and steps and the recording to frame 400 after the transfer changes.
+
+Making a configuration's pipeline on another thread, and drawing with the generic shader's until it is ready, also takes the compile out of the lists, 5.30 s to 4.53 s, and is what keeps the game from standing still at a new screen: with Mesa's cache off, frames 200 to 420 paused up to 7.6 s while the pipelines were made on the game's thread and pause 0.58 s at most now. The last measurement was made on 2026-11-03 in the same way, medians of five runs, a real window, the floor at 18.0 s that session for the same stretch; the window takes 23.07 s, 28 percent over, where the milestone is 15.
