@@ -19,6 +19,7 @@
 #include <format>
 #include <map>
 #include <optional>
+#include <set>
 #include <vector>
 
 namespace hexlith::adapters::vulkan {
@@ -117,6 +118,44 @@ PipelineKey KeyOf(const gpu::RegisterFile& registers) {
                       Field(registers.at(reg::ColorWrite), 0, 4),
                       Field(registers.at(reg::DepthWrite), 0, 2),
                       Field(registers.at(reg::DepthFormat), 0, 2)}};
+}
+
+// What the fragment stage of a draw is configured to do, as far as a shader
+// made for the draw would be built for it: the combiners' sources, operands,
+// operations and scales, the textures' formats and modes, the fog, lighting
+// and alpha test registers. What the stage only reads as numbers is left out:
+// the combiners' constant colours (offset 3 of a stage), the textures' addresses,
+// sizes and levels, and the lighting tables' data. Source: GBATEK, as cited in
+// docs/formats/pica-registers.md.
+std::vector<std::uint32_t> FragmentConfigurationOf(const gpu::RegisterFile& registers) {
+    constexpr std::array<std::uint16_t, 6> StageBases = {0x0C0, 0x0C8, 0x0D0, 0x0D8, 0x0F0, 0x0F8};
+    constexpr std::array<std::uint16_t, 4> StageWords = {0, 1, 2, 4};
+    constexpr std::array<std::uint16_t, 6> UnitModes = {0x083, 0x093, 0x09B, 0x08E, 0x096, 0x09E};
+    constexpr std::uint16_t FogMode = 0x0E0;
+    constexpr std::uint16_t FogColor = 0x0E1;
+    constexpr std::uint16_t AlphaTest = 0x104;
+    constexpr std::uint16_t LightingFirst = 0x1C0;
+    constexpr std::uint16_t LightingLutIndex = 0x1C5;
+    constexpr std::uint16_t LightingLast = 0x1D9;
+    std::vector<std::uint32_t> words;
+    words.push_back(registers.at(reg::TextureConfig));
+    for (const std::uint16_t mode : UnitModes) {
+        words.push_back(registers.at(mode));
+    }
+    for (const std::uint16_t base : StageBases) {
+        for (const std::uint16_t word : StageWords) {
+            words.push_back(registers.at(static_cast<std::uint16_t>(base + word)));
+        }
+    }
+    for (const std::uint16_t id : {FogMode, FogColor, AlphaTest}) {
+        words.push_back(registers.at(id));
+    }
+    for (std::uint16_t id = LightingFirst; id <= LightingLast; ++id) {
+        if (id != LightingLutIndex) {
+            words.push_back(registers.at(id));
+        }
+    }
+    return words;
 }
 
 // Where a draw draws: the colour and depth buffers and their size.
@@ -378,6 +417,8 @@ public:
                 .downloaded_bytes = downloaded_bytes_,
                 .allocations = allocations_,
                 .conflicts = conflicts_,
+                .pipelines = pipelines_.size(),
+                .fragment_configurations = fragment_configurations_.size(),
                 .times = times_,
                 .unsupported = unsupported_ || vertices_.Statistics().unsupported_shader};
     }
@@ -479,6 +520,7 @@ private:
     VkShaderModule vertex_module_ = VK_NULL_HANDLE;
     VkShaderModule fragment_module_ = VK_NULL_HANDLE;
     std::map<PipelineKey, VkPipeline> pipelines_;
+    std::set<std::vector<std::uint32_t>> fragment_configurations_;
     // Translated vertex programs, by a hash of their code, descriptors and
     // entry point; a null module for one the translation cannot take.
     std::map<std::uint64_t, VkShaderModule> shaded_modules_;
@@ -527,6 +569,7 @@ std::optional<PendingDraw> VulkanGpuBackend::Implementation::Prepare(const gpu::
     }
     PendingDraw draw;
     draw.key = KeyOf(registers);
+    fragment_configurations_.insert(FragmentConfigurationOf(registers));
     draw.target = *target;
     const auto index = static_cast<std::uint32_t>(pending_.size());
     WriteDrawWords(state, index);
@@ -1732,6 +1775,7 @@ core::Result<VkPipeline> VulkanGpuBackend::Implementation::Pipeline(const Pipeli
     create.layout = pipeline_layout_;
     create.renderPass = render_pass_;
     VkPipeline pipeline = VK_NULL_HANDLE;
+    const Stopwatch making{times_.pipelines};
     if (const core::Status made = Check(
             vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &create, nullptr, &pipeline),
             "vkCreateGraphicsPipelines");

@@ -254,6 +254,34 @@ TEST(VulkanGpuBackend, CountsTheRoundTripOfEachGroupOfDraws) {
     EXPECT_EQ(backend.Value()->Statistics().downloaded_bytes, BufferBytes);
 }
 
+// What a fragment shader specialised for a draw would be specialised for: the
+// combiners' choices, the textures' formats and modes, lighting and the alpha
+// test. A draw that changes only the numbers those read, a constant colour,
+// is the same configuration.
+TEST(VulkanGpuBackend, CountsDrawsByTheConfigurationOfTheirFragmentStage) {
+    const std::unique_ptr<VulkanContext> context = Context();
+    if (!context) {
+        GTEST_SKIP() << "no Vulkan device that can draw";
+    }
+    const auto memory = Memory();
+    auto backend = VulkanGpuBackend::Create(*context, *memory, gpu::Sampling::Hardware);
+    ASSERT_TRUE(backend);
+    List draws = Scene();
+    draws.Write(reg::VertexCount, 6).Write(reg::DrawArrays, 1);
+    // Another constant for the combiner, the same configuration.
+    draws.Write(0x0C3, 0x80C01234).Write(reg::VertexCount, 6).Write(reg::DrawArrays, 1);
+    ASSERT_TRUE(backend.Value()->RunCommandList(draws.Bytes()).Ok());
+    EXPECT_EQ(backend.Value()->Statistics().draws, 3U);
+    EXPECT_EQ(backend.Value()->Statistics().fragment_configurations, 1U);
+
+    // Another operation in the combiner, another configuration.
+    List other;
+    other.Write(0x0C2, 0x00020002).Write(reg::VertexCount, 6).Write(reg::DrawArrays, 1);
+    ASSERT_TRUE(backend.Value()->RunCommandList(other.Bytes()).Ok());
+    EXPECT_EQ(backend.Value()->Statistics().draws, 4U);
+    EXPECT_EQ(backend.Value()->Statistics().fragment_configurations, 2U);
+}
+
 // ADR 0030: a target stays on the device between lists and memory is made
 // true when something reads it.
 

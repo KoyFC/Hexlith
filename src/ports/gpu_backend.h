@@ -24,6 +24,8 @@ struct GpuBackendTimes {
     std::chrono::nanoseconds wait{0};
     // Making the buffers a submission reads.
     std::chrono::nanoseconds allocate{0};
+    // Making the pipelines draws are made with.
+    std::chrono::nanoseconds pipelines{0};
 };
 
 struct GpuBackendStatistics {
@@ -41,6 +43,11 @@ struct GpuBackendStatistics {
     // A part of a target that was dirty and whose memory was written to by
     // someone who did not say so, which the backend then took as the truth.
     std::uint64_t conflicts = 0;
+    // Pipelines made, and the different configurations of the fragment stage
+    // the draws had: how many shaders specialised for a draw would have been
+    // made (docs/gpu-speed.md).
+    std::uint64_t pipelines = 0;
+    std::uint64_t fragment_configurations = 0;
     GpuBackendTimes times;
     // A draw asked for something the backend does not implement.
     bool unsupported = false;
