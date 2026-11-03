@@ -152,24 +152,6 @@ TransferOutcome CopyTexture(GpuMemory& memory, const TransferConfig& config) {
 constexpr std::uint32_t TileSide = 8;
 constexpr std::size_t TilePixels = std::size_t{TileSide} * TileSide;
 
-// Where each pixel of a tile is, by its place in memory: the inverse of
-// MortonIndex.
-struct TilePlace {
-    std::uint8_t x;
-    std::uint8_t y;
-};
-
-constexpr std::array<TilePlace, TilePixels> TilePlaces = [] {
-    std::array<TilePlace, TilePixels> places{};
-    for (std::uint32_t y = 0; y < TileSide; ++y) {
-        for (std::uint32_t x = 0; x < TileSide; ++x) {
-            places.at(video::MortonIndex(x, y)) =
-                TilePlace{.x = static_cast<std::uint8_t>(x), .y = static_cast<std::uint8_t>(y)};
-        }
-    }
-    return places;
-}();
-
 // What a transfer between a tiled layout and a linear one does, with the
 // conversion done a tile at a time and the format looked up once for each
 // tile instead of each pixel. It is the same transfer as the general one: each
@@ -237,8 +219,11 @@ void RunTiledTransfer(const TiledTransfer& transfer) {
                              tile);
                 for (std::size_t at = 0; at < TilePixels; ++at) {
                     const std::uint32_t row =
-                        transfer.flip ? TileSide - 1 - TilePlaces.at(at).y : TilePlaces.at(at).y;
-                    rows.at((row * TileSide) + TilePlaces.at(at).x) = tile.at(at);
+                        transfer.flip
+                            ? TileSide - 1 - video::MortonPosition(static_cast<std::uint32_t>(at)).y
+                            : video::MortonPosition(static_cast<std::uint32_t>(at)).y;
+                    rows.at((row * TileSide) +
+                            video::MortonPosition(static_cast<std::uint32_t>(at)).x) = tile.at(at);
                 }
                 for (std::uint32_t row = 0; row < TileSide; ++row) {
                     const std::size_t to =
@@ -257,8 +242,11 @@ void RunTiledTransfer(const TiledTransfer& transfer) {
                 }
                 for (std::size_t at = 0; at < TilePixels; ++at) {
                     const std::uint32_t row =
-                        transfer.flip ? TileSide - 1 - TilePlaces.at(at).y : TilePlaces.at(at).y;
-                    tile.at(at) = rows.at((row * TileSide) + TilePlaces.at(at).x);
+                        transfer.flip
+                            ? TileSide - 1 - video::MortonPosition(static_cast<std::uint32_t>(at)).y
+                            : video::MortonPosition(static_cast<std::uint32_t>(at)).y;
+                    tile.at(at) = rows.at((row * TileSide) +
+                                          video::MortonPosition(static_cast<std::uint32_t>(at)).x);
                 }
                 const std::size_t to = TiledOffset(x, target_y, transfer.width, out_bytes);
                 EncodePixels(transfer.output_format,

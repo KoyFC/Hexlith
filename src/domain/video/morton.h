@@ -24,6 +24,22 @@ constexpr std::uint32_t MortonIndex(std::uint32_t x, std::uint32_t y) {
     return index;
 }
 
+// A place in a tile.
+struct TilePosition {
+    std::uint32_t x = 0;
+    std::uint32_t y = 0;
+};
+
+// Where in the tile the pixel stored at an index is: MortonIndex the other way.
+constexpr TilePosition MortonPosition(std::uint32_t index) {
+    TilePosition position;
+    for (std::uint32_t bit = 0; bit < 3; ++bit) {
+        position.x |= ((index >> (2 * bit)) & 1U) << bit;
+        position.y |= ((index >> ((2 * bit) + 1)) & 1U) << bit;
+    }
+    return position;
+}
+
 }  // namespace hexlith::domain::video
 
 #endif  // HEXLITH_DOMAIN_VIDEO_MORTON_H

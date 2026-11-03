@@ -16,6 +16,16 @@ constexpr std::array<std::uint32_t, TilePixels> SwizzledTile = {
     0x24, 0x25, 0x2C, 0x2D, 0x26, 0x27, 0x2E, 0x2F, 0x34, 0x35, 0x3C, 0x3D, 0x36, 0x37, 0x3E, 0x3F,
 };
 
+TEST(MortonPosition, FindsThePixelAtEachPlaceOfTheTile) {
+    for (std::uint32_t y = 0; y < TileSide; ++y) {
+        for (std::uint32_t x = 0; x < TileSide; ++x) {
+            const TilePosition position = MortonPosition(MortonIndex(x, y));
+            EXPECT_EQ(position.x, x) << x << ", " << y;
+            EXPECT_EQ(position.y, y) << x << ", " << y;
+        }
+    }
+}
+
 TEST(MortonIndex, StoresATileAsGbatekShowsIt) {
     for (std::uint32_t y = 0; y < TileSide; ++y) {
         for (std::uint32_t x = 0; x < TileSide; ++x) {
