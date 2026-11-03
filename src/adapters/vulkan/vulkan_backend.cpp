@@ -1384,20 +1384,10 @@ void VulkanGpuBackend::Implementation::UploadColor(const Target& target,
         }
         return;
     }
-    for (std::uint32_t y = 0; y < target.height; ++y) {
-        for (std::uint32_t x = 0; x < target.width; ++x) {
-            const std::size_t pixel = (static_cast<std::size_t>(y) * target.width) + x;
-            gpu::Color value{};
-            if (!colors.empty()) {
-                value = gpu::DecodePixel(
-                    target.color_format,
-                    colors.subspan(gpu::TiledOffset(x, y, target.width, color_bytes), color_bytes));
-            }
-            color[pixel * 4] = value.red;
-            color[(pixel * 4) + 1] = value.green;
-            color[(pixel * 4) + 2] = value.blue;
-            color[(pixel * 4) + 3] = value.alpha;
-        }
+    // Memory the GPU cannot see, or a size that is not whole tiles, is black.
+    if (colors.empty() ||
+        !gpu::DecodeTiledImage(target.color_format, target.width, target.height, colors, color)) {
+        std::ranges::fill(color, 0);
     }
 }
 
@@ -1445,25 +1435,13 @@ void VulkanGpuBackend::Implementation::UploadDepth(const Target& target,
 // nearest integer the format holds.
 void VulkanGpuBackend::Implementation::DownloadColor(const Target& target,
                                                      std::span<const std::uint8_t> color) const {
-    const std::size_t color_bytes = gpu::BytesPerPixel(target.color_format);
     const std::span<std::uint8_t> colors =
         memory_->Bytes(target.color_address, target.ColorBytes());
     if (colors.empty()) {
         return;
     }
-    for (std::uint32_t y = 0; y < target.height; ++y) {
-        for (std::uint32_t x = 0; x < target.width; ++x) {
-            const std::size_t pixel = (static_cast<std::size_t>(y) * target.width) + x;
-            const gpu::Color value{.red = color[pixel * 4],
-                                   .green = color[(pixel * 4) + 1],
-                                   .blue = color[(pixel * 4) + 2],
-                                   .alpha = color[(pixel * 4) + 3]};
-            gpu::EncodePixel(
-                target.color_format,
-                value,
-                colors.subspan(gpu::TiledOffset(x, y, target.width, color_bytes), color_bytes));
-        }
-    }
+    static_cast<void>(
+        gpu::EncodeTiledImage(target.color_format, target.width, target.height, color, colors));
 }
 
 void VulkanGpuBackend::Implementation::DownloadDepth(const Target& target,

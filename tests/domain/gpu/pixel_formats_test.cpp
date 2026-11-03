@@ -67,6 +67,72 @@ TEST(EncodePixels, GivesWhatEncodingEachPixelGives) {
     }
 }
 
+struct ImageSize {
+    std::uint32_t width;
+    std::uint32_t height;
+};
+
+constexpr std::array<ImageSize, 3> ImageSizes = {{{16, 16}, {24, 8}, {8, 32}}};
+
+std::size_t TiledBytes(PixelFormat format, ImageSize size) {
+    return std::size_t{size.width} * size.height * BytesPerPixel(format);
+}
+
+// A size that is not whole tiles has no tiled layout to speak of: the offset
+// of a tile's row of tiles assumes the width is a multiple of eight.
+TEST(TiledImage, TakesOnlyWholeTiles) {
+    std::vector<std::uint8_t> tiled(1024);
+    std::vector<std::uint8_t> rgba(1024);
+    EXPECT_FALSE(DecodeTiledImage(PixelFormat::Rgba8, 10, 8, tiled, rgba));
+    EXPECT_FALSE(EncodeTiledImage(PixelFormat::Rgba8, 8, 6, rgba, tiled));
+    EXPECT_TRUE(DecodeTiledImage(PixelFormat::Rgba8, 16, 8, tiled, rgba));
+}
+
+TEST(DecodeTiledImage, GivesWhatDecodingEachPixelGives) {
+    for (const PixelFormat format : AllPixelFormats) {
+        for (const ImageSize size : ImageSizes) {
+            const std::size_t bytes = BytesPerPixel(format);
+            const std::vector<std::uint8_t> tiled = Noise(TiledBytes(format, size));
+            std::vector<std::uint8_t> rgba(std::size_t{size.width} * size.height * 4);
+            ASSERT_TRUE(DecodeTiledImage(format, size.width, size.height, tiled, rgba));
+            for (std::uint32_t y = 0; y < size.height; ++y) {
+                for (std::uint32_t x = 0; x < size.width; ++x) {
+                    const Color expected = DecodePixel(
+                        format,
+                        std::span(tiled).subspan(TiledOffset(x, y, size.width, bytes), bytes));
+                    const std::size_t at = ((std::size_t{y} * size.width) + x) * 4;
+                    EXPECT_EQ((Color{rgba[at], rgba[at + 1], rgba[at + 2], rgba[at + 3]}), expected)
+                        << "format " << static_cast<int>(format) << " " << size.width << "x"
+                        << size.height << " at " << x << ", " << y;
+                }
+            }
+        }
+    }
+}
+
+TEST(EncodeTiledImage, GivesWhatEncodingEachPixelGives) {
+    for (const PixelFormat format : AllPixelFormats) {
+        for (const ImageSize size : ImageSizes) {
+            const std::size_t bytes = BytesPerPixel(format);
+            const std::vector<std::uint8_t> rgba = Noise(std::size_t{size.width} * size.height * 4);
+            std::vector<std::uint8_t> tiled(TiledBytes(format, size));
+            ASSERT_TRUE(EncodeTiledImage(format, size.width, size.height, rgba, tiled));
+            std::vector<std::uint8_t> expected(tiled.size());
+            for (std::uint32_t y = 0; y < size.height; ++y) {
+                for (std::uint32_t x = 0; x < size.width; ++x) {
+                    const std::size_t at = ((std::size_t{y} * size.width) + x) * 4;
+                    EncodePixel(
+                        format,
+                        Color{rgba[at], rgba[at + 1], rgba[at + 2], rgba[at + 3]},
+                        std::span(expected).subspan(TiledOffset(x, y, size.width, bytes), bytes));
+                }
+            }
+            EXPECT_EQ(tiled, expected)
+                << "format " << static_cast<int>(format) << " " << size.width << "x" << size.height;
+        }
+    }
+}
+
 TEST(TextureBytes, CountsWholeTiles) {
     EXPECT_EQ(TextureBytes(TextureFormat::Rgba8, 16, 8), 512U);
     EXPECT_EQ(TextureBytes(TextureFormat::A4, 8, 8), 32U);

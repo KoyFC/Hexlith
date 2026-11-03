@@ -412,6 +412,80 @@ void DecodePixels(PixelFormat format,
     }
 }
 
+namespace {
+
+bool HoldsWholeTiles(std::uint32_t width,
+                     std::uint32_t height,
+                     std::size_t tiled_size,
+                     std::size_t rgba_size,
+                     PixelFormat format) {
+    return width % TileSide == 0 && height % TileSide == 0 &&
+           tiled_size >= std::size_t{width} * height * BytesPerPixel(format) &&
+           rgba_size >= std::size_t{width} * height * 4;
+}
+
+}  // namespace
+
+bool DecodeTiledImage(PixelFormat format,
+                      std::uint32_t width,
+                      std::uint32_t height,
+                      std::span<const std::uint8_t> tiled,
+                      std::span<std::uint8_t> rgba) {
+    if (!HoldsWholeTiles(width, height, tiled.size(), rgba.size(), format)) {
+        return false;
+    }
+    const std::size_t bytes = BytesPerPixel(format);
+    std::array<Color, TilePixels> tile{};
+    for (std::uint32_t tile_y = 0; tile_y < height; tile_y += TileSide) {
+        for (std::uint32_t tile_x = 0; tile_x < width; tile_x += TileSide) {
+            DecodePixels(
+                format,
+                tiled.subspan(TiledOffset(tile_x, tile_y, width, bytes), TilePixels * bytes),
+                tile);
+            for (std::uint32_t at = 0; at < TilePixels; ++at) {
+                const video::TilePosition place = video::MortonPosition(at);
+                const std::size_t pixel =
+                    ((std::size_t{tile_y + place.y} * width) + tile_x + place.x) * 4;
+                rgba[pixel] = tile.at(at).red;
+                rgba[pixel + 1] = tile.at(at).green;
+                rgba[pixel + 2] = tile.at(at).blue;
+                rgba[pixel + 3] = tile.at(at).alpha;
+            }
+        }
+    }
+    return true;
+}
+
+bool EncodeTiledImage(PixelFormat format,
+                      std::uint32_t width,
+                      std::uint32_t height,
+                      std::span<const std::uint8_t> rgba,
+                      std::span<std::uint8_t> tiled) {
+    if (!HoldsWholeTiles(width, height, tiled.size(), rgba.size(), format)) {
+        return false;
+    }
+    const std::size_t bytes = BytesPerPixel(format);
+    std::array<Color, TilePixels> tile{};
+    for (std::uint32_t tile_y = 0; tile_y < height; tile_y += TileSide) {
+        for (std::uint32_t tile_x = 0; tile_x < width; tile_x += TileSide) {
+            for (std::uint32_t at = 0; at < TilePixels; ++at) {
+                const video::TilePosition place = video::MortonPosition(at);
+                const std::size_t pixel =
+                    ((std::size_t{tile_y + place.y} * width) + tile_x + place.x) * 4;
+                tile.at(at) = Color{.red = rgba[pixel],
+                                    .green = rgba[pixel + 1],
+                                    .blue = rgba[pixel + 2],
+                                    .alpha = rgba[pixel + 3]};
+            }
+            EncodePixels(
+                format,
+                tile,
+                tiled.subspan(TiledOffset(tile_x, tile_y, width, bytes), TilePixels * bytes));
+        }
+    }
+    return true;
+}
+
 std::optional<DepthFormat> DepthBufferFormat(std::uint32_t value) {
     switch (value) {
     case 0:

@@ -92,6 +92,21 @@ Color DecodePixel(PixelFormat format, std::span<const std::uint8_t> bytes);
 void EncodePixels(PixelFormat format, std::span<const Color> colors, std::span<std::uint8_t> bytes);
 void DecodePixels(PixelFormat format, std::span<const std::uint8_t> bytes, std::span<Color> colors);
 
+// A whole image of the format, tiled as colour buffers are (see TiledOffset),
+// to or from rows of red, green, blue and alpha bytes, the top row first. Both
+// sides must hold the image, and its width and height must be multiples of
+// eight: otherwise nothing is converted and the answer is false.
+[[nodiscard]] bool DecodeTiledImage(PixelFormat format,
+                                    std::uint32_t width,
+                                    std::uint32_t height,
+                                    std::span<const std::uint8_t> tiled,
+                                    std::span<std::uint8_t> rgba);
+[[nodiscard]] bool EncodeTiledImage(PixelFormat format,
+                                    std::uint32_t width,
+                                    std::uint32_t height,
+                                    std::span<const std::uint8_t> rgba,
+                                    std::span<std::uint8_t> tiled);
+
 // Depth buffer formats by GPUREG_DEPTHBUFFER_FORMAT's value. Source: GBATEK,
 // Framebuffer registers.
 enum class DepthFormat : std::uint8_t { D16 = 0, D24 = 2, D24S8 = 3 };
