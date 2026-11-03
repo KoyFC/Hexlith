@@ -38,6 +38,9 @@ struct GpuBackendStatistics {
     std::uint64_t downloaded_bytes = 0;
     // Device buffers made.
     std::uint64_t allocations = 0;
+    // A part of a target that was dirty and whose memory was written to by
+    // someone who did not say so, which the backend then took as the truth.
+    std::uint64_t conflicts = 0;
     GpuBackendTimes times;
     // A draw asked for something the backend does not implement.
     bool unsupported = false;

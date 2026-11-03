@@ -213,6 +213,17 @@ TEST(LiveDisplay, TellsTheBackendWhatAFrameShowsBeforeTakingItsPicture) {
               (std::vector<std::string>{"read 18000000 5DC00", "read 20000000 10", "list"}));
 }
 
+TEST(LiveDisplay, MakesMemoryTrueWhenItIsFinished) {
+    gpu::GpuMemory memory;
+    Watcher watcher;
+    LiveDisplay display{memory, watcher, watcher};
+
+    ASSERT_TRUE(display.Finish());
+    ASSERT_GE(watcher.calls.size(), 2U);
+    EXPECT_EQ(watcher.calls.at(watcher.calls.size() - 2), "read 18000000 600000");
+    EXPECT_EQ(watcher.calls.back(), "read 20000000 8000000");
+}
+
 TEST(LiveDisplay, RefusesAListOutsideGpuMemory) {
     gpu::GpuMemory memory;
     Watcher watcher;

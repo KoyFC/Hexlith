@@ -168,6 +168,9 @@ core::Status LiveDisplay::Framebuffer(std::uint64_t frame,
 
 core::Status LiveDisplay::Finish() {
     Keep(Before(last_seen_ + 1, false));
+    // The run is over, and whatever reads the title's memory next sees it true.
+    Keep(backend_->BeforeRead(gpu::GpuMemory::VramBase, gpu::GpuMemory::VramSize));
+    Keep(backend_->BeforeRead(gpu::GpuMemory::FcramBase, gpu::GpuMemory::FcramSize));
     return failure_;
 }
 

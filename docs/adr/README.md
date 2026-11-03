@@ -35,5 +35,6 @@ The format is deliberately short: context, the options that were actually consid
 | [0027](0027-the-screens-are-drawn-as-the-game-runs-and-shown-in-a-window.md) | The screens are drawn as the game runs and shown in a window | Accepted, amended by 0028 |
 | [0028](0028-the-live-display-draws-in-the-titles-own-memory.md) | The live display draws in the title's own memory | Accepted |
 | [0029](0029-cro-modules-are-lifted-against-a-base-the-loader-gives.md) | CRO modules are lifted against a base the loader gives | Accepted |
+| [0030](0030-the-vulkan-backend-keeps-render-targets-resident.md) | The Vulkan backend keeps render targets resident and writes them back when something reads them | Accepted |
 
 A record marked provisional has a named condition that will settle it. It is written down because work has to proceed in the meantime, not because the question is closed.

@@ -46,7 +46,8 @@ LISTS = re.compile(
     r"^display lists (\d+) in ([0-9.]+) s, transfers (\d+) in ([0-9.]+) s, "
     r"present ([0-9.]+) s$", re.MULTILINE)
 BACKEND = re.compile(
-    r"^backend (\d+) draws in (\d+) groups, (\d+) bytes up and (\d+) down, (\d+) buffers made$",
+    r"^backend (\d+) draws in (\d+) groups, (\d+) bytes up and (\d+) down, (\d+) buffers made, "
+    r"(\d+) conflicts$",
     re.MULTILINE)
 PARTS = re.compile(
     r"^\s+textures ([0-9.]+) s, up ([0-9.]+) s, down ([0-9.]+) s, device ([0-9.]+) s, "
@@ -66,7 +67,7 @@ CONFIGS = {
 
 # The numbers of the display lines, by name, in the order the lines print them.
 DISPLAY_PARTS = ("lists", "lists_s", "transfers", "transfers_s", "present_s", "draws", "groups",
-                 "up_bytes", "down_bytes", "buffers_made", "textures_s", "up_s", "down_s",
+                 "up_bytes", "down_bytes", "buffers_made", "conflicts", "textures_s", "up_s", "down_s",
                  "device_s", "buffers_s")
 
 
@@ -209,6 +210,7 @@ def print_summary(summary, configs):
               f"down {display['down_s']:.2f}, device {display['device_s']:.2f}, "
               f"buffers {display['buffers_s']:.2f}), transfers {display['transfers_s']:.2f} s, "
               f"present {display['present_s']:.2f} s; {int(display['groups'])} groups, "
+              f"{int(display['conflicts'])} conflicts, "
               f"{display['up_bytes'] / 1e6:.0f} MB up, {display['down_bytes'] / 1e6:.0f} MB down")
 
 
@@ -238,7 +240,7 @@ def self_test():
               "timing  frame 400 wall 20.000 s guest 5.000 s instructions 400000000\n"
               "display lists 1153 in 6.040 s, transfers 445 in 0.722 s, present 1.187 s\n"
               "backend 15673 draws in 478 groups, 501219328 bytes up and 501219328 down, "
-              "2390 buffers made\n"
+              "2390 buffers made, 0 conflicts\n"
               "        textures 0.668 s, up 1.128 s, down 1.167 s, device 2.346 s, buffers 0.126 s\n"
               "41972790 instructions, 1017217878 ticks, in 8.79 s: 4.8 million a second\n")
     run = parse_run(sample)

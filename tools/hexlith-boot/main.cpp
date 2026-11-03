@@ -556,12 +556,13 @@ void PrintDisplayWork(const Display& shown) {
                              Seconds(work.transfers_time),
                              Seconds(work.present_time));
     std::cout << std::format(
-        "backend {} draws in {} groups, {} bytes up and {} down, {} buffers made\n",
+        "backend {} draws in {} groups, {} bytes up and {} down, {} buffers made, {} conflicts\n",
         statistics.draws,
         statistics.groups,
         statistics.uploaded_bytes,
         statistics.downloaded_bytes,
-        statistics.allocations);
+        statistics.allocations,
+        statistics.conflicts);
     std::cout << std::format("        textures {}, up {}, down {}, device {}, buffers {}\n",
                              Seconds(times.textures),
                              Seconds(times.upload),

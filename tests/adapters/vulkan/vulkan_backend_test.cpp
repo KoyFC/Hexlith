@@ -18,6 +18,8 @@ namespace gpu = domain::gpu;
 namespace reg = gpu::reg;
 
 constexpr std::uint32_t Side = 32;
+constexpr std::uint32_t ColorBytes = Side * Side * 4;
+constexpr std::uint32_t DepthBytes = Side * Side * 4;
 constexpr std::uint32_t ColorAddress = gpu::GpuMemory::VramBase;
 constexpr std::uint32_t DepthAddress = gpu::GpuMemory::VramBase + 0x10000;
 constexpr std::uint32_t VertexAddress = gpu::GpuMemory::VramBase + 0x20000;
@@ -222,8 +224,8 @@ TEST(VulkanGpuBackend, ShadesVerticesAlikeOnTheCpuAndTheGpu) {
     EXPECT_EQ(Differences(*on_gpu, *on_cpu, DepthAddress), "");
 }
 
-// Two draws to one target are one round trip through memory: the buffers go
-// up once and come back once, and the statistics say how much that moved.
+// Two draws to one target are one group: the buffers go up once, and come
+// back only when something reads them, and the statistics say how much moved.
 TEST(VulkanGpuBackend, CountsTheRoundTripOfEachGroupOfDraws) {
     const std::unique_ptr<VulkanContext> context = Context();
     if (!context) {
@@ -243,9 +245,182 @@ TEST(VulkanGpuBackend, CountsTheRoundTripOfEachGroupOfDraws) {
     // A 4-byte colour buffer and a 4-byte depth buffer, each way.
     constexpr std::uint64_t BufferBytes = std::uint64_t{Side} * Side * 4 * 2;
     EXPECT_EQ(statistics.uploaded_bytes, BufferBytes);
-    EXPECT_EQ(statistics.downloaded_bytes, BufferBytes);
+    EXPECT_EQ(statistics.downloaded_bytes, 0U);
     // The staging, vertex, input, draw-word and texel buffers of the group.
     EXPECT_EQ(statistics.allocations, 5U);
+
+    ASSERT_TRUE(backend.Value()->BeforeRead(ColorAddress, ColorBytes).Ok());
+    ASSERT_TRUE(backend.Value()->BeforeRead(DepthAddress, DepthBytes).Ok());
+    EXPECT_EQ(backend.Value()->Statistics().downloaded_bytes, BufferBytes);
+}
+
+// ADR 0030: a target stays on the device between lists and memory is made
+// true when something reads it.
+
+// The scene's second target: the same buffers, drawn at half the side.
+constexpr std::uint32_t SmallSide = 16;
+
+List SmallScene() {
+    List list = Scene();
+    list.Write(0x11E, SmallSide | ((SmallSide - 1) << 12));
+    return list;
+}
+
+std::vector<std::uint8_t> Fill(std::uint8_t value) {
+    return std::vector<std::uint8_t>(ColorBytes, value);
+}
+
+// What the reference makes of running the lists one after the other, with the
+// memory changed by `between` after each.
+template<typename Between>
+std::unique_ptr<gpu::GpuMemory> Reference(const std::vector<List>& lists, const Between& between) {
+    auto memory = Memory();
+    application::ReferenceGpuBackend backend(*memory, gpu::Sampling::Hardware);
+    for (const List& list : lists) {
+        EXPECT_TRUE(backend.RunCommandList(list.Bytes()).Ok());
+        between(*memory);
+    }
+    return memory;
+}
+
+struct Resident {
+    std::unique_ptr<VulkanContext> context;
+    std::unique_ptr<gpu::GpuMemory> memory;
+    std::unique_ptr<VulkanGpuBackend> backend;
+};
+
+Resident MakeResident() {
+    Resident made;
+    made.context = Context();
+    if (!made.context) {
+        return made;
+    }
+    made.memory = Memory();
+    auto backend = VulkanGpuBackend::Create(*made.context, *made.memory, gpu::Sampling::Hardware);
+    EXPECT_TRUE(backend.Ok());
+    if (backend) {
+        made.backend = std::move(backend.Value());
+    }
+    return made;
+}
+
+TEST(VulkanGpuBackend, KeepsATargetOnTheDeviceUntilSomethingReadsIt) {
+    Resident run = MakeResident();
+    if (!run.backend) {
+        GTEST_SKIP() << "no Vulkan device that can draw";
+    }
+    const auto reference = Reference({Scene(), Scene()}, [](gpu::GpuMemory&) {});
+
+    ASSERT_TRUE(run.backend->RunCommandList(Scene().Bytes()).Ok());
+    ASSERT_TRUE(run.backend->RunCommandList(Scene().Bytes()).Ok());
+    EXPECT_EQ(run.backend->Statistics().uploaded_bytes, ColorBytes + DepthBytes)
+        << "one upload for two lists";
+    EXPECT_EQ(run.backend->Statistics().downloaded_bytes, 0U) << "nothing has read it";
+
+    ASSERT_TRUE(run.backend->BeforeRead(ColorAddress, ColorBytes).Ok());
+    EXPECT_EQ(run.backend->Statistics().downloaded_bytes, ColorBytes) << "the colour alone";
+    EXPECT_EQ(Differences(*run.memory, *reference, ColorAddress), "");
+
+    ASSERT_TRUE(run.backend->BeforeRead(DepthAddress, DepthBytes).Ok());
+    EXPECT_EQ(run.backend->Statistics().downloaded_bytes, ColorBytes + DepthBytes);
+    EXPECT_EQ(DepthsApart(*run.memory, *reference), 0U);
+    EXPECT_EQ(run.backend->Statistics().conflicts, 0U);
+    EXPECT_EQ(run.context->ValidationMessages(), 0U) << run.context->FirstValidationMessage();
+}
+
+TEST(VulkanGpuBackend, DropsATargetAFillCoversWithoutWritingItBack) {
+    Resident run = MakeResident();
+    if (!run.backend) {
+        GTEST_SKIP() << "no Vulkan device that can draw";
+    }
+    const auto fill = [](gpu::GpuMemory& memory) {
+        EXPECT_TRUE(memory.Write(ColorAddress, Fill(0x7F)));
+    };
+    const auto reference = Reference({Scene(), Scene()}, fill);
+
+    ASSERT_TRUE(run.backend->RunCommandList(Scene().Bytes()).Ok());
+    ASSERT_TRUE(run.backend->BeforeWrite(ColorAddress, ColorBytes).Ok());
+    fill(*run.memory);
+    ASSERT_TRUE(run.backend->RunCommandList(Scene().Bytes()).Ok());
+    ASSERT_TRUE(run.backend->BeforeRead(ColorAddress, ColorBytes).Ok());
+    ASSERT_TRUE(run.backend->BeforeRead(DepthAddress, DepthBytes).Ok());
+
+    EXPECT_EQ(Differences(*run.memory, *reference, ColorAddress), "");
+    EXPECT_EQ(DepthsApart(*run.memory, *reference), 0U);
+    // The colour was uploaded again after the fill; the write-back that
+    // followed the second list is the only one.
+    EXPECT_EQ(run.backend->Statistics().uploaded_bytes, 2 * ColorBytes + DepthBytes);
+    EXPECT_EQ(run.backend->Statistics().downloaded_bytes, ColorBytes + DepthBytes);
+    EXPECT_EQ(run.backend->Statistics().conflicts, 0U);
+}
+
+TEST(VulkanGpuBackend, WritesBackWhatAPartialWriteWouldLose) {
+    Resident run = MakeResident();
+    if (!run.backend) {
+        GTEST_SKIP() << "no Vulkan device that can draw";
+    }
+    constexpr std::uint32_t Row = Side * 4;
+    const auto patch = [](gpu::GpuMemory& memory) {
+        EXPECT_TRUE(memory.Write(ColorAddress, std::vector<std::uint8_t>(Row, 0x55)));
+    };
+    const auto reference = Reference({Scene()}, patch);
+
+    ASSERT_TRUE(run.backend->RunCommandList(Scene().Bytes()).Ok());
+    ASSERT_TRUE(run.backend->BeforeWrite(ColorAddress, Row).Ok());
+    patch(*run.memory);
+    ASSERT_TRUE(run.backend->BeforeRead(ColorAddress, ColorBytes).Ok());
+
+    EXPECT_EQ(Differences(*run.memory, *reference, ColorAddress), "")
+        << "the rest of the target survived the partial write";
+}
+
+TEST(VulkanGpuBackend, TakesMemoryAsTheTruthWhenAWriteWasNotAnnounced) {
+    Resident run = MakeResident();
+    if (!run.backend) {
+        GTEST_SKIP() << "no Vulkan device that can draw";
+    }
+    const auto fill = [](gpu::GpuMemory& memory) {
+        EXPECT_TRUE(memory.Write(ColorAddress, Fill(0x7F)));
+    };
+    const auto reference = Reference({Scene(), Scene()}, fill);
+
+    ASSERT_TRUE(run.backend->RunCommandList(Scene().Bytes()).Ok());
+    fill(*run.memory);
+    ASSERT_TRUE(run.backend->RunCommandList(Scene().Bytes()).Ok());
+    ASSERT_TRUE(run.backend->BeforeRead(ColorAddress, ColorBytes).Ok());
+
+    EXPECT_EQ(run.backend->Statistics().conflicts, 1U);
+    EXPECT_EQ(Differences(*run.memory, *reference, ColorAddress), "");
+}
+
+TEST(VulkanGpuBackend, WritesBackATargetAnotherOneOverlaps) {
+    Resident run = MakeResident();
+    if (!run.backend) {
+        GTEST_SKIP() << "no Vulkan device that can draw";
+    }
+    const auto reference = Reference({Scene(), SmallScene(), Scene()}, [](gpu::GpuMemory&) {});
+
+    ASSERT_TRUE(run.backend->RunCommandList(Scene().Bytes()).Ok());
+    ASSERT_TRUE(run.backend->RunCommandList(SmallScene().Bytes()).Ok());
+    ASSERT_TRUE(run.backend->RunCommandList(Scene().Bytes()).Ok());
+    ASSERT_TRUE(run.backend->BeforeRead(ColorAddress, ColorBytes).Ok());
+    ASSERT_TRUE(run.backend->BeforeRead(DepthAddress, DepthBytes).Ok());
+
+    EXPECT_EQ(Differences(*run.memory, *reference, ColorAddress), "");
+    EXPECT_EQ(DepthsApart(*run.memory, *reference), 0U);
+    EXPECT_EQ(run.backend->Statistics().conflicts, 0U);
+    EXPECT_EQ(run.context->ValidationMessages(), 0U) << run.context->FirstValidationMessage();
+}
+
+TEST(VulkanGpuBackend, LeavesMemoryTrueWhenItIsDestroyed) {
+    Resident run = MakeResident();
+    if (!run.backend) {
+        GTEST_SKIP() << "no Vulkan device that can draw";
+    }
+    const auto reference = Reference({Scene()}, [](gpu::GpuMemory&) {});
+    ASSERT_TRUE(run.backend->RunCommandList(Scene().Bytes()).Ok());
+    run.backend.reset();
+    EXPECT_EQ(Differences(*run.memory, *reference, ColorAddress), "");
 }
 
 }  // namespace
