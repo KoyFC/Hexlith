@@ -581,10 +581,12 @@ void PrintDisplayWork(const Display& shown) {
                              Seconds(times.download),
                              Seconds(times.wait),
                              Seconds(times.allocate));
-    std::cout << std::format("        {} fragment configurations, {} pipelines made in {}\n",
-                             statistics.fragment_configurations,
-                             statistics.pipelines,
-                             Seconds(times.pipelines));
+    std::cout << std::format(
+        "        {} fragment configurations, {} pipelines made in {}, {} draws waited for none\n",
+        statistics.fragment_configurations,
+        statistics.pipelines,
+        Seconds(times.pipelines),
+        statistics.fallback_draws);
 }
 
 // Closes what watched the run: the GPU recording and the window.

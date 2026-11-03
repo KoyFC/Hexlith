@@ -3,12 +3,14 @@
 #include "domain/gpu/pica_registers.h"
 
 #include <bit>
+#include <chrono>
 #include <cstdlib>
 #include <format>
 #include <gtest/gtest.h>
 #include <memory>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace hexlith::adapters::vulkan {
@@ -274,30 +276,62 @@ List FragmentConfigurations() {
     return list;
 }
 
-// ADR 0031: a fragment shader made for the draw's configuration draws what the
-// one that reads the configuration from the registers draws, to the byte.
+// ADR 0031: a draw does not wait for the shader made for its configuration,
+// it takes the generic one's pipeline until that is ready, and either draws
+// what the other does, to the byte.
 TEST(VulkanGpuBackend, DrawsWhatTheGenericFragmentShaderDrawsWhenSpecialised) {
     const std::unique_ptr<VulkanContext> context = Context();
     if (!context) {
         GTEST_SKIP() << "no Vulkan device that can draw";
     }
-    const auto draw = [&context](FragmentShading shading) {
+    // How many times the list is drawn, one backend after the other, which is
+    // as many as it takes the specialised one to draw a whole list with the
+    // shaders made for it.
+    std::size_t rounds = 0;
+    const auto draw = [&context, &rounds](FragmentShading shading) {
         auto memory = Memory();
         auto backend = VulkanGpuBackend::Create(
             *context, *memory, gpu::Sampling::Hardware, VertexShading::GpuWherePossible, shading);
         EXPECT_TRUE(backend);
-        if (backend) {
-            EXPECT_TRUE(backend.Value()->RunCommandList(FragmentConfigurations().Bytes()).Ok());
-            EXPECT_EQ(backend.Value()->Statistics().draws, 9U);
-            // Several configurations, or this would hold a shader to itself.
-            EXPECT_GE(backend.Value()->Statistics().fragment_configurations, 5U);
-            EXPECT_TRUE(backend.Value()->BeforeRead(ColorAddress, ColorBytes).Ok());
-            EXPECT_TRUE(backend.Value()->BeforeRead(DepthAddress, DepthBytes).Ok());
+        if (!backend) {
+            return memory;
         }
+        std::uint64_t fallbacks_before = 0;
+        const auto begin = std::chrono::steady_clock::now();
+        for (std::size_t round = 1;; ++round) {
+            EXPECT_TRUE(backend.Value()->RunCommandList(FragmentConfigurations().Bytes()).Ok());
+            const ports::GpuBackendStatistics statistics = backend.Value()->Statistics();
+            EXPECT_EQ(statistics.draws, 9U * round);
+            if (shading == FragmentShading::Generic) {
+                EXPECT_EQ(statistics.fallback_draws, 0U);
+                if (round >= rounds) {
+                    break;
+                }
+            } else {
+                if (round == 1) {
+                    EXPECT_GT(statistics.fallback_draws, 0U) << "the first draws had to wait";
+                    // Several configurations, or this would hold a shader to itself.
+                    EXPECT_GE(statistics.fragment_configurations, 5U);
+                }
+                // A round that needed no fallback drew only with the shaders made.
+                if (statistics.fallback_draws == fallbacks_before ||
+                    std::chrono::steady_clock::now() - begin > std::chrono::seconds(120)) {
+                    rounds = round;
+                    EXPECT_EQ(statistics.fallback_draws, fallbacks_before)
+                        << "the shaders were never ready";
+                    break;
+                }
+                fallbacks_before = statistics.fallback_draws;
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+        }
+        EXPECT_TRUE(backend.Value()->BeforeRead(ColorAddress, ColorBytes).Ok());
+        EXPECT_TRUE(backend.Value()->BeforeRead(DepthAddress, DepthBytes).Ok());
         return memory;
     };
-    const auto generic = draw(FragmentShading::Generic);
+    // The specialised backend first, for it decides how many rounds there are.
     const auto specialised = draw(FragmentShading::Specialised);
+    const auto generic = draw(FragmentShading::Generic);
     EXPECT_EQ(Differences(*specialised, *generic, ColorAddress), "") << "colour";
     EXPECT_EQ(Differences(*specialised, *generic, DepthAddress), "") << "depth";
     EXPECT_EQ(context->ValidationMessages(), 0U) << context->FirstValidationMessage();

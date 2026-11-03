@@ -452,6 +452,7 @@ public:
                 .conflicts = conflicts_,
                 .pipelines = pipelines_.size(),
                 .fragment_configurations = fragment_numbers_.size(),
+                .fallback_draws = fallback_draws_,
                 .times = times_,
                 .unsupported = unsupported_ || vertices_.Statistics().unsupported_shader};
     }
@@ -502,7 +503,6 @@ private:
     // been met, with its shader made then if the draws are specialised.
     core::Result<std::uint32_t> FragmentConfigurationNumber(const gpu::RegisterFile& registers);
     void StartFragmentShader(const FragmentConfiguration& configuration, std::uint32_t number);
-    core::Result<VkShaderModule> FragmentModule(std::uint32_t number);
     void WriteDrawWords(const gpu::PicaState& state, std::uint32_t index);
     std::uint32_t Decode(std::uint32_t address,
                          gpu::TextureFormat format,
@@ -511,7 +511,10 @@ private:
     [[nodiscard]] bool ReadsPendingTarget(const gpu::RegisterFile& registers) const;
     core::Status Flush();
     core::Status DrawGroup(std::size_t first, std::size_t end);
+    core::Result<VkPipeline>
+    BuildPipeline(const PipelineKey& key, VkShaderModule vertex, VkShaderModule fragment) const;
     core::Result<VkPipeline> Pipeline(const PipelineKey& key);
+    void StartPipeline(const PipelineKey& key);
     core::Status CreateAttachments(Attachments& made, std::uint32_t width, std::uint32_t height);
     void DestroyAttachments(Attachments& attachments);
     core::Result<Slot*> SlotFor(const Target& target);
@@ -563,9 +566,12 @@ private:
     // carry, and the shader made for each when the draws are specialised.
     std::unordered_map<FragmentConfiguration, std::uint32_t, FragmentConfigurationHash>
         fragment_numbers_;
-    std::map<std::uint32_t, VkShaderModule> fragment_modules_;
-    // Shaders still being compiled, by number.
-    std::map<std::uint32_t, std::future<core::Result<std::vector<std::uint32_t>>>> compiling_;
+    // The SPIR-V of each configuration's shader, compiled on another thread,
+    // by number; and the pipelines being made from it on others.
+    std::map<std::uint32_t, std::shared_future<core::Result<std::vector<std::uint32_t>>>>
+        compiling_;
+    std::map<PipelineKey, std::future<core::Result<VkPipeline>>> building_;
+    std::uint64_t fallback_draws_ = 0;
     // Translated vertex programs, by a hash of their code, descriptors and
     // entry point; a null module for one the translation cannot take.
     std::map<std::uint64_t, VkShaderModule> shaded_modules_;
@@ -779,32 +785,8 @@ void VulkanGpuBackend::Implementation::StartFragmentShader(
                          std::string{MultiplySource} + definitions +
                          std::string{FragmentShaderSource};
     compiling_.emplace(number, std::async(std::launch::async, [text = std::move(source)] {
-                           return CompileGlsl(text, ShaderStage::Fragment);
-                       }));
-}
-
-core::Result<VkShaderModule>
-VulkanGpuBackend::Implementation::FragmentModule(std::uint32_t number) {
-    if (const auto found = fragment_modules_.find(number); found != fragment_modules_.end()) {
-        return found->second;
-    }
-    const core::Result<std::vector<std::uint32_t>> spirv = compiling_.at(number).get();
-    compiling_.erase(number);
-    if (!spirv) {
-        return spirv.Failure();
-    }
-    VkShaderModuleCreateInfo create{};
-    create.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    create.codeSize = spirv.Value().size() * sizeof(std::uint32_t);
-    create.pCode = spirv.Value().data();
-    VkShaderModule module = VK_NULL_HANDLE;
-    if (const core::Status made =
-            Check(vkCreateShaderModule(device_, &create, nullptr, &module), "vkCreateShaderModule");
-        !made) {
-        return made.Failure();
-    }
-    fragment_modules_.emplace(number, module);
-    return module;
+                                   return CompileGlsl(text, ShaderStage::Fragment);
+                               }).share());
 }
 
 core::Result<VkShaderModule>
@@ -1733,18 +1715,8 @@ core::Status VulkanGpuBackend::Implementation::CreateShaders() {
 }
 
 // A pipeline for one combination of the output merger's settings.
-core::Result<VkPipeline> VulkanGpuBackend::Implementation::Pipeline(const PipelineKey& key) {
-    if (const auto found = pipelines_.find(key); found != pipelines_.end()) {
-        return found->second;
-    }
-    VkShaderModule fragment = fragment_module_;
-    if (key.fragment != 0) {
-        const core::Result<VkShaderModule> made = FragmentModule(key.fragment);
-        if (!made) {
-            return made.Failure();
-        }
-        fragment = made.Value();
-    }
+core::Result<VkPipeline> VulkanGpuBackend::Implementation::BuildPipeline(
+    const PipelineKey& key, VkShaderModule vertex, VkShaderModule fragment) const {
     const auto& w = key.words;
     const std::uint32_t cull = w[0];
     const std::uint32_t operation = w[1];
@@ -1757,14 +1729,14 @@ core::Result<VkPipeline> VulkanGpuBackend::Implementation::Pipeline(const Pipeli
     const bool has_stencil = w[10] == static_cast<std::uint32_t>(gpu::DepthFormat::D24S8);
 
     const std::array<VkPipelineShaderStageCreateInfo, 2> stages = {
-        VkPipelineShaderStageCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .stage = VK_SHADER_STAGE_VERTEX_BIT,
-            .module = key.program == 0 ? vertex_module_ : shaded_modules_.at(key.program),
-            .pName = "main",
-            .pSpecializationInfo = nullptr},
+        VkPipelineShaderStageCreateInfo{.sType =
+                                            VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                                        .pNext = nullptr,
+                                        .flags = 0,
+                                        .stage = VK_SHADER_STAGE_VERTEX_BIT,
+                                        .module = vertex,
+                                        .pName = "main",
+                                        .pSpecializationInfo = nullptr},
         VkPipelineShaderStageCreateInfo{.sType =
                                             VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                                         .pNext = nullptr,
@@ -1878,15 +1850,79 @@ core::Result<VkPipeline> VulkanGpuBackend::Implementation::Pipeline(const Pipeli
     create.layout = pipeline_layout_;
     create.renderPass = render_pass_;
     VkPipeline pipeline = VK_NULL_HANDLE;
-    const Stopwatch making{times_.pipelines};
     if (const core::Status made = Check(
             vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &create, nullptr, &pipeline),
             "vkCreateGraphicsPipelines");
         !made) {
         return made.Failure();
     }
-    pipelines_.emplace(key, pipeline);
     return pipeline;
+}
+
+// The pipeline a draw is drawn with. One made for the draw's configuration is
+// built on another thread, because the driver takes about a second to compile
+// the shader and the game would stand still for it; until it is ready the draw
+// takes the pipeline of the generic shader, which draws the same pixels
+// (ADR 0031).
+core::Result<VkPipeline> VulkanGpuBackend::Implementation::Pipeline(const PipelineKey& key) {
+    if (const auto found = pipelines_.find(key); found != pipelines_.end()) {
+        return found->second;
+    }
+    if (key.fragment != 0) {
+        if (const auto building = building_.find(key); building != building_.end()) {
+            if (building->second.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+                const core::Result<VkPipeline> built = building->second.get();
+                building_.erase(building);
+                if (!built) {
+                    return built.Failure();
+                }
+                pipelines_.emplace(key, built.Value());
+                return built.Value();
+            }
+        } else {
+            StartPipeline(key);
+        }
+        ++fallback_draws_;
+        PipelineKey generic = key;
+        generic.fragment = 0;
+        return Pipeline(generic);
+    }
+    const VkShaderModule vertex =
+        key.program == 0 ? vertex_module_ : shaded_modules_.at(key.program);
+    const Stopwatch making{times_.pipelines};
+    const core::Result<VkPipeline> pipeline = BuildPipeline(key, vertex, fragment_module_);
+    if (pipeline) {
+        pipelines_.emplace(key, pipeline.Value());
+    }
+    return pipeline;
+}
+
+void VulkanGpuBackend::Implementation::StartPipeline(const PipelineKey& key) {
+    const VkShaderModule vertex =
+        key.program == 0 ? vertex_module_ : shaded_modules_.at(key.program);
+    building_.emplace(
+        key,
+        std::async(std::launch::async, [this, key, vertex, spirv = compiling_.at(key.fragment)] {
+            const core::Result<std::vector<std::uint32_t>>& code = spirv.get();
+            if (!code) {
+                return core::Result<VkPipeline>{code.Failure()};
+            }
+            VkShaderModuleCreateInfo create{};
+            create.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            create.codeSize = code.Value().size() * sizeof(std::uint32_t);
+            create.pCode = code.Value().data();
+            VkShaderModule fragment = VK_NULL_HANDLE;
+            if (const core::Status made =
+                    Check(vkCreateShaderModule(device_, &create, nullptr, &fragment),
+                          "vkCreateShaderModule");
+                !made) {
+                return core::Result<VkPipeline>{made.Failure()};
+            }
+            const core::Result<VkPipeline> pipeline = BuildPipeline(key, vertex, fragment);
+            // A shader module may be destroyed once the pipeline is made.
+            vkDestroyShaderModule(device_, fragment, nullptr);
+            return pipeline;
+        }));
 }
 
 core::Status VulkanGpuBackend::Implementation::CreateImage(Image& image,
@@ -2001,13 +2037,15 @@ VulkanGpuBackend::Implementation::~Implementation() {
     for (const std::unique_ptr<Slot>& slot : slots_) {
         DestroyAttachments(slot->images);
     }
+    for (auto& [key, building] : building_) {
+        if (const core::Result<VkPipeline> built = building.get(); built) {
+            vkDestroyPipeline(device_, built.Value(), nullptr);
+        }
+    }
     for (auto& [key, pipeline] : pipelines_) {
         vkDestroyPipeline(device_, pipeline, nullptr);
     }
     for (auto& [key, module] : shaded_modules_) {
-        vkDestroyShaderModule(device_, module, nullptr);
-    }
-    for (auto& [number, module] : fragment_modules_) {
         vkDestroyShaderModule(device_, module, nullptr);
     }
     vkDestroyShaderModule(device_, vertex_module_, nullptr);

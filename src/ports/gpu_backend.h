@@ -48,6 +48,9 @@ struct GpuBackendStatistics {
     // made (docs/gpu-speed.md).
     std::uint64_t pipelines = 0;
     std::uint64_t fragment_configurations = 0;
+    // Draws that took the generic fragment shader's pipeline because the one
+    // made for their configuration was not ready.
+    std::uint64_t fallback_draws = 0;
     GpuBackendTimes times;
     // A draw asked for something the backend does not implement.
     bool unsupported = false;
