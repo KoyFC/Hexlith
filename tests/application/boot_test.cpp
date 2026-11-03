@@ -121,6 +121,21 @@ TEST(ParseBootCommandLine, TakesALimitAndADirectoryToCompareWith) {
     EXPECT_EQ(options.Value().stop_after.value_or(BootStopPoint{}).module, "DllA");
 }
 
+TEST(ParseBootCommandLine, TakesTheFramesToTimeInAnyOrder) {
+    EXPECT_TRUE(ParseBootCommandLine({}).Value().time_frames.empty());
+    const std::vector<std::string_view> arguments = {"--time-frames", "400,227,1101"};
+    const core::Result<BootOptions> options = ParseBootCommandLine(arguments);
+    ASSERT_TRUE(options.Ok()) << options.Failure().Message();
+    EXPECT_EQ(options.Value().time_frames, (std::vector<std::uint64_t>{227, 400, 1101}));
+}
+
+TEST(ParseBootCommandLine, RefusesAFrameToTimeThatIsNotANumber) {
+    EXPECT_FALSE(
+        ParseBootCommandLine(std::vector<std::string_view>{"--time-frames", "227,x"}).Ok());
+    EXPECT_FALSE(
+        ParseBootCommandLine(std::vector<std::string_view>{"--time-frames", "227,,400"}).Ok());
+}
+
 TEST(ParseBootCommandLine, RunsLongEnoughByDefault) {
     const core::Result<BootOptions> options = ParseBootCommandLine({});
     ASSERT_TRUE(options.Ok());

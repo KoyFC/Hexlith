@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace hexlith::application {
 
@@ -139,6 +140,11 @@ struct BootOptions {
     // on the device whose name has this in it, or the first one when it is empty.
     bool vulkan = false;
     std::string device;
+
+    // Frames at which the run prints the wall time and the game's own time so
+    // far, so that a script can tell what each stretch of a boot cost. Kept in
+    // ascending order.
+    std::vector<std::uint64_t> time_frames;
 
     // Counts every instruction the run executes by address and writes the table
     // under <work-dir>/<title>/observed, as docs/analysis-tables.md describes.

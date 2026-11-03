@@ -9,6 +9,7 @@
 #include "ports/screen_sink.h"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -32,6 +33,17 @@ domain::gpu::GpuMemory GpuMemoryOf(BootedTitle& title);
 class LiveDisplay final {
 public:
     static constexpr std::size_t FramebufferWords = 7;
+
+    // What the display did and how long each kind of work took, the backend's
+    // own time in RunCommandList included in `lists_time`.
+    struct WorkDone {
+        std::uint64_t lists = 0;
+        std::uint64_t transfers = 0;
+        std::chrono::nanoseconds lists_time{0};
+        std::chrono::nanoseconds transfers_time{0};
+        // Composing the screens from memory and handing them to the sink.
+        std::chrono::nanoseconds present_time{0};
+    };
 
     // The memory is the one the backend draws in.
     LiveDisplay(domain::gpu::GpuMemory& memory,
@@ -63,6 +75,10 @@ public:
         return presented_;
     }
 
+    [[nodiscard]] const WorkDone& Work() const {
+        return work_;
+    }
+
 private:
     core::Status Before(std::uint64_t frame, bool framebuffer);
     void Keep(const core::Status& status);
@@ -77,6 +93,7 @@ private:
     bool started_ = false;
     std::uint64_t last_seen_ = 0;
     std::uint64_t presented_ = 0;
+    WorkDone work_;
     core::Status failure_;
 };
 

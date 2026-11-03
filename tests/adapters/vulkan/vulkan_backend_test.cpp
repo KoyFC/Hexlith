@@ -222,5 +222,31 @@ TEST(VulkanGpuBackend, ShadesVerticesAlikeOnTheCpuAndTheGpu) {
     EXPECT_EQ(Differences(*on_gpu, *on_cpu, DepthAddress), "");
 }
 
+// Two draws to one target are one round trip through memory: the buffers go
+// up once and come back once, and the statistics say how much that moved.
+TEST(VulkanGpuBackend, CountsTheRoundTripOfEachGroupOfDraws) {
+    const std::unique_ptr<VulkanContext> context = Context();
+    if (!context) {
+        GTEST_SKIP() << "no Vulkan device that can draw";
+    }
+    const auto memory = Memory();
+    auto backend = VulkanGpuBackend::Create(*context, *memory, gpu::Sampling::Hardware);
+    ASSERT_TRUE(backend);
+    List twice = Scene();
+    twice.Write(reg::VertexCount, 6).Write(reg::DrawArrays, 1);
+
+    ASSERT_TRUE(backend.Value()->RunCommandList(twice.Bytes()).Ok());
+
+    const ports::GpuBackendStatistics statistics = backend.Value()->Statistics();
+    EXPECT_EQ(statistics.draws, 2U);
+    EXPECT_EQ(statistics.groups, 1U);
+    // A 4-byte colour buffer and a 4-byte depth buffer, each way.
+    constexpr std::uint64_t BufferBytes = std::uint64_t{Side} * Side * 4 * 2;
+    EXPECT_EQ(statistics.uploaded_bytes, BufferBytes);
+    EXPECT_EQ(statistics.downloaded_bytes, BufferBytes);
+    // The staging, vertex, input, draw-word and texel buffers of the group.
+    EXPECT_EQ(statistics.allocations, 5U);
+}
+
 }  // namespace
 }  // namespace hexlith::adapters::vulkan

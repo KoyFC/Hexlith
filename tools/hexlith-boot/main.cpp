@@ -284,17 +284,28 @@ bool AttachGolden(const application::BootOptions& options,
 }
 
 // What is asked of every vertical blank: stop at the frame --stop-after named,
-// and stop when the window is closed.
+// stop when the window is closed, and say how long the run has taken at the
+// frames --time-frames names, to be read by scripts/measure_window_speed.py.
 void WatchVerticalBlanks(const application::BootOptions& options,
                          application::BootedTitle& title,
-                         const hexlith::ports::ScreenSink* sink) {
+                         const hexlith::ports::ScreenSink* sink,
+                         const std::chrono::steady_clock::time_point& began) {
     using Kind = application::BootStopPoint::Kind;
     const bool at_frame = options.stop_after.has_value() && options.stop_after->kind == Kind::Frame;
-    if (!at_frame && sink == nullptr) {
+    if (!at_frame && sink == nullptr && options.time_frames.empty()) {
         return;
     }
     const std::uint64_t frame_to_stop = at_frame ? options.stop_after->frame : 0;
-    title.Gpu().OnVerticalBlank([at_frame, frame_to_stop, sink, &title](std::uint64_t frame) {
+    title.Gpu().OnVerticalBlank([at_frame, frame_to_stop, sink, &title, &began, &options](
+                                    std::uint64_t frame) {
+        if (std::ranges::binary_search(options.time_frames, frame)) {
+            std::cout << std::format(
+                "timing  frame {} wall {:.3f} s guest {:.3f} s instructions {}\n",
+                frame,
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count(),
+                std::chrono::duration<double>(title.Kernel().GuestTime()).count(),
+                title.Kernel().Executed());
+        }
         if ((at_frame && frame == frame_to_stop) || (sink != nullptr && sink->StopRequested())) {
             title.Kernel().RequestStop();
         }
@@ -527,6 +538,38 @@ bool AttachGpuRecording(const application::BootOptions& options,
     return true;
 }
 
+std::string Seconds(std::chrono::nanoseconds time) {
+    return std::format("{:.3f} s", std::chrono::duration<double>(time).count());
+}
+
+// Where the time of drawing went, to be read by scripts/measure_window_speed.py.
+// What the backend does not split out of RunCommandList is the command
+// processor and the vertices the CPU shades.
+void PrintDisplayWork(const Display& shown) {
+    const hexlith::application::LiveDisplay::WorkDone& work = shown.display->Work();
+    const hexlith::ports::GpuBackendStatistics statistics = shown.backend->Statistics();
+    const hexlith::ports::GpuBackendTimes& times = statistics.times;
+    std::cout << std::format("display lists {} in {}, transfers {} in {}, present {}\n",
+                             work.lists,
+                             Seconds(work.lists_time),
+                             work.transfers,
+                             Seconds(work.transfers_time),
+                             Seconds(work.present_time));
+    std::cout << std::format(
+        "backend {} draws in {} groups, {} bytes up and {} down, {} buffers made\n",
+        statistics.draws,
+        statistics.groups,
+        statistics.uploaded_bytes,
+        statistics.downloaded_bytes,
+        statistics.allocations);
+    std::cout << std::format("        textures {}, up {}, down {}, device {}, buffers {}\n",
+                             Seconds(times.textures),
+                             Seconds(times.upload),
+                             Seconds(times.download),
+                             Seconds(times.wait),
+                             Seconds(times.allocate));
+}
+
 // Closes what watched the run: the GPU recording and the window.
 void FinishWatching(application::GpuRecording* recording,
                     const adapters::GpuRecordingDirectory& gpu,
@@ -544,6 +587,7 @@ void FinishWatching(application::GpuRecording* recording,
             Report(finished.Failure().Message());
         }
         std::cout << std::format("window  {} frames shown\n", shown.display->Presented());
+        PrintDisplayWork(shown);
     }
 }
 
@@ -619,7 +663,8 @@ int Run(const application::BootOptions& options) {
     if (!AttachWindow(options, title, shown)) {
         return Failure;
     }
-    WatchVerticalBlanks(options, title, shown.window.get());
+    std::chrono::steady_clock::time_point began;
+    WatchVerticalBlanks(options, title, shown.window.get(), began);
     adapters::GpuRecordingDirectory gpu{workspace.Value().work_directory.path /
                                         profile::WorkspaceDirectoryName(*target) / GpuDirectory};
     std::unique_ptr<application::GpuRecording> recording;
@@ -638,7 +683,7 @@ int Run(const application::BootOptions& options) {
         return Failure;
     }
 
-    const auto began = std::chrono::steady_clock::now();
+    began = std::chrono::steady_clock::now();
     const kernel::KernelStop stop = running.Run(options.instruction_limit);
     const double seconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();

@@ -3,15 +3,42 @@
 
 #include "core/result.h"
 
+#include <chrono>
 #include <cstdint>
 #include <span>
 #include <string>
 
 namespace hexlith::ports {
 
+// Where a backend spent its time in RunCommandList. Whatever is left of
+// `total` once these are taken out is the command processor and the vertices
+// the CPU shades. A backend that does not split its time reports only `total`.
+struct GpuBackendTimes {
+    std::chrono::nanoseconds total{0};
+    // Decoding textures from GPU memory for the shader to sample.
+    std::chrono::nanoseconds textures{0};
+    // Colour and depth buffers from memory into the backend's images, and back.
+    std::chrono::nanoseconds upload{0};
+    std::chrono::nanoseconds download{0};
+    // Waiting for the device to finish a submission.
+    std::chrono::nanoseconds wait{0};
+    // Making the buffers a submission reads.
+    std::chrono::nanoseconds allocate{0};
+};
+
 struct GpuBackendStatistics {
     std::uint64_t lists = 0;
     std::uint64_t draws = 0;
+    // Runs of draws to one target, each a round trip through GPU memory in a
+    // backend that keeps nothing between them (ADR 0022).
+    std::uint64_t groups = 0;
+    // Bytes of GPU memory the colour and depth buffers were read from and
+    // written back to.
+    std::uint64_t uploaded_bytes = 0;
+    std::uint64_t downloaded_bytes = 0;
+    // Device buffers made.
+    std::uint64_t allocations = 0;
+    GpuBackendTimes times;
     // A draw asked for something the backend does not implement.
     bool unsupported = false;
 };

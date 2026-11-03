@@ -4,6 +4,7 @@
 #include "domain/gpu/memory_transfer.h"
 
 #include <algorithm>
+#include <chrono>
 #include <format>
 #include <optional>
 #include <span>
@@ -19,6 +20,15 @@ using domain::services::Graphics;
 // SubmitCmdListCommand in Azahar's gsp_command.h.
 constexpr std::size_t ListAddressWord = 1;
 constexpr std::size_t ListSizeWord = 2;
+
+// The time of a call, added to a total when it returns.
+template<typename Call>
+auto Timed(std::chrono::nanoseconds& total, const Call& call) {
+    const auto began = std::chrono::steady_clock::now();
+    auto result = call();
+    total += std::chrono::steady_clock::now() - began;
+    return result;
+}
 
 }  // namespace
 
@@ -71,9 +81,11 @@ core::Status LiveDisplay::Before(std::uint64_t frame, bool framebuffer) {
     const std::uint64_t shown = next_;
     next_ = frame + 1;
     ++presented_;
-    return sink_->Present(shown,
-                          screens_.Compose(*memory_, gpu::ScreenSetup::Top),
-                          screens_.Compose(*memory_, gpu::ScreenSetup::Bottom));
+    return Timed(work_.present_time, [&] {
+        return sink_->Present(shown,
+                              screens_.Compose(*memory_, gpu::ScreenSetup::Top),
+                              screens_.Compose(*memory_, gpu::ScreenSetup::Bottom));
+    });
 }
 
 // gsp::Gpu tells its observer of a command before it carries it out, so a
@@ -98,11 +110,16 @@ core::Status LiveDisplay::Command(std::uint64_t frame, const std::array<std::uin
         // A list is read while it draws into the same memory, so it is read
         // from a copy.
         list_.assign(bytes.begin(), bytes.end());
-        return backend_->RunCommandList(list_);
+        ++work_.lists;
+        return Timed(work_.lists_time, [&] { return backend_->RunCommandList(list_); });
     }
     case gpu::GxCommandId::DisplayTransfer:
         if (const std::optional<gpu::TransferConfig> transfer = gpu::Transfer(words)) {
-            static_cast<void>(gpu::RunTransfer(*memory_, *transfer));
+            ++work_.transfers;
+            Timed(work_.transfers_time, [&] {
+                static_cast<void>(gpu::RunTransfer(*memory_, *transfer));
+                return 0;
+            });
         }
         return {};
     default:

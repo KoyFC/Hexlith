@@ -126,6 +126,28 @@ TEST(LiveDisplay, LeavesMemoryFillsToTheGame) {
     EXPECT_EQ(memory.Bytes(gpu::GpuMemory::VramBase, 1).front(), 0);
 }
 
+TEST(LiveDisplay, CountsTheListsAndTransfersItRuns) {
+    gpu::GpuMemory memory;
+    Watcher watcher;
+    LiveDisplay display{memory, watcher, watcher};
+    const std::array<std::uint32_t, 8> transfer = {
+        static_cast<std::uint32_t>(gpu::GxCommandId::DisplayTransfer),
+        VramVirtual,
+        VramVirtual + 0x10000,
+        0x00F00010,
+        0x00F00010,
+        0,
+        0,
+        0};
+
+    ASSERT_TRUE(display.Command(1, SubmitList(16)));
+    ASSERT_TRUE(display.Command(1, SubmitList(16)));
+    ASSERT_TRUE(display.Command(1, transfer));
+
+    EXPECT_EQ(display.Work().lists, 2U);
+    EXPECT_EQ(display.Work().transfers, 1U);
+}
+
 TEST(LiveDisplay, RefusesAListOutsideGpuMemory) {
     gpu::GpuMemory memory;
     Watcher watcher;

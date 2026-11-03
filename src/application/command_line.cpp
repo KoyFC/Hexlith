@@ -2,6 +2,7 @@
 
 #include "application/workspace.h"
 
+#include <algorithm>
 #include <format>
 #include <functional>
 #include <initializer_list>
@@ -37,6 +38,7 @@ constexpr std::string_view BackendOption = "--backend";
 constexpr std::string_view DeviceOption = "--device";
 constexpr std::string_view RecordExecutedOption = "--record-executed";
 constexpr std::string_view LiftedOption = "--lifted";
+constexpr std::string_view TimeFramesOption = "--time-frames";
 
 constexpr std::string_view LoadEvent = "cro-load:";
 constexpr std::string_view UnloadEvent = "cro-unload:";
@@ -319,6 +321,33 @@ TakeBackend(std::span<const std::string_view> arguments, std::size_t& index, boo
     return {};
 }
 
+// Frame numbers separated by commas, in ascending order.
+core::Status TakeFrames(std::span<const std::string_view> arguments,
+                        std::size_t& index,
+                        std::vector<std::uint64_t>& frames) {
+    std::optional<std::string> text;
+    core::Status taken = TakeValue(arguments, index, text);
+    if (!taken || !text.has_value()) {
+        return taken;
+    }
+    std::string_view rest = *text;
+    while (true) {
+        const std::size_t comma = rest.find(',');
+        const core::Result<std::uint64_t> frame =
+            ParseCount(TimeFramesOption, rest.substr(0, comma));
+        if (!frame) {
+            return frame.Failure();
+        }
+        frames.push_back(frame.Value());
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        rest.remove_prefix(comma + 1);
+    }
+    std::ranges::sort(frames);
+    return {};
+}
+
 core::Status
 TakeDevice(std::span<const std::string_view> arguments, std::size_t& index, std::string& device) {
     std::optional<std::string> name;
@@ -359,7 +388,10 @@ core::Result<BootOptions> ParseBootCommandLine(Arguments arguments) {
              {BackendOption,
               [&](std::size_t& index) { return TakeBackend(arguments, index, options.vulkan); }},
              {DeviceOption,
-              [&](std::size_t& index) { return TakeDevice(arguments, index, options.device); }}}});
+              [&](std::size_t& index) { return TakeDevice(arguments, index, options.device); }},
+             {TimeFramesOption, [&](std::size_t& index) {
+                  return TakeFrames(arguments, index, options.time_frames);
+              }}}});
     if (!parsed) {
         return parsed.Failure();
     }
@@ -401,6 +433,8 @@ std::string BootUsage() {
         "  {}               show the screens in a window as the title draws them\n"
         "  {} <name>       what draws for the window: reference (the default) or vulkan\n"
         "  {} <name>        the Vulkan device to use, by a part of its name\n"
+        "  {} <list>  print the wall time and the game's own time at these frames, like\n"
+        "                       227,400,1101\n"
         "  {}   count the instructions executed, by address, under <work-dir>/<title>/observed\n"
         "  {} <path>      run through the lifted library at that path where it covers the code\n"
         "  {}               this text\n"
@@ -430,6 +464,7 @@ std::string BootUsage() {
         WindowOption,
         BackendOption,
         DeviceOption,
+        TimeFramesOption,
         RecordExecutedOption,
         LiftedOption,
         HelpOption,

@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <format>
@@ -163,6 +164,26 @@ bool Overlaps(std::uint32_t first,
     return first < second + second_size && second < first + first_size;
 }
 
+// Adds the time between its making and its end to a total.
+class Stopwatch {
+public:
+    explicit Stopwatch(std::chrono::nanoseconds& total)
+        : total_(&total), began_(std::chrono::steady_clock::now()) {}
+
+    Stopwatch(const Stopwatch&) = delete;
+    Stopwatch& operator=(const Stopwatch&) = delete;
+    Stopwatch(Stopwatch&&) = delete;
+    Stopwatch& operator=(Stopwatch&&) = delete;
+
+    ~Stopwatch() {
+        *total_ += std::chrono::steady_clock::now() - began_;
+    }
+
+private:
+    std::chrono::nanoseconds* total_;
+    std::chrono::steady_clock::time_point began_;
+};
+
 // One PICA draw waiting for the list to end.
 struct PendingDraw {
     // Whether first_vertex counts in the GPU-shaded vertices' inputs rather
@@ -313,6 +334,11 @@ public:
     [[nodiscard]] ports::GpuBackendStatistics Statistics() const {
         return {.lists = lists_,
                 .draws = draws_,
+                .groups = groups_,
+                .uploaded_bytes = uploaded_bytes_,
+                .downloaded_bytes = downloaded_bytes_,
+                .allocations = allocations_,
+                .times = times_,
                 .unsupported = unsupported_ || vertices_.Statistics().unsupported_shader};
     }
 
@@ -421,6 +447,11 @@ private:
     std::uint64_t lists_ = 0;
     std::uint64_t draws_ = 0;
     std::uint64_t gpu_shaded_draws_ = 0;
+    std::uint64_t groups_ = 0;
+    std::uint64_t uploaded_bytes_ = 0;
+    std::uint64_t downloaded_bytes_ = 0;
+    std::uint64_t allocations_ = 0;
+    ports::GpuBackendTimes times_;
     bool unsupported_ = false;
 };
 
@@ -655,6 +686,7 @@ std::uint32_t VulkanGpuBackend::Implementation::Decode(std::uint32_t address,
                                                        gpu::TextureFormat format,
                                                        std::uint32_t width,
                                                        std::uint32_t height) {
+    const Stopwatch timed{times_.textures};
     const auto size = static_cast<std::uint32_t>(gpu::TextureBytes(format, width, height));
     const std::span<const std::uint8_t> bytes = memory_->Bytes(address, size);
     if (bytes.size() != size) {
@@ -703,6 +735,7 @@ bool VulkanGpuBackend::Implementation::ReadsPendingTarget(
 }
 
 core::Status VulkanGpuBackend::Implementation::RunCommandList(std::span<const std::uint8_t> list) {
+    const Stopwatch total{times_.total};
     ++lists_;
     const core::Result<gpu::CommandListRun> run = processor_.Run(list);
     core::Status flushed = Flush();
@@ -739,6 +772,9 @@ core::Status VulkanGpuBackend::Implementation::Flush() {
 
 core::Status VulkanGpuBackend::Implementation::DrawGroup(std::size_t first, std::size_t end) {
     const Target target = pending_[first].target;
+    ++groups_;
+    uploaded_bytes_ += target.ColorBytes() + target.DepthBytes();
+    downloaded_bytes_ += target.ColorBytes() + target.DepthBytes();
     const core::Result<Attachments*> attachments = AttachmentsFor(target.width, target.height);
     if (!attachments) {
         return attachments.Failure();
@@ -747,6 +783,9 @@ core::Status VulkanGpuBackend::Implementation::DrawGroup(std::size_t first, std:
     const VkDeviceSize color_size = pixels * 4;
     const VkDeviceSize depth_size = pixels * 4;
     const VkDeviceSize stencil_size = pixels;
+    constexpr std::uint64_t BuffersPerGroup = 5;
+    allocations_ += BuffersPerGroup;
+    std::optional<Stopwatch> allocating{times_.allocate};
     auto staging =
         HostBuffer::Create(*context_,
                            color_size + depth_size + stencil_size,
@@ -765,16 +804,20 @@ core::Status VulkanGpuBackend::Implementation::DrawGroup(std::size_t first, std:
     auto inputs = HostBuffer::Create(*context_,
                                      std::max<VkDeviceSize>(input_data_.size() * sizeof(float), 16),
                                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    allocating.reset();
     for (const auto* buffer : {&staging, &vertices, &inputs, &words, &texels}) {
         if (!*buffer) {
             return buffer->Failure();
         }
     }
     const std::span<std::uint8_t> stage = staging.Value()->Bytes();
-    Upload(target,
-           stage.first(color_size),
-           stage.subspan(color_size, depth_size),
-           stage.subspan(color_size + depth_size, stencil_size));
+    {
+        const Stopwatch uploading{times_.upload};
+        Upload(target,
+               stage.first(color_size),
+               stage.subspan(color_size, depth_size),
+               stage.subspan(color_size + depth_size, stencil_size));
+    }
     std::memcpy(
         vertices.Value()->Bytes().data(), vertex_data_.data(), vertex_data_.size() * sizeof(float));
     std::memcpy(
@@ -811,6 +854,7 @@ core::Status VulkanGpuBackend::Implementation::DrawGroup(std::size_t first, std:
     VkBuffer staging_buffer = staging.Value()->Buffer();
     VkBuffer vertex_buffer = vertices.Value()->Buffer();
     VkBuffer input_buffer = inputs.Value()->Buffer();
+    std::optional<Stopwatch> waiting{times_.wait};
     core::Status drawn = context_->Submit([&](VkCommandBuffer commands) {
         const auto barrier = [&](VkImage image,
                                  VkImageAspectFlags aspect,
@@ -960,9 +1004,11 @@ core::Status VulkanGpuBackend::Implementation::DrawGroup(std::size_t first, std:
                              0,
                              nullptr);
     });
+    waiting.reset();
     if (!drawn) {
         return drawn;
     }
+    const Stopwatch downloading{times_.download};
     Download(target,
              stage.first(color_size),
              stage.subspan(color_size, depth_size),

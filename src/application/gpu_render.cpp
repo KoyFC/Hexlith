@@ -93,10 +93,12 @@ core::Status ReferenceGpuBackend::RunCommandList(std::span<const std::uint8_t> l
 }
 
 ports::GpuBackendStatistics ReferenceGpuBackend::Statistics() const {
-    return {.lists = lists_,
-            .draws = renderer_.Statistics().draws,
-            .unsupported =
-                renderer_.Statistics().unsupported_shader || renderer_.Rasterization().unsupported};
+    ports::GpuBackendStatistics statistics;
+    statistics.lists = lists_;
+    statistics.draws = renderer_.Statistics().draws;
+    statistics.unsupported =
+        renderer_.Statistics().unsupported_shader || renderer_.Rasterization().unsupported;
+    return statistics;
 }
 
 std::string ReferenceGpuBackend::Describe() const {
