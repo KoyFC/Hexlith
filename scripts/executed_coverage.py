@@ -17,14 +17,24 @@ walk could not follow.
 Inputs are the tables hexlith-analyze writes and the one hexlith-boot
 --record-executed writes. All three hold addresses and counts only.
 
+The modules are measured the same way. What a run executed in a module is
+recorded as offsets from the module's start, the file offsets the module's
+analysis tables use, in observed/modules/<name>/executed.txt, so a module's
+tables and its executed table are in one address space whatever address the game
+had the module at. With --modules every module with an executed table is
+measured against the tables in analysis/modules/<name>/.
+
 Usage:
     scripts/executed_coverage.py --tables ANALYSIS_DIR --executed EXECUTED_TXT
+    scripts/executed_coverage.py --modules WORK_DIR/<title>
     scripts/executed_coverage.py --self-test
 """
 
 import argparse
 import bisect
+import os
 import sys
+import tempfile
 
 
 def parse_records(text):
@@ -137,6 +147,56 @@ def report(figures):
         print(f"{key:<46}{value:>14,}{share}")
 
 
+SUMMED = (
+    "executed instructions",
+    "distinct addresses",
+    "in a classified code region",
+    "in a function extent",
+    "outside every extent",
+    "outside, distinct addresses",
+    "outside, runs",
+    "runs starting where a function's extent ends",
+    "functions executed",
+    "functions known",
+)
+
+
+def combine(figures_of_modules):
+    """The figures of several modules added together."""
+    return {key: sum(figures[key] for figures in figures_of_modules) for key in SUMMED}
+
+
+def measure_modules(extraction):
+    """Figures for each module that has an executed table, by the name in its header."""
+    observed = os.path.join(extraction, "observed", "modules")
+    results = {}
+    for name in sorted(os.listdir(observed)):
+        executed_path = os.path.join(observed, name, "executed.txt")
+        tables = os.path.join(extraction, "analysis", "modules", name)
+        if not os.path.isfile(executed_path):
+            continue
+        with open(executed_path, encoding="utf-8") as stream:
+            executed = parse_records(stream.read())
+        if not executed:
+            continue
+        with open(os.path.join(tables, "functions.txt"), encoding="utf-8") as stream:
+            functions = parse_records(stream.read())
+        with open(os.path.join(tables, "regions.txt"), encoding="utf-8") as stream:
+            regions = parse_records(stream.read())
+        results[name] = measure(functions, regions, executed)
+    return results
+
+
+def report_modules(results):
+    print(f"{'module':<32}{'executed':>14}{'in a function':>16}{'outside':>12}")
+    for name, figures in sorted(results.items(), key=lambda item: -item[1]["executed instructions"]):
+        total = figures["executed instructions"]
+        inside = figures["in a function extent"]
+        print(f"{name:<32}{total:>14,}{100.0 * inside / total:>15.2f}%{total - inside:>12,}")
+    print()
+    report(combine(list(results.values())))
+
+
 def self_test():
     functions = parse_records(
         "format version=1\n"
@@ -165,6 +225,33 @@ def self_test():
     assert figures["outside, runs"] == 2, figures
     assert figures["runs starting where a function's extent ends"] == 1, figures
     assert figures["functions executed"] == 2, figures
+
+    combined = combine([figures, figures])
+    assert combined["executed instructions"] == 40, combined
+    assert combined["functions known"] == 4, combined
+
+    # A module's tables and its executed table are both in offsets from its start.
+    with tempfile.TemporaryDirectory() as extraction:
+        for directory in ("observed/modules/DllA", "analysis/modules/DllA", "observed/modules/DllB"):
+            os.makedirs(os.path.join(extraction, directory))
+        files = {
+            "analysis/modules/DllA/functions.txt": "format version=1\n"
+            "0x00000180 size=0x00000010 isa=arm source=heuristic\n",
+            "analysis/modules/DllA/regions.txt": "format version=1\n"
+            "0x00000180 size=0x00000010 kind=code isa=arm source=heuristic\n",
+            "observed/modules/DllA/executed.txt": "format version=1\n"
+            "0x00000180 isa=arm count=3\n0x00000184 isa=arm count=1\n0x00000300 isa=arm count=2\n",
+            # A module with an executed table and nothing in it is not measured.
+            "observed/modules/DllB/executed.txt": "format version=1\n",
+        }
+        for path, text in files.items():
+            with open(os.path.join(extraction, path), "w", encoding="utf-8") as stream:
+                stream.write(text)
+        results = measure_modules(extraction)
+        assert list(results) == ["DllA"], results
+        assert results["DllA"]["executed instructions"] == 6, results
+        assert results["DllA"]["in a function extent"] == 4, results
+        assert results["DllA"]["outside every extent"] == 2, results
     print("self-test passed")
     return 0
 
@@ -173,10 +260,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--tables", help="directory holding functions.txt and regions.txt")
     parser.add_argument("--executed", help="the table hexlith-boot --record-executed wrote")
+    parser.add_argument("--modules", help="an extraction directory: measure every module that ran")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
         return self_test()
+    if args.modules:
+        report_modules(measure_modules(args.modules))
+        return 0
     if not args.tables or not args.executed:
         parser.error("--tables and --executed are required")
 

@@ -113,6 +113,6 @@ format version=1
 
 `isa` is the instruction set the processor was in when it executed the address, and `count` is how many times. A run that executes the same address in both instruction sets has two records. The file is derived from a run and not edited by hand, and two runs of the same input give the same file.
 
-Only the main executable is written. A module's addresses depend on where the game had it loaded, so the instructions a run executed in one are not comparable with another run's.
+The main executable's file holds its text segment, by address. What a run executed in a module is a file of its own, `observed/modules/<name>/executed.txt`, one for each module that ran, in the same grammar. A module's addresses depend on where the game had it loaded, so the records are offsets from the module's start: the file offsets that module's analysis tables use, and only in its code segment. A module loaded at two addresses, in one run or in two, is one table, since an offset means the same instruction wherever the module is, and the name is the one in the module's header, the loader's key and the directory of its analysis tables.
 
-`scripts/executed_coverage.py` sets the file against `functions.txt` and `regions.txt`. It answers a different question from the static reach: of the instructions the game executed, how many did the analysis account for.
+`scripts/executed_coverage.py` sets the file against `functions.txt` and `regions.txt`, and with `--modules` every module's file against that module's tables. It answers a different question from the static reach: of the instructions the game executed, how many did the analysis account for.

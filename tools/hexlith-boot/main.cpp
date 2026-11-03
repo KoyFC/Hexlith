@@ -436,12 +436,27 @@ bool AttachLifted(const application::BootOptions& options,
     return true;
 }
 
-// The main executable's share of what the run executed, written beside the
-// other things derived from the title.
+// Has the recorder know which modules are loaded where, to tell their
+// instructions from the executable's.
+void FollowModulesForRecording(application::BootedTitle& title,
+                               application::ExecutionRecorder& recorder) {
+    using Event = hexlith::domain::services::RelocatableObjects::ModuleEvent;
+    title.Loader().OnModuleEvent([&recorder](const Event& event) {
+        if (event.kind == Event::Kind::Loaded) {
+            recorder.ModuleLoaded(event.name, event.address, event.code_offset, event.code_size);
+        } else {
+            recorder.ModuleUnloaded(event.name, event.address);
+        }
+    });
+}
+
+// What the run executed, written beside the other things derived from the title:
+// the main executable's, and under modules/ the instructions of each module that
+// ran, by offset from where the module was.
 core::Status WriteExecuted(const application::Workspace& workspace,
                            const profile::GameProfile& target,
                            application::BootedTitle& title,
-                           const hexlith::domain::arm::ExecutedAddresses& executed) {
+                           const application::ExecutionRecorder& recorder) {
     adapters::DirectoryBlobSink sink{workspace.work_directory.path /
                                      profile::WorkspaceDirectoryName(target) /
                                      application::ObservedDirectory};
@@ -449,17 +464,39 @@ core::Status WriteExecuted(const application::Workspace& workspace,
         return prepared;
     }
     const auto& text = title.Header().text;
+    const hexlith::domain::arm::ExecutedAddresses& executed = recorder.Main();
     const std::string table = application::RenderExecutedTable(
         executed,
         text.address,
         text.address + static_cast<std::uint32_t>(text.PhysicalRegionSize()));
-    const core::Status written = sink.WriteText(application::ExecutedTableName, table);
-    if (written) {
-        std::cout << std::format("executed {}/{}, {} instructions\n",
-                                 sink.Describe(),
-                                 application::ExecutedTableName,
-                                 executed.Total());
+    core::Status written = sink.WriteText(application::ExecutedTableName, table);
+    if (!written) {
+        return written;
     }
+    std::cout << std::format("executed {}/{}, {} instructions\n",
+                             sink.Describe(),
+                             application::ExecutedTableName,
+                             executed.Total());
+
+    std::uint64_t in_modules = 0;
+    for (const auto& [name, record] : recorder.Modules()) {
+        if (record.executed.Total() == 0) {
+            continue;
+        }
+        const std::string module_table = application::RenderExecutedTable(
+            record.executed, record.code_offset, record.code_offset + record.code_size);
+        const core::Status module_written =
+            sink.WriteText(std::format("{}/{}/{}",
+                                       application::ObservedModulesDirectory,
+                                       name,
+                                       application::ExecutedTableName),
+                           module_table);
+        if (!module_written) {
+            return module_written;
+        }
+        in_modules += record.executed.Total();
+    }
+    std::cout << std::format("executed {} instructions in modules\n", in_modules);
     return written;
 }
 
@@ -590,9 +627,10 @@ int Run(const application::BootOptions& options) {
         return Failure;
     }
 
-    hexlith::domain::arm::ExecutedAddresses executed;
+    application::ExecutionRecorder recorder;
     if (options.record_executed) {
-        running.ObserveExecution(&executed);
+        FollowModulesForRecording(title, recorder);
+        running.ObserveExecution(&recorder);
     }
 
     LiftedCode lifted_code;
@@ -609,7 +647,7 @@ int Run(const application::BootOptions& options) {
     PrintModules(title);
     FinishWatching(recording.get(), gpu, shown);
     if (options.record_executed) {
-        const core::Status written = WriteExecuted(workspace.Value(), *target, title, executed);
+        const core::Status written = WriteExecuted(workspace.Value(), *target, title, recorder);
         if (!written) {
             Report(written.Failure().Message());
         }
