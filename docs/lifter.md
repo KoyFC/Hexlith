@@ -254,3 +254,25 @@ What is not done:
 - **Binding an import to the lifted function it resolves to** when the loader links it, the optimisation of [ADR 0004](adr/0004-cro-modules-and-the-ldr-ro-hle.md). A call from one module to another still goes through the pointer the loader wrote and the engine's lookup.
 - **The analysis taking in what a run executed in a module.**
 - **Registers and flags in local variables**, and the handlers behind the dispatch, as at the end of Phase 8.
+
+## Where Phase 10 ended
+
+The phase made the window cheaper and the interpreter's share smaller; it did not reach real time. Measured on 2026-11-03 with the input script `100 tap a`, `200 tap a`:
+
+| | |
+| --- | --- |
+| Boot to frame 1101 | 3,867,002,588 instructions and 4,933,730,742 ticks, as before, and a golden trace that is the interpreter's byte for byte |
+| Left to the interpreter | 11,885,820 instructions, 0.31 percent, where Phase 9 left 3.22 |
+| Agreement with the interpreter | every thread and every mapped page, compared every 10 million instructions to frame 1101 |
+| Time without a window | 27.6 s median, where it was 32.6 |
+| Time with the window on the Intel GPU | 43.4 s median, where it was 59.9; 1.5 times the console's 18.4 s |
+| Library of the main executable | 23,276 functions, 120 MB; the modules' 144 MB; both regenerated and rebuilt in 54 minutes |
+
+[`gpu-speed.md`](gpu-speed.md) has where the window's time goes and what is left. [ADR 0030](adr/0030-the-vulkan-backend-keeps-render-targets-resident.md) is the decision that removed most of it. What is not done:
+
+- **Shaders specialised for a draw's configuration**, the largest cost left in the window, 6.0 s of waiting for the device.
+- **The colour conversions and display transfers on the GPU**, 3.4 s.
+- **Registers and flags in local variables**, the lever for the game's own code, which runs at 2.3 times real time.
+- **Binding an import to the lifted function it resolves to**, which Phase 10 estimated at under a second.
+- **The oracle comparisons of the PICA** (`scripts/compare_pica_*.py`) were not rerun, since they need a patched build of Azahar this machine does not have built. The phase added to `src/domain/gpu` only the memory ranges of commands, the range a screen shows and the texture cache, and the rasterizer, the command processor and the pixel formats are untouched; `scripts/compare_screens.py` held ten pictures from the replay to ADR 0021's tolerance on both devices, byte for byte those of the previous design.
+

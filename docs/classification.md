@@ -352,6 +352,22 @@ Measured on 2026-11-02 with a run of two billion instructions from a new game, t
 
 The long run executes 729.5 million instructions in the main executable at 137,004 addresses. Of the boot to frame 227 alone, 99.84 percent of the instructions were within a function's extent before, and 99.90 percent with that boot observed.
 
+### In the modules
+
+`hexlith-analyze` also reads `observed/modules/<name>/executed.txt` for each module a run loaded, offsets from the module's start, and the analysis of that module treats it as it does the main executable's: the instructions in its code segment are places to walk from, walked after everything else, and a run that no function covers becomes an entry, in the same rounds, which are the domain's `FindFunctionBoundsCoveringObserved` for both. An address outside the module's code is left out, and a module no run loaded is analysed as before.
+
+Measured on 2026-11-03 with the boot to frame 1101 from a new game, 3.87 billion instructions through the interpreter, of which 2.45 billion in four modules and 1.42 billion in the main executable:
+
+| | Before | Observed |
+| --- | --- | --- |
+| `DllTitle` within a function's extent | 95.19 percent, 117,985,523 instructions outside in 28 runs | 100.00 percent |
+| The other three modules | 99.95, 98.61 and 100.00 percent | 100.00 percent |
+| Functions in the 133 modules | 44,032 | 44,058, 29 of them made from what a run executed |
+| Main executable within a function's extent | 98.01 percent, 28.2 million outside | 99.42 percent, 8.2 million outside in 9 runs |
+| Functions in the main executable | 23,127 | 23,276 |
+
+The 8.2 million instructions left outside in the main executable are 9 runs, five of which start where a function's extent ends; why the rounds did not cover them was not looked into. Of the 3.87 billion instructions the lifted library now leaves 11.9 million to the interpreter, 0.31 percent where it left 3.22.
+
 ### The conflicts, read
 
 The 36 conflict reports are 16 addresses. The long run executed one of them, `0x00100048`, as Thumb, which settles it. The other fifteen are not executed in two billion instructions, so they cost nothing at run time and a run cannot settle them. Read statically, by decoding a few dozen bytes from each in both instruction sets, one reading reaches a return and the other an undefined word within a handful of instructions, or the address is a halfword in the middle of ARM code:

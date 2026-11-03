@@ -49,3 +49,39 @@ There are 1,909 groups of draws, each moving 2,002 MB up and 2,002 MB down in al
 ## The milestone
 
 N is set from these numbers. On Intel, from frame 227 to 1101, the window adds no more than 15 percent to the same stretch without a window, and the boot to frame 1101 takes at most 34 s with the window, once the CPU work of the phase has taken about 3.5 s off the floor. Frames, validation messages, the golden trace and the instruction count are held as before.
+
+## Where Phase 10 ended
+
+Measured on 2026-11-03 the same way, with a real window on the Wayland desktop instead of SDL's dummy driver, which draws the window in software and costs about 5 ms a frame to present where the real one costs 1.8 ms. Medians of three runs, load average 1.4 to 2.4:
+
+| Frames | Console | No window | Intel | llvmpipe | Game alone |
+| --- | --- | --- | --- | --- | --- |
+| 227 to 400 | 2.89 s | 4.88 s | 6.37 s (+30%) | 9.13 s (+87%) | 4.70 s |
+| 400 to 700 | 5.01 s | 9.64 s | 12.89 s (+34%) | 19.10 s (+98%) | 9.29 s |
+| 700 to 1000 | 5.01 s | 9.49 s | 13.26 s (+40%) | 18.75 s (+98%) | 9.14 s |
+| 1000 to 1101 | 1.69 s | 3.37 s | 4.55 s (+35%) | 6.20 s (+84%) | 3.25 s |
+| Whole boot | 18.40 s | 27.6 s | 43.4 s | 67.1 s | |
+
+The Intel runs were 43.4, 43.9 and 28.9 s. The third is not explained and is a third of the runs; the medians do not depend on it.
+
+| Boot to frame 1101, with the window on Intel | Baseline | Now |
+| --- | --- | --- |
+| Whole boot | 59.9 s | 43.4 s |
+| Lists | 20.8 s | 8.3 s |
+| Colour and depth into the images | 4.1 s | 0.6 s |
+| Colour and depth back to memory | 4.1 s | 1.4 s |
+| Waiting for the device | 7.1 s | 6.0 s |
+| Textures decoded | 3.4 s | 0.25 s |
+| Making buffers | 0.5 s | 0.6 s |
+| Display transfers | 2.0 s | 2.0 s |
+| Composing and presenting the screens | 3.3 s | 1.05 s |
+
+The no-window boot fell from 32.6 to 27.6 s with the analysis of the modules taking in what a run executed ([`classification.md`](classification.md#in-the-modules)).
+
+**The milestone was not met.** The window adds 30 to 40 percent to the stretches after frame 227 and the boot to frame 1101 takes 43.4 s, where the aim was a 15 percent addition and 34 s. What is left of the 15.8 s the window adds on Intel:
+
+- **Waiting for the device, 6.0 s, is drawing.** With every draw left out of the command buffers a run to frame 700 spent 1.2 s in the wait where it spent 4.7 s with them. A group costs 0.55 ms to submit and wait for and a draw about 0.15 ms to run, on a fragment shader that reads the registers of the draw and goes through six combiner stages and three texture units for every fragment. Overlapping the wait with the game's code does not help, because the display transfer that follows each list needs the colour at once. Shaders specialised for the draw's configuration are what would reduce it; [ADR 0022](adr/0022-the-vulkan-backend-keeps-gpu-memory-true.md) left them for when speed matters more than one path that is easy to compare.
+- **Writing the colour back, 1.4 s, and the display transfers, 2.0 s**, are the conversions between the PICA's tiled formats and the images', done by the CPU a pixel at a time. The transfer is the colour buffer into the framebuffer a screen shows, which the GPU could do.
+- **The game's own code, 2.3 times the console's time** from frame 227 on, is not the window's. Registers in local variables is what would move it.
+
+What the backend gets right without extra cost: no run had a conflict, a write nobody announced to a dirty target.
