@@ -597,6 +597,11 @@ std::string RenderLiftModulesSummary(const LiftModulesReport& report) {
         relocated);
 }
 
+std::filesystem::path ModulesLibraryBeside(const std::filesystem::path& lifted_library) {
+    return (lifted_library.parent_path() / ".." / "modules" / "build" / "libhexlith_modules.so")
+        .lexically_normal();
+}
+
 std::string RenderLiftEmitSummary(const LiftEmitReport& report) {
     return std::format("{} function(s) in {} shard(s), {} block(s), {} instruction(s)\n"
                        "{} line(s) of C++, {} byte(s)\n"

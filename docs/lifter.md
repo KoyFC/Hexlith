@@ -131,6 +131,8 @@ Each module is a namespace, `lifted_modules::<name>`, because two modules have a
 
 `registry.cpp` hands the loader, for each module, its name, the SHA-256 of its code segment as the file has it, and a table of entries keyed by offset. `manifest.txt` says the same in text, beside the lifter's version. The digest is how a module whose code is not the code that was lifted is found and left to the interpreter.
 
+`hexlith-boot` and `hexlith-lift-verify` open the library of modules when `--lifted` is given and it is built beside the main one, and say so on a `modules` line. A library that is not built is not an error, the modules run interpreted, and one from another lifter is, because running without it would pass for lifted. The engine hears the loader's load and unload events, and finds a module's code in the code segments of the modules that are loaded now, at whatever address the game put them. A module whose code does not hash to what was lifted, or that has no lifted code, runs interpreted, and the run says which on its standard error when the module is loaded.
+
 ## First results
 
 On 2026-11-02, from a new game to the first frame after the title appears, with the input script `100 tap a`, `200 tap a`: 41,972,790 instructions.

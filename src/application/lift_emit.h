@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <span>
 #include <string>
 #include <string_view>
@@ -120,6 +121,12 @@ constexpr std::string_view RegisterSymbol = "hexlith_lifted_register";
 // pass back, and the tables belong to the library.
 constexpr std::string_view ModulesManifestSymbol = "hexlith_modules_manifest";
 constexpr std::string_view ModulesRegisterSymbol = "hexlith_modules_register";
+
+// Where the library of modules is built, given the path of the main
+// executable's library: lift/build/libhexlith_lifted.so has
+// lift/modules/build/libhexlith_modules.so beside it, which is where
+// scripts/build-lifted.sh puts each.
+std::filesystem::path ModulesLibraryBeside(const std::filesystem::path& lifted_library);
 
 // The file that says in text what the library of modules holds.
 constexpr std::string_view ModulesManifestFile = "manifest.txt";

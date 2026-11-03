@@ -124,6 +124,11 @@ TEST(EmitLiftedCode, RefusesTablesItCannotRead) {
             .Ok());
 }
 
+TEST(ModulesLibraryBeside, IsWhereBuildLiftedPutsTheLibraryOfModules) {
+    EXPECT_EQ(ModulesLibraryBeside("/work/id/lift/build/libhexlith_lifted.so"),
+              std::filesystem::path{"/work/id/lift/modules/build/libhexlith_modules.so"});
+}
+
 // --- Modules -----------------------------------------------------------------
 
 // A module of four instructions in a code segment, with a relocation on the word

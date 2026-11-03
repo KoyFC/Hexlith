@@ -31,3 +31,15 @@ add_custom_command(
 add_library(hexlith_lift_sample_library MODULE ${sample_library_source})
 target_include_directories(hexlith_lift_sample_library PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_options(hexlith_lift_sample_library PRIVATE -w -ffp-contract=off)
+
+# The same, claiming a lifter version that is not this one, for the test that a
+# library of modules from another lifter is refused.
+set(stale_modules_source ${CMAKE_CURRENT_BINARY_DIR}/stale_modules_library.cpp)
+add_custom_command(
+    OUTPUT ${stale_modules_source}
+    COMMAND hexlith_lift_sample_generator ${stale_modules_source} ${sample_digest} 1
+    DEPENDS hexlith_lift_sample_generator
+    COMMENT "Generating the stale sample library of modules")
+add_library(hexlith_lift_stale_modules_library MODULE ${stale_modules_source})
+target_include_directories(hexlith_lift_stale_modules_library PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_options(hexlith_lift_stale_modules_library PRIVATE -w -ffp-contract=off)

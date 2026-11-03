@@ -3,6 +3,7 @@
 #include "adapters/filesystem/scripted_input.h"
 #include "adapters/filesystem/workspace_locator.h"
 #include "adapters/lifted/lifted_library.h"
+#include "adapters/lifted/modules_library.h"
 #include "application/boot.h"
 #include "application/command_line.h"
 #include "application/lift_verification.h"
@@ -11,6 +12,7 @@
 #include "domain/profile/game_profile.h"
 #include "domain/profile/registry.h"
 
+#include "common/lifted_modules.h"
 #include "common/tool_main.h"
 
 #include <filesystem>
@@ -47,9 +49,15 @@ void Report(std::string_view message) {
 // A booted title, and for the lifted run the engine that runs its library.
 class TitleRun final : public application::VerifiedRun {
 public:
+    // A lifted run has the record of which modules are loaded, and follows the
+    // loader to keep it. The record is the run's own.
     TitleRun(std::unique_ptr<application::BootedTitle> title,
+             std::unique_ptr<hexlith::domain::lift::runtime::LoadedModules> modules,
              std::unique_ptr<hexlith::domain::lift::Engine> engine)
-        : title_(std::move(title)), engine_(std::move(engine)) {
+        : title_(std::move(title)), modules_(std::move(modules)), engine_(std::move(engine)) {
+        if (modules_ != nullptr) {
+            hexlith::tools::FollowModules(*title_, *modules_, std::cerr);
+        }
         if (engine_ != nullptr) {
             title_->Kernel().UseLiftedCode(engine_.get());
         }
@@ -61,6 +69,7 @@ public:
 
 private:
     std::unique_ptr<application::BootedTitle> title_;
+    std::unique_ptr<hexlith::domain::lift::runtime::LoadedModules> modules_;
     std::unique_ptr<hexlith::domain::lift::Engine> engine_;
 };
 
@@ -70,6 +79,9 @@ struct Inputs {
     std::size_t partition = 0;
     adapters::ScriptedInput* input = nullptr;
     const lifted_adapters::LiftedLibrary* library = nullptr;
+
+    // The lifted modules, when they are built.
+    const lifted_adapters::ModulesLibrary* modules = nullptr;
 };
 
 application::VerifiedRunMaker MakerFor(const Inputs& inputs) {
@@ -82,12 +94,18 @@ application::VerifiedRunMaker MakerFor(const Inputs& inputs) {
         if (inputs.input != nullptr) {
             booted.Value()->UseInput(*inputs.input);
         }
+        std::unique_ptr<hexlith::domain::lift::runtime::LoadedModules> modules;
         std::unique_ptr<hexlith::domain::lift::Engine> engine;
         if (lifted) {
-            engine = std::make_unique<hexlith::domain::lift::Engine>(inputs.library->Entries());
+            if (inputs.modules != nullptr) {
+                modules = std::make_unique<hexlith::domain::lift::runtime::LoadedModules>();
+                inputs.modules->OfferTo(*modules);
+            }
+            engine = std::make_unique<hexlith::domain::lift::Engine>(inputs.library->Entries(),
+                                                                     modules.get());
         }
-        return std::unique_ptr<application::VerifiedRun>{
-            std::make_unique<TitleRun>(std::move(booted.Value()), std::move(engine))};
+        return std::unique_ptr<application::VerifiedRun>{std::make_unique<TitleRun>(
+            std::move(booted.Value()), std::move(modules), std::move(engine))};
     };
 }
 
@@ -171,13 +189,20 @@ int Run(const application::LiftVerifyOptions& options) {
         return Failure;
     }
     std::cout << std::format("lifted  {}, {}\n", lifted_path, library.Value()->Manifest());
+    const core::Result<std::unique_ptr<lifted_adapters::ModulesLibrary>> modules =
+        hexlith::tools::OpenModulesBeside(lifted_path, std::cout);
+    if (!modules) {
+        Report(modules.Failure().Message());
+        return Failure;
+    }
     std::cout << std::format(
         "verify  {} instructions, compared every {}\n", options.instruction_limit, options.step);
 
     const Inputs inputs{.cartridge = contents.Value(),
                         .partition = target.executable_partition,
                         .input = input.Value().get(),
-                        .library = library.Value().get()};
+                        .library = library.Value().get(),
+                        .modules = modules.Value().get()};
     const core::Result<application::LiftVerification> verified =
         application::VerifyLiftedCode(MakerFor(inputs), options.instruction_limit, options.step);
     if (!verified) {

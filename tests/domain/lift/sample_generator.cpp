@@ -1,8 +1,11 @@
 // Writes the C++ for the sample functions, for the build to compile into the
-// test that runs it. Usage: sample_generator OUTPUT.cpp [CODE-DIGEST]
+// test that runs it. Usage: sample_generator OUTPUT.cpp [CODE-DIGEST [MODULES-LIFTER-VERSION]]
 //
-// With a digest the file also exports the two functions a lifted library does,
-// so that it can be built as one and opened the way the real one is.
+// With a digest the file also exports the functions a lifted library does, and
+// those of a library of modules with one module, Sample, lifted from code with
+// that digest, so that it can be built as either and opened the way the real
+// ones are. A fourth argument is the lifter version the modules library claims,
+// for a library that is out of date.
 #include "application/lift_emit.h"
 #include "domain/lift/control_flow.h"
 #include "domain/lift/emit.h"
@@ -40,8 +43,9 @@ std::vector<std::uint8_t> Bytes() {
 
 int main(int argc, char** argv) {
     const std::span<char*> arguments{argv, static_cast<std::size_t>(argc)};
-    if (arguments.size() < 2 || arguments.size() > 3) {
-        std::fputs("usage: sample_generator OUTPUT.cpp [CODE-DIGEST]\n", stderr);
+    if (arguments.size() < 2 || arguments.size() > 4) {
+        std::fputs("usage: sample_generator OUTPUT.cpp [CODE-DIGEST [MODULES-LIFTER-VERSION]]\n",
+                   stderr);
         return 2;
     }
 
@@ -109,7 +113,7 @@ int main(int argc, char** argv) {
         registration += std::format("}}\n\n}}  // namespace hexlith::domain::lift::{}\n\n", name);
         out << registration;
     }
-    if (arguments.size() == 3) {
+    if (arguments.size() >= 3) {
         // The version is the lifter's, and the library is refused when it is not
         // the one that is running, so the tests that open it say it by name.
         out << std::format(
@@ -120,6 +124,22 @@ int main(int argc, char** argv) {
             "        *static_cast<hexlith::domain::lift::runtime::EntryTable*>(table));\n"
             "}}\n}}\n",
             hexlith::application::LifterVersion,
+            arguments[2]);
+        const std::string modules_version =
+            arguments.size() == 4 ? std::string{arguments[3]}
+                                  : std::to_string(hexlith::application::LifterVersion);
+        out << std::format(
+            "\nextern \"C\" {{\n"
+            "const char* hexlith_modules_manifest() {{ return \"lifter={} modules=1\"; }}\n"
+            "void hexlith_modules_register(void (*offer)(void*, const char*, const char*, void*),\n"
+            "                              void* context) {{\n"
+            "    static hexlith::domain::lift::runtime::EntryTable table;\n"
+            "    if (table.Size() == 0) {{\n"
+            "        hexlith::domain::lift::sample_lifted_module::Register(table);\n"
+            "    }}\n"
+            "    offer(context, \"Sample\", \"{}\", &table);\n"
+            "}}\n}}\n",
+            modules_version,
             arguments[2]);
     }
     return out.good() ? 0 : 1;

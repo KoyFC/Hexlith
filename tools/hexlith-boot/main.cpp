@@ -6,6 +6,7 @@
 #include "adapters/filesystem/scripted_input.h"
 #include "adapters/filesystem/workspace_locator.h"
 #include "adapters/lifted/lifted_library.h"
+#include "adapters/lifted/modules_library.h"
 #include "adapters/sdl/sdl_window.h"
 #include "adapters/vulkan/vulkan_backend.h"
 #include "application/boot.h"
@@ -22,6 +23,7 @@
 #include "domain/profile/game_profile.h"
 #include "domain/profile/registry.h"
 
+#include "common/lifted_modules.h"
 #include "common/tool_main.h"
 
 #include <algorithm>
@@ -396,6 +398,8 @@ bool AttachSaves(const application::BootOptions& options,
 // The lifted library and the engine that runs it, kept alive for the run.
 struct LiftedCode {
     std::unique_ptr<lifted_adapters::LiftedLibrary> library;
+    std::unique_ptr<lifted_adapters::ModulesLibrary> modules_library;
+    std::unique_ptr<hexlith::domain::lift::runtime::LoadedModules> modules;
     std::unique_ptr<hexlith::domain::lift::Engine> engine;
 };
 
@@ -412,9 +416,23 @@ bool AttachLifted(const application::BootOptions& options,
         return false;
     }
     lifted.library = std::move(opened.Value());
-    lifted.engine = std::make_unique<hexlith::domain::lift::Engine>(lifted.library->Entries());
-    title.Kernel().UseLiftedCode(lifted.engine.get());
     std::cout << std::format("lifted  {}, {}\n", *options.lifted, lifted.library->Manifest());
+
+    core::Result<std::unique_ptr<lifted_adapters::ModulesLibrary>> modules =
+        hexlith::tools::OpenModulesBeside(*options.lifted, std::cout);
+    if (!modules) {
+        Report(modules.Failure().Message());
+        return false;
+    }
+    lifted.modules_library = std::move(modules.Value());
+    if (lifted.modules_library != nullptr) {
+        lifted.modules = std::make_unique<hexlith::domain::lift::runtime::LoadedModules>();
+        lifted.modules_library->OfferTo(*lifted.modules);
+        hexlith::tools::FollowModules(title, *lifted.modules, std::cerr);
+    }
+    lifted.engine = std::make_unique<hexlith::domain::lift::Engine>(lifted.library->Entries(),
+                                                                    lifted.modules.get());
+    title.Kernel().UseLiftedCode(lifted.engine.get());
     return true;
 }
 
@@ -508,9 +526,10 @@ void PrintSpeed(const kernel::Kernel& running, double seconds, const LiftedCode&
         static_cast<double>(running.Executed()) / guest_seconds / Million);
     if (lifted_code.engine != nullptr) {
         const auto& counted = lifted_code.engine->Counted();
-        std::cout << std::format("lifted  {} entries into lifted code, {} instructions interpreted "
-                                 "({:.2f}%)\n",
+        std::cout << std::format("lifted  {} entries into lifted code, {} of them into modules, "
+                                 "{} instructions interpreted ({:.2f}%)\n",
                                  counted.entries,
+                                 counted.module_entries,
                                  counted.interpreted,
                                  100.0 * static_cast<double>(counted.interpreted) /
                                      static_cast<double>(running.Executed()));
