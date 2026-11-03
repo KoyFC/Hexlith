@@ -29,6 +29,7 @@ constexpr std::string_view InputOption = "--input";
 constexpr std::string_view StopAfterOption = "--stop-after";
 constexpr std::string_view SurveyOption = "--survey";
 constexpr std::string_view EmitOption = "--emit";
+constexpr std::string_view EmitModulesOption = "--emit-modules";
 constexpr std::string_view ExecutedOption = "--executed";
 constexpr std::string_view RecordGpuOption = "--record-gpu";
 constexpr std::string_view WindowOption = "--window";
@@ -210,7 +211,8 @@ core::Result<LiftOptions> ParseLiftCommandLine(Arguments arguments) {
                        {.flags = {{HelpOption, &options.help},
                                   {"-h", &options.help},
                                   {SurveyOption, &options.survey},
-                                  {EmitOption, &options.emit}},
+                                  {EmitOption, &options.emit},
+                                  {EmitModulesOption, &options.emit_modules}},
                         .values = {{WorkDirectoryOption, &options.work_directory},
                                    {ExtractionOption, &options.extraction},
                                    {ExecutedOption, &options.executed},
@@ -224,8 +226,8 @@ core::Result<LiftOptions> ParseLiftCommandLine(Arguments arguments) {
 
 std::string LiftUsage() {
     return std::format(
-        "hexlith-lift: turns the analysed code of the main executable into C++ in the\n"
-        "workspace.\n"
+        "hexlith-lift: turns the analysed code of the main executable and of the CRO\n"
+        "modules into C++ in the workspace.\n"
         "\n"
         "  {} <path>     where the extraction lives\n"
         "  {} <path>   a specific extraction directory, instead of the profile's\n"
@@ -233,6 +235,7 @@ std::string LiftUsage() {
         "                       flow of the whole executable looks like\n"
         "  {} <path>      weigh it by a table of executed instructions\n"
         "  {}                write the lifted C++ into the workspace\n"
+        "  {}        write the lifted C++ of the modules, under the lift directory\n"
         "  {} <path>        where it goes, instead of the lift directory beside the extraction\n"
         "  {}                this text\n"
         "\n"
@@ -243,6 +246,7 @@ std::string LiftUsage() {
         SurveyOption,
         ExecutedOption,
         EmitOption,
+        EmitModulesOption,
         OutputOption,
         HelpOption,
         WorkDirectoryVariable);

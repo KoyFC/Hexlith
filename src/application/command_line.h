@@ -69,7 +69,12 @@ struct LiftOptions {
     // Writes the lifted C++ of the main executable into the workspace.
     bool emit = false;
 
-    // Where, instead of the lift directory beside the extraction.
+    // Writes the lifted C++ of the CRO modules into the workspace, in a tree of
+    // its own, so that a change to one library does not rebuild the other.
+    bool emit_modules = false;
+
+    // Where, instead of the lift directory beside the extraction (or its modules
+    // directory, for the modules).
     std::optional<std::string> output;
 
     // The table of executed instructions to weigh the survey by, instead of the

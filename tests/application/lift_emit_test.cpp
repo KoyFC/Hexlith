@@ -1,14 +1,24 @@
 #include "application/lift_emit.h"
+#include "core/sha256.h"
+#include "domain/ctr/cro.h"
 
 #include "support/memory_workspace.h"
+#include "support/synthetic_cro.h"
 
 #include <cstdint>
+#include <format>
 #include <gtest/gtest.h>
+#include <span>
 #include <string>
 #include <vector>
 
 namespace hexlith::application {
 namespace {
+
+using test::BuildSyntheticCro;
+using test::SyntheticCroRelocation;
+using test::SyntheticCroSegment;
+using test::SyntheticCroSpec;
 
 constexpr std::uint32_t Base = 0x00100000;
 
@@ -112,6 +122,161 @@ TEST(EmitLiftedCode, RefusesTablesItCannotRead) {
         EmitLiftedCode(
             LiftEmitRequest{.code = code, .base = Base, .functions = "x", .regions = Regions}, sink)
             .Ok());
+}
+
+// --- Modules -----------------------------------------------------------------
+
+// A module of four instructions in a code segment, with a relocation on the word
+// at `relocated_word` when there is one. The functions it declares are at file
+// offsets, as the analysis writes a module's.
+struct BuiltModule {
+    std::vector<std::uint8_t> file;
+    std::uint32_t code_offset = 0;
+    std::string functions;
+    std::string regions;
+};
+
+constexpr std::size_t NoRelocation = 99;
+
+BuiltModule BuildModule(std::string name,
+                        std::initializer_list<std::uint32_t> words,
+                        std::size_t relocated_word = NoRelocation) {
+    constexpr std::uint32_t WordSize = 4;
+    const std::vector<std::uint8_t> code = Code(words);
+    SyntheticCroSpec spec;
+    spec.name = std::move(name);
+    spec.segments = {
+        SyntheticCroSegment{.type = domain::ctr::CroSegmentType::Code, .size = code.size()}};
+    spec.segment_contents[0] = code;
+    if (relocated_word != NoRelocation) {
+        spec.internal_relocations = {SyntheticCroRelocation{
+            .segment_index = 0,
+            .offset_in_segment = static_cast<std::uint32_t>(relocated_word) * WordSize,
+            .addend = 0,
+            .symbol_segment = 0}};
+    }
+    BuiltModule built;
+    built.file = BuildSyntheticCro(spec);
+    const auto header = domain::ctr::ParseCroHeader(built.file);
+    built.code_offset = static_cast<std::uint32_t>(header.Value().segments.at(0).offset);
+    built.functions = std::format("format version=1\n0x{:08X} size=0x{:08X} isa=arm "
+                                  "source=heuristic\n",
+                                  built.code_offset,
+                                  code.size());
+    built.regions = std::format("format version=1\n0x{:08X} size=0x{:08X} kind=code isa=arm "
+                                "source=heuristic\n",
+                                built.code_offset,
+                                code.size());
+    return built;
+}
+
+ModuleSource SourceOf(const std::string& name, const BuiltModule& built) {
+    return ModuleSource{
+        .name = name, .file = built.file, .functions = built.functions, .regions = built.regions};
+}
+
+std::string CodeDigestOf(const BuiltModule& built, std::size_t size) {
+    return core::Sha256::Of(
+               std::span<const std::uint8_t>{built.file}.subspan(built.code_offset, size))
+        .ToHex();
+}
+
+TEST(EmitLiftedModules, WritesEachModuleInANamespaceOfItsOwnAndSaysWhatItWasLiftedFrom) {
+    const BuiltModule first = BuildModule("DllA", {ArmPush, ArmMove, ArmPop, ArmPop});
+    const BuiltModule second = BuildModule("DllB", {ArmPush, ArmPop});
+    const std::vector<ModuleSource> modules = {SourceOf("DllA", first), SourceOf("DllB", second)};
+    test::MemoryBlobSink sink;
+    const core::Result<LiftModulesReport> report = EmitLiftedModules(
+        LiftModulesRequest{.modules = modules, .instructions_per_shard = 4000}, sink);
+    ASSERT_TRUE(report.Ok()) << report.Failure().Message();
+    EXPECT_EQ(report.Value().totals.functions, 2U);
+    ASSERT_EQ(report.Value().modules.size(), 2U);
+    EXPECT_EQ(report.Value().modules.at(0).code_hash, CodeDigestOf(first, 16));
+    EXPECT_EQ(report.Value().modules.at(1).code_hash, CodeDigestOf(second, 8));
+
+    // The same offset in two modules is the same function name, so each is in a
+    // namespace of its own.
+    const std::string header = sink.Text("modules.h").value_or("");
+    EXPECT_NE(header.find("namespace DllA {"), std::string::npos) << header;
+    EXPECT_NE(header.find("namespace DllB {"), std::string::npos);
+    const std::string shard = sink.Text("DllA_0000.cpp").value_or("");
+    EXPECT_NE(shard.find("namespace lifted_modules::DllA {"), std::string::npos) << shard;
+    EXPECT_NE(shard.find(std::format("table.Add(0x{:08X}U, false, &fn_{:08X});",
+                                     first.code_offset,
+                                     first.code_offset)),
+              std::string::npos);
+    EXPECT_TRUE(sink.Text("DllB_0000.cpp").has_value());
+
+    const std::string registry = sink.Text("registry.cpp").value_or("");
+    EXPECT_NE(registry.find("hexlith_modules_manifest"), std::string::npos);
+    EXPECT_NE(registry.find("hexlith_modules_register"), std::string::npos);
+    EXPECT_NE(registry.find(CodeDigestOf(first, 16)), std::string::npos);
+    EXPECT_NE(registry.find(CodeDigestOf(second, 8)), std::string::npos);
+    EXPECT_NE(registry.find("\"DllA\""), std::string::npos);
+
+    const std::string manifest = sink.Text("manifest.txt").value_or("");
+    EXPECT_NE(manifest.find(std::format("lifter={}", LifterVersion)), std::string::npos);
+    EXPECT_NE(manifest.find(std::format("DllA code={}", CodeDigestOf(first, 16))),
+              std::string::npos)
+        << manifest;
+    EXPECT_NE(manifest.find("DllB code="), std::string::npos);
+
+    const std::string cmake = sink.Text("CMakeLists.txt").value_or("");
+    EXPECT_NE(cmake.find("hexlith_modules"), std::string::npos);
+    EXPECT_NE(cmake.find("DllB_0000.cpp"), std::string::npos);
+}
+
+TEST(EmitLiftedModules, LiftsAtOffsetsAndLeavesARelocatedWordToTheInterpreter) {
+    const BuiltModule built = BuildModule("DllA", {ArmPush, ArmMove, ArmPop, ArmPop}, 1);
+    const std::vector<ModuleSource> modules = {SourceOf("DllA", built)};
+    test::MemoryBlobSink sink;
+    const auto report = EmitLiftedModules(
+        LiftModulesRequest{.modules = modules, .instructions_per_shard = 4000}, sink);
+    ASSERT_TRUE(report.Ok()) << report.Failure().Message();
+    EXPECT_EQ(report.Value().modules.at(0).relocated_words, 1U);
+
+    const std::string shard = sink.Text("DllA_0000.cpp").value_or("");
+    EXPECT_NE(shard.find("switch (pc - c.base)"), std::string::npos) << shard;
+    EXPECT_NE(shard.find(std::format("return runtime::Bail(c, (c.base + 0x{:08X}U), 2);",
+                                     built.code_offset + 4)),
+              std::string::npos)
+        << shard;
+}
+
+TEST(EmitLiftedModules, StartsANewShardInAModuleWhenOneHoldsEnough) {
+    const BuiltModule built = BuildModule("DllA", {ArmPush, ArmMove, ArmPop, ArmPop});
+    const std::string two_functions =
+        std::format("format version=1\n0x{:08X} size=0x0000000C isa=arm source=heuristic\n"
+                    "0x{:08X} size=0x00000004 isa=arm source=heuristic\n",
+                    built.code_offset,
+                    built.code_offset + 12);
+    BuiltModule split = built;
+    split.functions = two_functions;
+    const std::vector<ModuleSource> modules = {SourceOf("DllA", split)};
+    test::MemoryBlobSink sink;
+    const auto report = EmitLiftedModules(
+        LiftModulesRequest{.modules = modules, .instructions_per_shard = 2}, sink);
+    ASSERT_TRUE(report.Ok()) << report.Failure().Message();
+    EXPECT_EQ(report.Value().totals.shards, 2U);
+    EXPECT_TRUE(sink.Text("DllA_0001.cpp").has_value());
+    EXPECT_NE(sink.Text("registry.cpp").value_or("").find("register_DllA_0001"), std::string::npos);
+}
+
+TEST(EmitLiftedModules, RefusesAFileThatIsNotAModuleAndANameThatIsNotAnIdentifier) {
+    const BuiltModule built = BuildModule("DllA", {ArmPop});
+    test::MemoryBlobSink sink;
+
+    const std::vector<std::uint8_t> junk(64, 0x41);
+    const std::vector<ModuleSource> bad_file = {ModuleSource{
+        .name = "DllA", .file = junk, .functions = built.functions, .regions = built.regions}};
+    EXPECT_FALSE(EmitLiftedModules(
+                     LiftModulesRequest{.modules = bad_file, .instructions_per_shard = 4000}, sink)
+                     .Ok());
+
+    const std::vector<ModuleSource> bad_name = {SourceOf("Dll-A", built)};
+    EXPECT_FALSE(EmitLiftedModules(
+                     LiftModulesRequest{.modules = bad_name, .instructions_per_shard = 4000}, sink)
+                     .Ok());
 }
 
 }  // namespace

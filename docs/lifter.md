@@ -118,6 +118,19 @@ hexlith-boot --work-dir ~/recomp-data/work --rom-dir ~/recomp-data/rom --new-gam
 
 [ADR 0026](adr/0026-lifted-code-is-built-in-the-workspace-and-loaded-as-a-library.md) has why it is shaped like this. For the main executable the output is 22,489 functions in 273 source files, 11.7 million lines and 469 MB, and a cold build takes about eight minutes on eight cores and 54 minutes of processor time. The library is 90 MB.
 
+## Lifting the modules
+
+```sh
+hexlith-lift --work-dir ~/recomp-data/work --emit-modules
+scripts/build-lifted.sh ~/recomp-data/work/<title>/lift/modules
+```
+
+The modules are a library of their own, `lift/modules/build/libhexlith_modules.so`, so that a change to the lifting of one does not rebuild the other. [ADR 0029](adr/0029-cro-modules-are-lifted-against-a-base-the-loader-gives.md) has the design: a module's code is lifted at offsets from its start, the file offsets its analysis tables use, and runs against a base the engine puts in the context.
+
+Each module is a namespace, `lifted_modules::<name>`, because two modules have a function at the same offset, and has shards of its own, `<name>_NNNN.cpp`. A module is read as the file holds it, and that is not what the processor runs, because the loader has patched every word a relocation writes. The lifter is told which words of a module's code those are, and an instruction on one is left to the interpreter, which reads the word from memory. They are not all words the analysis calls data: 146 of them it calls code, and the count that showed it is in the ADR.
+
+`registry.cpp` hands the loader, for each module, its name, the SHA-256 of its code segment as the file has it, and a table of entries keyed by offset. `manifest.txt` says the same in text, beside the lifter's version. The digest is how a module whose code is not the code that was lifted is found and left to the interpreter.
+
 ## First results
 
 On 2026-11-02, from a new game to the first frame after the title appears, with the input script `100 tap a`, `200 tap a`: 41,972,790 instructions.

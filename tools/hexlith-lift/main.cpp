@@ -5,15 +5,18 @@
 #include "application/lift_emit.h"
 #include "application/lift_survey.h"
 #include "application/workspace.h"
+#include "domain/ctr/cro.h"
 #include "domain/profile/game_profile.h"
 #include "domain/profile/registry.h"
 
 #include "common/tool_main.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -38,6 +41,10 @@ constexpr int Usage = 2;
 constexpr std::string_view CodePath = "exefs/.code";
 constexpr std::string_view AnalysisDirectory = "analysis";
 constexpr std::string_view LiftDirectory = "lift";
+constexpr std::string_view ModulesLiftDirectory = "modules";
+constexpr std::string_view RomFsDirectory = "romfs";
+constexpr std::string_view ModuleExtension = ".cro";
+constexpr std::string_view ModuleTablesDirectory = "modules";
 
 void Report(std::string_view message) {
     std::cerr << "hexlith-lift: " << message << '\n';
@@ -162,6 +169,92 @@ int Emit(const std::filesystem::path& extraction,
     return Success;
 }
 
+// A module's file and its analysis tables, kept so that the request can look at
+// them.
+struct ModuleFiles {
+    std::vector<std::unique_ptr<adapters::FileRomSource>> sources;
+    std::vector<std::string> names;
+    std::vector<core::ByteSpan> files;
+    std::vector<std::string> functions;
+    std::vector<std::string> regions;
+};
+
+// Every loadable module in the RomFS, in name order, with the tables the
+// analysis wrote for it. The loader knows a module by the name in its header,
+// which is also the directory its tables are in.
+core::Result<ModuleFiles> ReadModuleFiles(const std::filesystem::path& extraction) {
+    std::vector<std::filesystem::path> paths;
+    for (const std::filesystem::directory_entry& entry :
+         std::filesystem::directory_iterator{extraction / RomFsDirectory}) {
+        if (entry.is_regular_file() && entry.path().extension() == ModuleExtension) {
+            paths.push_back(entry.path());
+        }
+    }
+    std::ranges::sort(paths);
+
+    ModuleFiles modules;
+    for (const std::filesystem::path& path : paths) {
+        modules.sources.push_back(std::make_unique<adapters::FileRomSource>(path));
+        const core::Result<core::ByteSpan> bytes = modules.sources.back()->Contents();
+        if (!bytes) {
+            return bytes.Failure().WithContext(modules.sources.back()->Describe());
+        }
+        const core::Result<hexlith::domain::ctr::CroHeader> header =
+            hexlith::domain::ctr::ParseCroHeader(bytes.Value());
+        if (!header) {
+            return header.Failure().WithContext(path.string());
+        }
+        const std::filesystem::path tables =
+            extraction / AnalysisDirectory / ModuleTablesDirectory / header.Value().name;
+        const core::Result<std::string> functions = ReadText(tables / "functions.txt");
+        const core::Result<std::string> regions = ReadText(tables / "regions.txt");
+        if (!functions || !regions) {
+            return (!functions ? functions : regions).Failure();
+        }
+        modules.names.push_back(header.Value().name);
+        modules.files.push_back(bytes.Value());
+        modules.functions.push_back(functions.Value());
+        modules.regions.push_back(regions.Value());
+    }
+    return modules;
+}
+
+int EmitModules(const std::filesystem::path& extraction, const application::LiftOptions& options) {
+    const core::Result<ModuleFiles> read = ReadModuleFiles(extraction);
+    if (!read) {
+        Report(read.Failure().Message());
+        return Failure;
+    }
+    const ModuleFiles& modules = read.Value();
+    std::vector<application::ModuleSource> sources;
+    sources.reserve(modules.names.size());
+    for (std::size_t index = 0; index < modules.names.size(); ++index) {
+        sources.push_back(application::ModuleSource{.name = modules.names.at(index),
+                                                    .file = modules.files.at(index),
+                                                    .functions = modules.functions.at(index),
+                                                    .regions = modules.regions.at(index)});
+    }
+
+    const std::filesystem::path output = options.output.has_value()
+                                             ? std::filesystem::path{*options.output}
+                                             : extraction / LiftDirectory / ModulesLiftDirectory;
+    adapters::DirectoryBlobSink sink{output};
+    if (const core::Status prepared = sink.Prepare(); !prepared) {
+        Report(prepared.Failure().Message());
+        return Failure;
+    }
+    std::cout << std::format("writing to {}\n", output.string());
+
+    const core::Result<application::LiftModulesReport> report =
+        application::EmitLiftedModules(application::LiftModulesRequest{.modules = sources}, sink);
+    if (!report) {
+        Report(report.Failure().Message());
+        return Failure;
+    }
+    std::cout << application::RenderLiftModulesSummary(report.Value());
+    return Success;
+}
+
 int Run(const application::LiftOptions& options) {
     const profile::GameProfile* chosen = OnlyProfile();
     if (chosen == nullptr) {
@@ -187,7 +280,10 @@ int Run(const application::LiftOptions& options) {
     if (options.emit) {
         return Emit(extraction.Value(), *chosen, options);
     }
-    Report("nothing to do; ask for --survey or --emit");
+    if (options.emit_modules) {
+        return EmitModules(extraction.Value(), options);
+    }
+    Report("nothing to do; ask for --survey, --emit or --emit-modules");
     return Usage;
 }
 

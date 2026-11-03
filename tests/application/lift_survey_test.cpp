@@ -105,6 +105,14 @@ TEST(ParseLiftCommandLine, TakesEmitAndWhereToPutIt) {
     EXPECT_EQ(options.Value().output, "/work/lift");
 }
 
+TEST(ParseLiftCommandLine, TakesEmitModulesApartFromEmit) {
+    const std::vector<std::string_view> arguments = {"--emit-modules"};
+    const core::Result<LiftOptions> options = ParseLiftCommandLine(arguments);
+    ASSERT_TRUE(options.Ok()) << options.Failure().Message();
+    EXPECT_TRUE(options.Value().emit_modules);
+    EXPECT_FALSE(options.Value().emit);
+}
+
 TEST(ParseLiftCommandLine, RefusesWhatItDoesNotKnow) {
     const std::vector<std::string_view> unknown = {"--lift"};
     EXPECT_FALSE(ParseLiftCommandLine(unknown).Ok());

@@ -7,8 +7,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace hexlith::application {
 
@@ -58,10 +60,69 @@ core::Result<LiftEmitReport> EmitLiftedCode(const LiftEmitRequest& request, port
 
 std::string RenderLiftEmitSummary(const LiftEmitReport& report);
 
+// One module to lift: the CRO file as the cartridge has it, and the analysis
+// tables of that module, whose addresses are offsets into the file.
+struct ModuleSource {
+    // The name in the module's header, which is the loader's key for it.
+    std::string name;
+    core::ByteSpan file;
+    std::string_view functions;
+    std::string_view regions;
+};
+
+struct LiftModulesRequest {
+    std::span<const ModuleSource> modules;
+    std::size_t instructions_per_shard = DefaultInstructionsPerShard;
+};
+
+struct ModuleReport {
+    std::string name;
+
+    // SHA-256 of the module's code segment as the file has it: what the loader
+    // compares with the code it is given, before it patches a word.
+    std::string code_hash;
+
+    std::size_t functions = 0;
+    std::size_t blocks = 0;
+    std::size_t instructions = 0;
+
+    // Words of the code segment that a relocation writes. No instruction at one
+    // is lifted, because the file does not hold what the loader will leave there.
+    std::size_t relocated_words = 0;
+};
+
+struct LiftModulesReport {
+    // Every module together. Its code hash is left empty: each module has its own.
+    LiftEmitReport totals;
+    std::vector<ModuleReport> modules;
+};
+
+// Writes the lifted C++ of the CRO modules, all in one library of their own.
+//
+// A module's code is lifted at offsets from its start and runs against the base
+// the engine gives it (ADR 0029). Each module is a namespace, so that two
+// modules with a function at the same offset do not meet, and has shards of its
+// own. The output is a small CMake project like the main executable's, with a
+// registry that hands each module's table of entries and code digest to the
+// loader, and a manifest in text of the same.
+core::Result<LiftModulesReport> EmitLiftedModules(const LiftModulesRequest& request,
+                                                  ports::BlobSink& sink);
+
+std::string RenderLiftModulesSummary(const LiftModulesReport& report);
+
 // The names of the two functions the library exports, which the loader looks
 // up by name.
 constexpr std::string_view ManifestSymbol = "hexlith_lifted_manifest";
 constexpr std::string_view RegisterSymbol = "hexlith_lifted_register";
+
+// The same for the library of modules. Its register function takes a callback
+// that is given each module's name, code digest and table, and a pointer to
+// pass back, and the tables belong to the library.
+constexpr std::string_view ModulesManifestSymbol = "hexlith_modules_manifest";
+constexpr std::string_view ModulesRegisterSymbol = "hexlith_modules_register";
+
+// The file that says in text what the library of modules holds.
+constexpr std::string_view ModulesManifestFile = "manifest.txt";
 
 }  // namespace hexlith::application
 
