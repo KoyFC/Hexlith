@@ -81,6 +81,14 @@ core::Status LiveDisplay::Before(std::uint64_t frame, bool framebuffer) {
     const std::uint64_t shown = next_;
     next_ = frame + 1;
     ++presented_;
+    for (const std::uint32_t screen : {gpu::ScreenSetup::Top, gpu::ScreenSetup::Bottom}) {
+        const gpu::MemoryRange range = screens_.ShownRange(screen);
+        if (range.size != 0) {
+            if (core::Status ready = backend_->BeforeRead(range.start, range.size); !ready) {
+                return ready;
+            }
+        }
+    }
     return Timed(work_.present_time, [&] {
         return sink_->Present(shown,
                               screens_.Compose(*memory_, gpu::ScreenSetup::Top),
@@ -88,10 +96,31 @@ core::Status LiveDisplay::Before(std::uint64_t frame, bool framebuffer) {
     });
 }
 
+// Tells the backend what a command is about to read and write, ahead of
+// whoever carries it out.
+core::Status LiveDisplay::Announce(const std::array<std::uint32_t, 8>& words) {
+    const gpu::GxMemoryUse use = gpu::MemoryUsed(words);
+    for (const gpu::MemoryRange& range : use.reads) {
+        if (core::Status ready = backend_->BeforeRead(range.start, range.size); !ready) {
+            return ready;
+        }
+    }
+    for (const gpu::MemoryRange& range : use.writes) {
+        if (core::Status ready = backend_->BeforeWrite(range.start, range.size); !ready) {
+            return ready;
+        }
+    }
+    return {};
+}
+
 // gsp::Gpu tells its observer of a command before it carries it out, so a
-// display transfer run here is done where the console would do it.
+// display transfer run here is done where the console would do it, and the
+// backend can be told before anything touches the memory it draws in.
 core::Status LiveDisplay::Command(std::uint64_t frame, const std::array<std::uint32_t, 8>& words) {
     core::Status before = Before(frame, false);
+    if (before) {
+        before = Announce(words);
+    }
     if (!before) {
         return before;
     }

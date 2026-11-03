@@ -18,6 +18,8 @@ namespace hexlith::application {
 // every page recorded before it has been written. A failure stops the replay
 // and is its answer. Any of them may be left empty.
 struct GpuReplayVisitor {
+    // A page is about to be written into memory.
+    std::function<core::Status(const domain::gpu::RecordedPage&)> page;
     std::function<core::Status(const domain::gpu::RecordedCommand&)> command;
     std::function<core::Status(const domain::gpu::RecordedList&, std::span<const std::uint8_t>)>
         list;

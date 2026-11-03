@@ -47,6 +47,15 @@ TEST(ScreenSetup, ShowsTheFramebufferItIsToldTo) {
         << "now the second";
 }
 
+// 320 columns, each 240 pixels of three bytes, a stride apart.
+TEST(ScreenSetup, SaysWhichMemoryTheShownFramebufferIsRead) {
+    ScreenSetup setup;
+    EXPECT_EQ(setup.ShownRange(ScreenSetup::Bottom).size, 0U) << "before it is set up";
+    setup.Apply(Describe(0, Framebuffer, 0));
+    EXPECT_EQ(setup.ShownRange(ScreenSetup::Bottom),
+              (MemoryRange{GpuMemory::VramBase, (319 * Stride) + (240 * 3)}));
+}
+
 TEST(ScreenSetup, IsBlackBeforeItIsSetUp) {
     const GpuMemory memory;
     const Picture picture = ScreenSetup{}.Compose(memory, ScreenSetup::Top);

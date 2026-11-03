@@ -1,5 +1,6 @@
 #include "application/gpu_render.h"
 
+#include <format>
 #include <gtest/gtest.h>
 #include <memory>
 #include <string>
@@ -56,6 +57,45 @@ std::vector<RenderedFrame> Render(const std::set<std::uint64_t>& frames) {
         });
     EXPECT_TRUE(summary.Ok());
     return rendered;
+}
+
+// Records what the renderer tells a backend about memory, and draws nothing.
+class Noting final : public ports::GpuBackend {
+public:
+    core::Status RunCommandList(std::span<const std::uint8_t> /*list*/) override {
+        return {};
+    }
+
+    core::Status BeforeRead(std::uint32_t physical, std::uint32_t size) override {
+        calls.push_back(std::format("read {:08X} {:X}", physical, size));
+        return {};
+    }
+
+    core::Status BeforeWrite(std::uint32_t physical, std::uint32_t size) override {
+        calls.push_back(std::format("write {:08X} {:X}", physical, size));
+        return {};
+    }
+
+    [[nodiscard]] ports::GpuBackendStatistics Statistics() const override {
+        return {};
+    }
+
+    [[nodiscard]] std::string Describe() const override {
+        return "noting";
+    }
+
+    std::vector<std::string> calls;
+};
+
+TEST(RenderGpuRecording, TellsTheBackendWhatAFrameShowsAndAFillWrites) {
+    IndexOnlySource source{std::string{Recording}};
+    gpu::GpuMemory memory;
+    Noting backend;
+    const auto taken = [](const RenderedFrame& /*frame*/) { return core::Status{}; };
+    ASSERT_TRUE(RenderGpuRecording(source, memory, backend, {1}, taken).Ok());
+    // The picture of frame 1 is taken before the fill of frame 1 runs.
+    EXPECT_EQ(backend.calls,
+              (std::vector<std::string>{"read 18000000 38400", "write 18000000 2D0"}));
 }
 
 // The pixel the framebuffer's first row starts at: the bottom left.

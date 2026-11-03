@@ -30,6 +30,11 @@ public:
         if (!bytes) {
             return bytes.Failure();
         }
+        if (visitor_->page) {
+            if (core::Status told = visitor_->page(page); !told) {
+                return told;
+            }
+        }
         if (bytes.Value().size() != PageSize || !memory_->Write(*physical, bytes.Value())) {
             return core::Error{
                 std::format("the page at {:08X} is not a whole page in GPU memory", page.address)};

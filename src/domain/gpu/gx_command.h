@@ -29,6 +29,18 @@ enum class GxCommandId : std::uint8_t {
 
 GxCommandId CommandId(const GxCommandWords& words);
 
+// The GPU memory a command reads and writes, as physical ranges that cover
+// at least what it touches, so that whatever holds a copy of that memory can
+// be told before the command runs. The sizes of transfers are bounds from
+// their dimensions at four bytes a pixel, not the exact extents. A range
+// outside GPU memory is left out.
+struct GxMemoryUse {
+    std::vector<MemoryRange> reads;
+    std::vector<MemoryRange> writes;
+};
+
+GxMemoryUse MemoryUsed(const GxCommandWords& words);
+
 // A memory fill command starts a fill unit for each of its two buffers whose
 // start is not zero: the start, value and end of each, then their two control
 // halfwords in one word. Addresses become physical; one that is not in GPU

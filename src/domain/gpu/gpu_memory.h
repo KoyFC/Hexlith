@@ -8,6 +8,14 @@
 
 namespace hexlith::domain::gpu {
 
+// A run of bytes at a physical address.
+struct MemoryRange {
+    std::uint32_t start = 0;
+    std::uint32_t size = 0;
+
+    bool operator==(const MemoryRange&) const = default;
+};
+
 // The memory the GPU reads and writes, by the physical addresses its
 // registers hold: VRAM, and FCRAM, where a title's linear heap lies. Both are
 // flat, so that a vertex, a texel or a pixel is an offset from a base and

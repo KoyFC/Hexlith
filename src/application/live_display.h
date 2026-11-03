@@ -81,6 +81,7 @@ public:
 
 private:
     core::Status Before(std::uint64_t frame, bool framebuffer);
+    core::Status Announce(const std::array<std::uint32_t, 8>& words);
     void Keep(const core::Status& status);
 
     domain::gpu::GpuMemory* memory_;

@@ -62,6 +62,21 @@ public:
 
     [[nodiscard]] virtual core::Status RunCommandList(std::span<const std::uint8_t> list) = 0;
 
+    // Something other than the backend is about to read, or to write, a range
+    // of the memory it draws in. A backend that keeps what it drew somewhere
+    // other than that memory makes the range true before the read, and forgets
+    // its copy of it before the write; the default keeps nothing, so there is
+    // nothing to do. ADR 0030.
+    [[nodiscard]] virtual core::Status BeforeRead(std::uint32_t /*physical*/,
+                                                  std::uint32_t /*size*/) {
+        return {};
+    }
+
+    [[nodiscard]] virtual core::Status BeforeWrite(std::uint32_t /*physical*/,
+                                                   std::uint32_t /*size*/) {
+        return {};
+    }
+
     [[nodiscard]] virtual GpuBackendStatistics Statistics() const = 0;
 
     [[nodiscard]] virtual std::string Describe() const = 0;

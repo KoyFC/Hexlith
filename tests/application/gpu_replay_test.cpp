@@ -118,6 +118,22 @@ TEST(ReplayGpuRecording, HandsOnCommandsAndFramebuffers) {
     EXPECT_EQ(seen, (std::vector<std::uint32_t>{1, 0x1F000000}));
 }
 
+// A backend holding what it drew has to know a page is about to change.
+TEST(ReplayGpuRecording, SaysWhichPageIsAboutToBeWritten) {
+    MemorySource source;
+    FillTwoFrames(source);
+    gpu::GpuMemory memory;
+    std::vector<std::uint8_t> before;
+    GpuReplayVisitor visitor;
+    visitor.page = [&](const gpu::RecordedPage& page) {
+        before.push_back(memory.Bytes(PagePhysical, 1).front());
+        EXPECT_EQ(page.address, 0x14001000U);
+        return core::Status{};
+    };
+    ASSERT_TRUE(ReplayGpuRecording(source, memory, visitor).Ok());
+    EXPECT_EQ(before, (std::vector<std::uint8_t>{0, FirstFill}));
+}
+
 TEST(ReplayGpuRecording, RefusesAListOfTheWrongSize) {
     MemorySource source;
     FillTwoFrames(source);

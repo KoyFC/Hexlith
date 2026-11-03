@@ -12,6 +12,9 @@ namespace {
 
 namespace gpu = domain::gpu;
 
+// The size every recorded page has.
+constexpr std::uint32_t PageSize = 0x1000;
+
 class Renderer {
 public:
     Renderer(gpu::GpuMemory& memory,
@@ -28,6 +31,15 @@ public:
                (*pending_.begin() < frame || (*pending_.begin() == frame && !framebuffer))) {
             const std::uint64_t wanted = *pending_.begin();
             pending_.erase(pending_.begin());
+            for (const std::uint32_t screen : {gpu::ScreenSetup::Top, gpu::ScreenSetup::Bottom}) {
+                const gpu::MemoryRange range = screens_.ShownRange(screen);
+                if (range.size != 0) {
+                    if (core::Status ready = backend_->BeforeRead(range.start, range.size);
+                        !ready) {
+                        return ready;
+                    }
+                }
+            }
             const core::Status status = (*sink_)(
                 RenderedFrame{.frame = wanted,
                               .top = screens_.Compose(*memory_, gpu::ScreenSetup::Top),
@@ -43,7 +55,20 @@ public:
         return backend_->RunCommandList(bytes);
     }
 
-    void Command(const gpu::GxCommandWords& words) {
+    // Tells the backend what the command's engines are about to read and
+    // write, then does what they do.
+    core::Status Command(const gpu::GxCommandWords& words) {
+        const gpu::GxMemoryUse use = gpu::MemoryUsed(words);
+        for (const gpu::MemoryRange& range : use.reads) {
+            if (core::Status ready = backend_->BeforeRead(range.start, range.size); !ready) {
+                return ready;
+            }
+        }
+        for (const gpu::MemoryRange& range : use.writes) {
+            if (core::Status ready = backend_->BeforeWrite(range.start, range.size); !ready) {
+                return ready;
+            }
+        }
         for (const gpu::MemoryFillConfig& fill : gpu::MemoryFills(words)) {
             ++summary_.fills;
             static_cast<void>(gpu::RunMemoryFill(*memory_, fill));
@@ -54,6 +79,13 @@ public:
                 summary_.unsupported = true;
             }
         }
+        return {};
+    }
+
+    core::Status Page(const gpu::RecordedPage& page) {
+        const std::optional<std::uint32_t> physical =
+            gpu::GpuMemory::PhysicalFromVirtual(page.address);
+        return physical ? backend_->BeforeWrite(*physical, PageSize) : core::Status{};
     }
 
     void Framebuffer(const gpu::RecordedFramebuffer& framebuffer) {
@@ -123,9 +155,9 @@ RenderGpuRecording(ports::GpuRecordingSource& source,
         if (!before) {
             return before;
         }
-        renderer.Command(command.words);
-        return core::Status{};
+        return renderer.Command(command.words);
     };
+    visitor.page = [&renderer](const gpu::RecordedPage& page) { return renderer.Page(page); };
     visitor.list = [&renderer](const gpu::RecordedList& list, std::span<const std::uint8_t> bytes) {
         const core::Status before = renderer.Before(list.frame, false);
         return before ? renderer.List(bytes) : before;

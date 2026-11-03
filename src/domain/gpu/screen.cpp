@@ -45,6 +45,21 @@ void ScreenSetup::Apply(const RecordedFramebuffer& framebuffer) {
     screen.shown = framebuffer.words.at(word::Shown) & 1U;
 }
 
+MemoryRange ScreenSetup::ShownRange(std::uint32_t screen) const {
+    if (screen >= screens_.size()) {
+        return {};
+    }
+    const Screen& setup = screens_.at(screen);
+    const std::optional<PixelFormat> format = TransferFormat(setup.format & FormatMask);
+    const std::uint32_t address = setup.framebuffers.at(setup.shown).left;
+    if (!format.has_value() || address == 0) {
+        return {};
+    }
+    // Compose reads a column of Height pixels at each of the screen's columns.
+    const auto column = static_cast<std::uint32_t>(Height * BytesPerPixel(*format));
+    return {.start = address, .size = ((Widths.at(screen) - 1) * setup.stride) + column};
+}
+
 Picture ScreenSetup::Compose(const GpuMemory& memory, std::uint32_t screen) const {
     Picture picture;
     if (screen >= screens_.size()) {

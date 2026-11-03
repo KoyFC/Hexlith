@@ -38,6 +38,9 @@ public:
     // set up, or whose framebuffer is not in GPU memory, is black.
     [[nodiscard]] Picture Compose(const GpuMemory& memory, std::uint32_t screen) const;
 
+    // The memory Compose reads for a screen: empty when it shows nothing.
+    [[nodiscard]] MemoryRange ShownRange(std::uint32_t screen) const;
+
 private:
     struct Framebuffer {
         // Physical, or zero.

@@ -4,6 +4,7 @@ hexlith_add_test(
     float24_test.cpp
     fragment_stage_test.cpp
     gpu_memory_test.cpp
+    gx_command_test.cpp
     memory_transfer_test.cpp
     rasterizer_test.cpp
     recording_index_test.cpp

@@ -28,7 +28,87 @@ std::uint32_t PhysicalEnd(std::uint32_t address) {
     return last.has_value() ? (*last + 1) & ~AddressUnitMask : 0;
 }
 
+constexpr std::uint32_t Unit = 16;
+// The largest a pixel of a transfer's buffers is.
+constexpr std::uint32_t WidestPixel = 4;
+
+std::uint32_t Low(std::uint32_t word) {
+    return word & HalfwordMask;
+}
+
+std::uint32_t High(std::uint32_t word) {
+    return word >> HalfwordBits;
+}
+
+// What a side of a texture copy spans: its bytes, and the gap after each row
+// of its width when it has one. Source: the same fields as RunTransfer reads.
+std::uint32_t TextureExtent(std::uint32_t size, std::uint32_t width_and_gap) {
+    const std::uint32_t width = Low(width_and_gap) * Unit;
+    const std::uint32_t gap = High(width_and_gap) * Unit;
+    if (gap == 0 || width == 0) {
+        return size;
+    }
+    const std::uint32_t rows = (size + width - 1) / width;
+    return rows * (width + gap);
+}
+
+void Add(std::vector<MemoryRange>& ranges, std::uint32_t physical, std::uint32_t size) {
+    if (physical != 0 && size != 0) {
+        ranges.push_back({.start = physical, .size = size});
+    }
+}
+
+// A range a game names by virtual address.
+void AddVirtual(std::vector<MemoryRange>& ranges, std::uint32_t address, std::uint32_t size) {
+    if (const std::optional<std::uint32_t> physical = GpuMemory::PhysicalFromVirtual(address)) {
+        Add(ranges, *physical, size);
+    }
+}
+
 }  // namespace
+
+GxMemoryUse MemoryUsed(const GxCommandWords& words) {
+    GxMemoryUse use;
+    switch (CommandId(words)) {
+    case GxCommandId::RequestDma:
+        AddVirtual(use.reads, words[1], words[3]);
+        AddVirtual(use.writes, words[2], words[3]);
+        break;
+    case GxCommandId::ProcessCommandList:
+        AddVirtual(use.reads, words[1], words[2]);
+        break;
+    case GxCommandId::MemoryFill:
+        for (const MemoryFillConfig& fill : MemoryFills(words)) {
+            if (fill.end > fill.start) {
+                Add(use.writes, fill.start, fill.end - fill.start);
+            }
+        }
+        break;
+    case GxCommandId::DisplayTransfer:
+        if (const std::optional<TransferConfig> transfer = Transfer(words)) {
+            Add(use.reads,
+                transfer->input,
+                Low(transfer->input_size) * High(transfer->input_size) * WidestPixel);
+            Add(use.writes,
+                transfer->output,
+                Low(transfer->output_size) * High(transfer->output_size) * WidestPixel);
+        }
+        break;
+    case GxCommandId::TextureCopy:
+        if (const std::optional<TransferConfig> transfer = Transfer(words)) {
+            Add(use.reads,
+                transfer->input,
+                TextureExtent(transfer->texture_size, transfer->texture_input));
+            Add(use.writes,
+                transfer->output,
+                TextureExtent(transfer->texture_size, transfer->texture_output));
+        }
+        break;
+    case GxCommandId::FlushCacheRegions:
+        break;
+    }
+    return use;
+}
 
 GxCommandId CommandId(const GxCommandWords& words) {
     return static_cast<GxCommandId>(words[0] & CommandIdMask);

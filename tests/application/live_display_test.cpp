@@ -2,7 +2,9 @@
 #include "domain/gpu/gx_command.h"
 
 #include <array>
+#include <format>
 #include <gtest/gtest.h>
+#include <string>
 #include <vector>
 
 namespace hexlith::application {
@@ -33,6 +35,17 @@ public:
 
     core::Status RunCommandList(std::span<const std::uint8_t> list) override {
         list_sizes.push_back(list.size());
+        calls.emplace_back("list");
+        return {};
+    }
+
+    core::Status BeforeRead(std::uint32_t physical, std::uint32_t size) override {
+        calls.push_back(std::format("read {:08X} {:X}", physical, size));
+        return {};
+    }
+
+    core::Status BeforeWrite(std::uint32_t physical, std::uint32_t size) override {
+        calls.push_back(std::format("write {:08X} {:X}", physical, size));
         return {};
     }
 
@@ -47,6 +60,7 @@ public:
     std::vector<std::uint64_t> frames;
     std::vector<gpu::Color> first_pixels;
     std::vector<std::size_t> list_sizes;
+    std::vector<std::string> calls;
 };
 
 // A game's description of a framebuffer in VRAM, shown as soon as it is told.
@@ -146,6 +160,57 @@ TEST(LiveDisplay, CountsTheListsAndTransfersItRuns) {
 
     EXPECT_EQ(display.Work().lists, 2U);
     EXPECT_EQ(display.Work().transfers, 1U);
+}
+
+// The backend may hold what it drew for a while, so it is told before anything
+// else reads or writes the memory behind it (ADR 0030).
+TEST(LiveDisplay, TellsTheBackendWhatAFillWritesBeforeItIsFilled) {
+    gpu::GpuMemory memory;
+    Watcher watcher;
+    LiveDisplay display{memory, watcher, watcher};
+    const std::array<std::uint32_t, 8> fill = {
+        static_cast<std::uint32_t>(gpu::GxCommandId::MemoryFill),
+        VramVirtual,
+        0xFFFFFFFF,
+        VramVirtual + PageSize,
+        0,
+        0,
+        0,
+        0x0002};
+
+    ASSERT_TRUE(display.Command(1, fill));
+    EXPECT_EQ(watcher.calls, (std::vector<std::string>{"write 18000000 1000"}));
+}
+
+TEST(LiveDisplay, TellsTheBackendWhatATransferReadsAndWrites) {
+    gpu::GpuMemory memory;
+    Watcher watcher;
+    LiveDisplay display{memory, watcher, watcher};
+    const std::array<std::uint32_t, 8> transfer = {
+        static_cast<std::uint32_t>(gpu::GxCommandId::DisplayTransfer),
+        VramVirtual,
+        VramVirtual + 0x10000,
+        (4U << 16) | 4U,
+        (4U << 16) | 4U,
+        0,
+        0,
+        0};
+
+    ASSERT_TRUE(display.Command(1, transfer));
+    EXPECT_EQ(watcher.calls, (std::vector<std::string>{"read 18000000 40", "write 18010000 40"}));
+}
+
+TEST(LiveDisplay, TellsTheBackendWhatAFrameShowsBeforeTakingItsPicture) {
+    gpu::GpuMemory memory;
+    Watcher watcher;
+    LiveDisplay display{memory, watcher, watcher};
+
+    ASSERT_TRUE(display.Framebuffer(1, 0, TopFramebuffer));
+    ASSERT_TRUE(display.Command(1, SubmitList(16)));
+
+    // The top screen's 400 columns of 960 bytes, then the list.
+    EXPECT_EQ(watcher.calls,
+              (std::vector<std::string>{"read 18000000 5DC00", "read 20000000 10", "list"}));
 }
 
 TEST(LiveDisplay, RefusesAListOutsideGpuMemory) {
