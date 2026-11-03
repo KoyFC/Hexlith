@@ -141,6 +141,11 @@ struct BootOptions {
     bool vulkan = false;
     std::string device;
 
+    // Draws with the one fragment shader that reads the stage's configuration
+    // from the registers, instead of one made for each configuration, so that the
+    // two can be timed against each other (ADR 0031).
+    bool generic_fragments = false;
+
     // Frames at which the run prints the wall time and the game's own time so
     // far, so that a script can tell what each stretch of a boot cost. Kept in
     // ascending order.

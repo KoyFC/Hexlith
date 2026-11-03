@@ -18,6 +18,12 @@ namespace hexlith::adapters::vulkan {
 // as all of them are with Cpu.
 enum class VertexShading : std::uint8_t { Cpu, GpuWherePossible };
 
+// Which fragment shader draws. A specialised one is made for each configuration
+// of the fragment stage a draw has, with the registers that configure it
+// written in as constants; the generic one reads them for every fragment, and is
+// what the specialised ones are held to (ADR 0031).
+enum class FragmentShading : std::uint8_t { Generic, Specialised };
+
 // Draws command lists with Vulkan. A target's colour and depth buffers are
 // copied from GPU memory into Vulkan images the first time they are drawn to
 // and stay there; they are written back when BeforeRead, a texture or another
@@ -32,7 +38,8 @@ public:
     Create(VulkanContext& context,
            domain::gpu::GpuMemory& memory,
            domain::gpu::Sampling sampling,
-           VertexShading shading = VertexShading::GpuWherePossible);
+           VertexShading shading = VertexShading::GpuWherePossible,
+           FragmentShading fragments = FragmentShading::Specialised);
 
     VulkanGpuBackend(const VulkanGpuBackend&) = delete;
     VulkanGpuBackend& operator=(const VulkanGpuBackend&) = delete;

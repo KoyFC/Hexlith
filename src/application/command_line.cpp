@@ -36,6 +36,7 @@ constexpr std::string_view RecordGpuOption = "--record-gpu";
 constexpr std::string_view WindowOption = "--window";
 constexpr std::string_view BackendOption = "--backend";
 constexpr std::string_view DeviceOption = "--device";
+constexpr std::string_view GenericFragmentsOption = "--generic-fragments";
 constexpr std::string_view RecordExecutedOption = "--record-executed";
 constexpr std::string_view LiftedOption = "--lifted";
 constexpr std::string_view TimeFramesOption = "--time-frames";
@@ -373,7 +374,8 @@ core::Result<BootOptions> ParseBootCommandLine(Arguments arguments) {
                    {NewGameOption, &options.new_game},
                    {RecordGpuOption, &options.record_gpu},
                    {RecordExecutedOption, &options.record_executed},
-                   {WindowOption, &options.window}},
+                   {WindowOption, &options.window},
+                   {GenericFragmentsOption, &options.generic_fragments}},
          .values = {{RomDirectoryOption, &options.rom_directory},
                     {WorkDirectoryOption, &options.work_directory},
                     {ImageOption, &options.image},
@@ -448,6 +450,8 @@ std::string BootUsage() {
         "  {}               show the screens in a window as the title draws them\n"
         "  {} <name>       what draws for the window: reference (the default) or vulkan\n"
         "  {} <name>        the Vulkan device to use, by a part of its name\n"
+        "  {}   draw with the fragment shader that reads the registers, not one made for\n"
+        "                       each configuration of the fragment stage\n"
         "  {} <list>  print the wall time and the game's own time at these frames, like\n"
         "                       227,400,1101\n"
         "  {} <list>  with {}, write both screens of these frames as PNG files\n"
@@ -481,6 +485,7 @@ std::string BootUsage() {
         WindowOption,
         BackendOption,
         DeviceOption,
+        GenericFragmentsOption,
         TimeFramesOption,
         SaveFramesOption,
         WindowOption,

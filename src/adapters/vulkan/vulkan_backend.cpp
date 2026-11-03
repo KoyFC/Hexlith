@@ -17,9 +17,10 @@
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <future>
 #include <map>
 #include <optional>
-#include <set>
+#include <unordered_map>
 #include <vector>
 
 namespace hexlith::adapters::vulkan {
@@ -103,6 +104,9 @@ struct PipelineKey {
     // The vertex program the GPU shades the draw's vertices with, or zero
     // for vertices shaded on the CPU.
     std::uint64_t program = 0;
+    // The fragment shader made for the draw's configuration, or zero for the
+    // one that reads it from the registers.
+    std::uint32_t fragment = 0;
     auto operator<=>(const PipelineKey&) const = default;
 };
 
@@ -127,36 +131,63 @@ PipelineKey KeyOf(const gpu::RegisterFile& registers) {
 // the combiners' constant colours (offset 3 of a stage), the textures' addresses,
 // sizes and levels, and the lighting tables' data. Source: GBATEK, as cited in
 // docs/formats/pica-registers.md.
-std::vector<std::uint32_t> FragmentConfigurationOf(const gpu::RegisterFile& registers) {
+constexpr std::size_t FragmentConfigurationSize = 1 + 6 + (6 * 4) + 3 + 25;
+
+constexpr std::array<std::uint16_t, FragmentConfigurationSize> FragmentConfigurationRegisters() {
     constexpr std::array<std::uint16_t, 6> StageBases = {0x0C0, 0x0C8, 0x0D0, 0x0D8, 0x0F0, 0x0F8};
     constexpr std::array<std::uint16_t, 4> StageWords = {0, 1, 2, 4};
     constexpr std::array<std::uint16_t, 6> UnitModes = {0x083, 0x093, 0x09B, 0x08E, 0x096, 0x09E};
-    constexpr std::uint16_t FogMode = 0x0E0;
-    constexpr std::uint16_t FogColor = 0x0E1;
-    constexpr std::uint16_t AlphaTest = 0x104;
+    constexpr std::array<std::uint16_t, 3> Others = {
+        0x0E0, 0x0E1, 0x104};  // fog, fog colour, alpha
     constexpr std::uint16_t LightingFirst = 0x1C0;
     constexpr std::uint16_t LightingLutIndex = 0x1C5;
     constexpr std::uint16_t LightingLast = 0x1D9;
-    std::vector<std::uint32_t> words;
-    words.push_back(registers.at(reg::TextureConfig));
+    std::array<std::uint16_t, FragmentConfigurationSize> ids{};
+    std::size_t at = 0;
+    ids.at(at++) = reg::TextureConfig;
     for (const std::uint16_t mode : UnitModes) {
-        words.push_back(registers.at(mode));
+        ids.at(at++) = mode;
     }
     for (const std::uint16_t base : StageBases) {
         for (const std::uint16_t word : StageWords) {
-            words.push_back(registers.at(static_cast<std::uint16_t>(base + word)));
+            ids.at(at++) = static_cast<std::uint16_t>(base + word);
         }
     }
-    for (const std::uint16_t id : {FogMode, FogColor, AlphaTest}) {
-        words.push_back(registers.at(id));
+    for (const std::uint16_t id : Others) {
+        ids.at(at++) = id;
     }
     for (std::uint16_t id = LightingFirst; id <= LightingLast; ++id) {
         if (id != LightingLutIndex) {
-            words.push_back(registers.at(id));
+            ids.at(at++) = id;
         }
+    }
+    return ids;
+}
+
+constexpr auto FragmentRegisters = FragmentConfigurationRegisters();
+
+using FragmentConfiguration = std::array<std::uint32_t, FragmentConfigurationSize>;
+
+FragmentConfiguration FragmentConfigurationOf(const gpu::RegisterFile& registers) {
+    FragmentConfiguration words{};
+    for (std::size_t at = 0; at < FragmentRegisters.size(); ++at) {
+        words.at(at) = registers.at(FragmentRegisters.at(at));
     }
     return words;
 }
+
+// FNV-1a over the words: a draw's configuration is looked up for every draw.
+struct FragmentConfigurationHash {
+    std::size_t operator()(const FragmentConfiguration& words) const {
+        constexpr std::uint64_t Basis = 14695981039346656037ULL;
+        constexpr std::uint64_t Prime = 1099511628211ULL;
+        std::uint64_t hash = Basis;
+        for (const std::uint32_t word : words) {
+            hash = (hash ^ word) * Prime;
+        }
+        return static_cast<std::size_t>(hash);
+    }
+};
 
 // Where a draw draws: the colour and depth buffers and their size.
 struct Target {
@@ -382,12 +413,14 @@ public:
     Implementation(VulkanContext& context,
                    gpu::GpuMemory& memory,
                    gpu::Sampling sampling,
-                   VertexShading shading)
+                   VertexShading shading,
+                   FragmentShading fragments)
         : context_(&context),
           device_(context.Device()),
           memory_(&memory),
           sampling_(sampling),
           shading_(shading),
+          fragments_(fragments),
           vertices_(memory),
           executor_{this},
           processor_(state_, memory, executor_) {}
@@ -418,7 +451,7 @@ public:
                 .allocations = allocations_,
                 .conflicts = conflicts_,
                 .pipelines = pipelines_.size(),
-                .fragment_configurations = fragment_configurations_.size(),
+                .fragment_configurations = fragment_numbers_.size(),
                 .times = times_,
                 .unsupported = unsupported_ || vertices_.Statistics().unsupported_shader};
     }
@@ -465,6 +498,11 @@ private:
     bool QueueShaded(const gpu::PicaState& state, bool indexed);
     std::optional<PendingDraw> Prepare(const gpu::PicaState& state);
     core::Result<VkShaderModule> ShadedModule(const gpu::PicaState& state, std::uint64_t key);
+    // The number of the draw's configuration, new to the backend when it has not
+    // been met, with its shader made then if the draws are specialised.
+    core::Result<std::uint32_t> FragmentConfigurationNumber(const gpu::RegisterFile& registers);
+    void StartFragmentShader(const FragmentConfiguration& configuration, std::uint32_t number);
+    core::Result<VkShaderModule> FragmentModule(std::uint32_t number);
     void WriteDrawWords(const gpu::PicaState& state, std::uint32_t index);
     std::uint32_t Decode(std::uint32_t address,
                          gpu::TextureFormat format,
@@ -507,6 +545,7 @@ private:
     gpu::GpuMemory* memory_;
     gpu::Sampling sampling_;
     VertexShading shading_;
+    FragmentShading fragments_;
     gpu::PicaState state_;
     gpu::VertexPipeline vertices_;
     Executor executor_;
@@ -520,7 +559,13 @@ private:
     VkShaderModule vertex_module_ = VK_NULL_HANDLE;
     VkShaderModule fragment_module_ = VK_NULL_HANDLE;
     std::map<PipelineKey, VkPipeline> pipelines_;
-    std::set<std::vector<std::uint32_t>> fragment_configurations_;
+    // The configurations draws have had, by the number the pipelines' keys
+    // carry, and the shader made for each when the draws are specialised.
+    std::unordered_map<FragmentConfiguration, std::uint32_t, FragmentConfigurationHash>
+        fragment_numbers_;
+    std::map<std::uint32_t, VkShaderModule> fragment_modules_;
+    // Shaders still being compiled, by number.
+    std::map<std::uint32_t, std::future<core::Result<std::vector<std::uint32_t>>>> compiling_;
     // Translated vertex programs, by a hash of their code, descriptors and
     // entry point; a null module for one the translation cannot take.
     std::map<std::uint64_t, VkShaderModule> shaded_modules_;
@@ -569,7 +614,14 @@ std::optional<PendingDraw> VulkanGpuBackend::Implementation::Prepare(const gpu::
     }
     PendingDraw draw;
     draw.key = KeyOf(registers);
-    fragment_configurations_.insert(FragmentConfigurationOf(registers));
+    const core::Result<std::uint32_t> number = FragmentConfigurationNumber(registers);
+    if (!number) {
+        unsupported_ = true;
+        return std::nullopt;
+    }
+    if (fragments_ == FragmentShading::Specialised) {
+        draw.key.fragment = number.Value();
+    }
     draw.target = *target;
     const auto index = static_cast<std::uint32_t>(pending_.size());
     WriteDrawWords(state, index);
@@ -688,6 +740,71 @@ bool VulkanGpuBackend::Implementation::QueueShaded(const gpu::PicaState& state, 
     }
     pending_.push_back(*draw);
     return true;
+}
+
+core::Result<std::uint32_t>
+VulkanGpuBackend::Implementation::FragmentConfigurationNumber(const gpu::RegisterFile& registers) {
+    const FragmentConfiguration configuration = FragmentConfigurationOf(registers);
+    if (const auto found = fragment_numbers_.find(configuration);
+        found != fragment_numbers_.end()) {
+        return found->second;
+    }
+    const auto number = static_cast<std::uint32_t>(fragment_numbers_.size() + 1);
+    if (fragments_ == FragmentShading::Specialised) {
+        StartFragmentShader(configuration, number);
+    }
+    fragment_numbers_.emplace(configuration, number);
+    return number;
+}
+
+// The fragment stage with the registers that configure it written in as
+// constants, so that the compiler sees which combiner sources, texture
+// formats and lighting terms are in use and drops the rest. Compiling is
+// started on another thread and waited for by the pipeline that needs it,
+// which is made when the group the draw is in is drawn, after the CPU's work
+// on the draws that follow.
+void VulkanGpuBackend::Implementation::StartFragmentShader(
+    const FragmentConfiguration& configuration, std::uint32_t number) {
+    // Only the registers that configure the stage are written in. A call with a
+    // constant argument folds to its value; one with a loop's counter is
+    // resolved when the loop is unrolled.
+    std::string definitions = "uint reg(uint id) {\n    switch (id) {\n";
+    for (std::size_t at = 0; at < FragmentRegisters.size(); ++at) {
+        definitions += std::format(
+            "    case {}u: return {}u;\n", FragmentRegisters.at(at), configuration.at(at));
+    }
+    definitions += "    default: return words[draw * DrawWords + id];\n    }\n}\n";
+    std::string source = "#version 450\n" + FloatControlLines(context_->Floats()) +
+                         "#define BAKED_REGISTERS\n" + std::string{CommonSource} +
+                         std::string{MultiplySource} + definitions +
+                         std::string{FragmentShaderSource};
+    compiling_.emplace(number, std::async(std::launch::async, [text = std::move(source)] {
+                           return CompileGlsl(text, ShaderStage::Fragment);
+                       }));
+}
+
+core::Result<VkShaderModule>
+VulkanGpuBackend::Implementation::FragmentModule(std::uint32_t number) {
+    if (const auto found = fragment_modules_.find(number); found != fragment_modules_.end()) {
+        return found->second;
+    }
+    const core::Result<std::vector<std::uint32_t>> spirv = compiling_.at(number).get();
+    compiling_.erase(number);
+    if (!spirv) {
+        return spirv.Failure();
+    }
+    VkShaderModuleCreateInfo create{};
+    create.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    create.codeSize = spirv.Value().size() * sizeof(std::uint32_t);
+    create.pCode = spirv.Value().data();
+    VkShaderModule module = VK_NULL_HANDLE;
+    if (const core::Status made =
+            Check(vkCreateShaderModule(device_, &create, nullptr, &module), "vkCreateShaderModule");
+        !made) {
+        return made.Failure();
+    }
+    fragment_modules_.emplace(number, module);
+    return module;
 }
 
 core::Result<VkShaderModule>
@@ -1620,6 +1737,14 @@ core::Result<VkPipeline> VulkanGpuBackend::Implementation::Pipeline(const Pipeli
     if (const auto found = pipelines_.find(key); found != pipelines_.end()) {
         return found->second;
     }
+    VkShaderModule fragment = fragment_module_;
+    if (key.fragment != 0) {
+        const core::Result<VkShaderModule> made = FragmentModule(key.fragment);
+        if (!made) {
+            return made.Failure();
+        }
+        fragment = made.Value();
+    }
     const auto& w = key.words;
     const std::uint32_t cull = w[0];
     const std::uint32_t operation = w[1];
@@ -1645,7 +1770,7 @@ core::Result<VkPipeline> VulkanGpuBackend::Implementation::Pipeline(const Pipeli
                                         .pNext = nullptr,
                                         .flags = 0,
                                         .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-                                        .module = fragment_module_,
+                                        .module = fragment,
                                         .pName = "main",
                                         .pSpecializationInfo = nullptr}};
     // Vertices shaded on the CPU come as their 24 slots, those the GPU
@@ -1882,6 +2007,9 @@ VulkanGpuBackend::Implementation::~Implementation() {
     for (auto& [key, module] : shaded_modules_) {
         vkDestroyShaderModule(device_, module, nullptr);
     }
+    for (auto& [number, module] : fragment_modules_) {
+        vkDestroyShaderModule(device_, module, nullptr);
+    }
     vkDestroyShaderModule(device_, vertex_module_, nullptr);
     vkDestroyShaderModule(device_, fragment_module_, nullptr);
     vkDestroyRenderPass(device_, render_pass_, nullptr);
@@ -1892,11 +2020,14 @@ VulkanGpuBackend::Implementation::~Implementation() {
 
 // ---------------------------------------------------------------------------
 
-core::Result<std::unique_ptr<VulkanGpuBackend>> VulkanGpuBackend::Create(VulkanContext& context,
-                                                                         gpu::GpuMemory& memory,
-                                                                         gpu::Sampling sampling,
-                                                                         VertexShading shading) {
-    auto implementation = std::make_unique<Implementation>(context, memory, sampling, shading);
+core::Result<std::unique_ptr<VulkanGpuBackend>>
+VulkanGpuBackend::Create(VulkanContext& context,
+                         gpu::GpuMemory& memory,
+                         gpu::Sampling sampling,
+                         VertexShading shading,
+                         FragmentShading fragments) {
+    auto implementation =
+        std::make_unique<Implementation>(context, memory, sampling, shading, fragments);
     if (const core::Status ready = implementation->Initialise(); !ready) {
         return ready.Failure();
     }

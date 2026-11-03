@@ -38,9 +38,11 @@ layout(push_constant) uniform Draw {
     vec4 viewport;
 };
 
+#ifndef BAKED_REGISTERS
 uint reg(uint id) {
     return words[draw * DrawWords + id];
 }
+#endif
 
 uint field(uint word, uint low, uint width) {
     return (word >> low) & ((1u << width) - 1u);

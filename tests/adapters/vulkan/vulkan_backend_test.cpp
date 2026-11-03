@@ -254,6 +254,55 @@ TEST(VulkanGpuBackend, CountsTheRoundTripOfEachGroupOfDraws) {
     EXPECT_EQ(backend.Value()->Statistics().downloaded_bytes, BufferBytes);
 }
 
+// A list of draws that change what the fragment stage does between them: the
+// combiner's operation and sources, its scale, and the alpha test.
+List FragmentConfigurations() {
+    List list = Scene();
+    // Operations and sources of combiner stage 0 and its scale, each drawn.
+    for (const std::uint32_t operation : {0x00000000U, 0x00020002U, 0x00030003U, 0x00050005U}) {
+        list.Write(0x0C2, operation).Write(reg::VertexCount, 6).Write(reg::DrawArrays, 1);
+    }
+    list.Write(0x0C0, 0x00E00000).Write(reg::VertexCount, 6).Write(reg::DrawArrays, 1);
+    list.Write(0x0C4, 0x00020002).Write(reg::VertexCount, 6).Write(reg::DrawArrays, 1);
+    // The alpha test, enabled and never passed, then passed.
+    list.Write(0x104, 0x1U | (0x4U << 4U) | (0x80U << 8U))
+        .Write(reg::VertexCount, 6)
+        .Write(reg::DrawArrays, 1);
+    list.Write(0x104, 0x1U | (0x1U << 4U) | (0x80U << 8U))
+        .Write(reg::VertexCount, 6)
+        .Write(reg::DrawArrays, 1);
+    return list;
+}
+
+// ADR 0031: a fragment shader made for the draw's configuration draws what the
+// one that reads the configuration from the registers draws, to the byte.
+TEST(VulkanGpuBackend, DrawsWhatTheGenericFragmentShaderDrawsWhenSpecialised) {
+    const std::unique_ptr<VulkanContext> context = Context();
+    if (!context) {
+        GTEST_SKIP() << "no Vulkan device that can draw";
+    }
+    const auto draw = [&context](FragmentShading shading) {
+        auto memory = Memory();
+        auto backend = VulkanGpuBackend::Create(
+            *context, *memory, gpu::Sampling::Hardware, VertexShading::GpuWherePossible, shading);
+        EXPECT_TRUE(backend);
+        if (backend) {
+            EXPECT_TRUE(backend.Value()->RunCommandList(FragmentConfigurations().Bytes()).Ok());
+            EXPECT_EQ(backend.Value()->Statistics().draws, 9U);
+            // Several configurations, or this would hold a shader to itself.
+            EXPECT_GE(backend.Value()->Statistics().fragment_configurations, 5U);
+            EXPECT_TRUE(backend.Value()->BeforeRead(ColorAddress, ColorBytes).Ok());
+            EXPECT_TRUE(backend.Value()->BeforeRead(DepthAddress, DepthBytes).Ok());
+        }
+        return memory;
+    };
+    const auto generic = draw(FragmentShading::Generic);
+    const auto specialised = draw(FragmentShading::Specialised);
+    EXPECT_EQ(Differences(*specialised, *generic, ColorAddress), "") << "colour";
+    EXPECT_EQ(Differences(*specialised, *generic, DepthAddress), "") << "depth";
+    EXPECT_EQ(context->ValidationMessages(), 0U) << context->FirstValidationMessage();
+}
+
 // What a fragment shader specialised for a draw would be specialised for: the
 // combiners' choices, the textures' formats and modes, lighting and the alpha
 // test. A draw that changes only the numbers those read, a constant colour,

@@ -36,5 +36,6 @@ The format is deliberately short: context, the options that were actually consid
 | [0028](0028-the-live-display-draws-in-the-titles-own-memory.md) | The live display draws in the title's own memory | Accepted |
 | [0029](0029-cro-modules-are-lifted-against-a-base-the-loader-gives.md) | CRO modules are lifted against a base the loader gives | Accepted |
 | [0030](0030-the-vulkan-backend-keeps-render-targets-resident.md) | The Vulkan backend keeps render targets resident and writes them back when something reads them | Accepted |
+| [0031](0031-the-fragment-shader-is-made-for-each-configuration-of-the-stage.md) | The fragment shader is made for each configuration of the fragment stage | Accepted |
 
 A record marked provisional has a named condition that will settle it. It is written down because work has to proceed in the meantime, not because the question is closed.

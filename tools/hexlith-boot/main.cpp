@@ -362,7 +362,10 @@ bool AttachWindow(const application::BootOptions& options,
         auto backend = vulkan::VulkanGpuBackend::Create(*shown.context,
                                                         *shown.memory,
                                                         gpu::Sampling::Hardware,
-                                                        vulkan::VertexShading::GpuWherePossible);
+                                                        vulkan::VertexShading::GpuWherePossible,
+                                                        options.generic_fragments
+                                                            ? vulkan::FragmentShading::Generic
+                                                            : vulkan::FragmentShading::Specialised);
         if (!backend) {
             Report(backend.Failure().Message());
             return false;

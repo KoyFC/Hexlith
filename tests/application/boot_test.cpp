@@ -136,6 +136,14 @@ TEST(ParseBootCommandLine, RefusesAFrameToTimeThatIsNotANumber) {
         ParseBootCommandLine(std::vector<std::string_view>{"--time-frames", "227,,400"}).Ok());
 }
 
+TEST(ParseBootCommandLine, DrawsWithSpecialisedFragmentShadersUnlessToldNotTo) {
+    EXPECT_FALSE(ParseBootCommandLine({}).Value().generic_fragments);
+    const std::vector<std::string_view> arguments = {"--window", "--generic-fragments"};
+    const core::Result<BootOptions> options = ParseBootCommandLine(arguments);
+    ASSERT_TRUE(options.Ok()) << options.Failure().Message();
+    EXPECT_TRUE(options.Value().generic_fragments);
+}
+
 TEST(ParseBootCommandLine, TakesTheFramesToSaveAndWhereToSaveThem) {
     const std::vector<std::string_view> arguments = {
         "--window", "--save-frames", "400,220", "--save-frames-to", "/tmp/screens"};

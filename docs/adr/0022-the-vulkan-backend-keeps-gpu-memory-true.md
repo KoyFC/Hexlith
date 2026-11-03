@@ -1,6 +1,6 @@
 # 0022. The Vulkan backend keeps GPU memory true and the PICA's fragment stage in one shader
 
-Status: Accepted. Its way of keeping memory true, copying each list's targets in and back, is replaced by [ADR 0030](0030-the-vulkan-backend-keeps-render-targets-resident.md); the rest stands.
+Status: Accepted. Its way of keeping memory true, copying each list's targets in and back, is replaced by [ADR 0030](0030-the-vulkan-backend-keeps-render-targets-resident.md); its fragment stage, one shader that reads the registers, is amended by [ADR 0031](0031-the-fragment-shader-is-made-for-each-configuration-of-the-stage.md) and the rest stands.
 Date: 2026-10-23
 
 ## Context
