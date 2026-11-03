@@ -87,3 +87,30 @@ The no-window boot fell from 32.6 to 27.6 s with the analysis of the modules tak
 - **The game's own code, 2.3 times the console's time** from frame 227 on, is not the window's. Registers in local variables is what would move it.
 
 What the backend gets right without extra cost: no run had a conflict, a write nobody announced to a dirty target.
+
+## Phase 11
+
+Measured on 2026-11-03 with a real window on the Wayland desktop, medians of five alternating runs on the four performance cores, load average 1.6 to 2.0. The machine ran the game faster than in the afternoon of Phase 10, its own 27.6 s without a window being 17.4 s now, so only the ratios of one session compare. The stretch from frame 227 to 1101 is what the milestone is about: the console takes 14.6 s, the run without a window 17.4 s.
+
+| 227 to 1101 | Seconds | Over the floor |
+| --- | --- | --- |
+| Before the phase (3 runs) | 24.85 | +46% |
+| Generic fragment shader, after the CPU changes | 25.0 | +44% |
+| Fragment shader for each configuration | 23.85 | +37% |
+| The milestone, 15% | 20.0 | +15% |
+
+What each change took off the boot to frame 1101 on the Intel GPU, seconds in the display's own accounting:
+
+| | Before | Now |
+| --- | --- | --- |
+| Display transfers | 1.13 | 0.23 |
+| Colour and depth back to memory | 0.76 | 0.70 |
+| Waiting for the device | 5.07 | 3.27 |
+| Lists, whole | 6.28 | 5.30 |
+
+- **67 fragment configurations** in 28,340 draws, by [ADR 0031](adr/0031-the-fragment-shader-is-made-for-each-configuration-of-the-stage.md)'s count of the registers that configure the stage. Making a shader for each is within reach; compiling them costs 1.3 s of glslang on every run, and about a second each in the driver the first time on a machine, 72 s in all, which Mesa then keeps.
+- **The display transfers** are one transfer, RGBA8 in tiles to RGB8 in rows, 1,321 times, and a tile at a time they take 0.17 ms instead of 0.86. Converting the colour of a target a tile at a time took only 0.1 s off writing it back: that cost is moving a megabyte, not converting it.
+- **What is left of the 8.0 s the window adds to the stretch** is waiting for the device, 3.3 s, of which 1,909 submissions at about 0.55 ms are 1.0 s and the draws the rest; composing and presenting, 0.9 s; the CPU work around the lists that is neither of those, about 1.3 s; moving targets up and down, 1.1 s; and what the GPU driver's own threads take from the game's cores, which nothing here measures.
+- **Every one of those is time the game's thread spends waiting or working for the display.** A window within 15 percent of the floor needs the display's work to overlap the game's code rather than follow it, which means a list submitted without waiting for it and a display transfer the GPU can do. Both change what ADR 0030 says about when a group waits, and are not small.
+
+The pictures of frames 220, 400, 700, 1000 and 1100, saved from the live run with `--save-frames`, are within the tolerance of ADR 0021 as before, and `compare_pica_textures.py` and `compare_pica_rasterizer.py` agree with Azahar on 2,000 textures, 3,500 transfers and steps and the recording to frame 400 after the transfer changes.
