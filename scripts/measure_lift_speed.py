@@ -17,7 +17,7 @@ docs/lifter.md describes the protocol and records what it measured.
 
 Usage:
     scripts/measure_lift_speed.py --boot BOOT --lifted LIBRARY --rom-dir ROM
-        --work-dir WORK --input SCRIPT [--frame 227] [--runs 7] [--core N]
+        --work-dir WORK --input SCRIPT [--frame 227] [--limit N] [--runs 7] [--core N]
         [--max-load 1.0]
     scripts/measure_lift_speed.py --self-test
 """
@@ -98,11 +98,21 @@ def wait_for_quiet(max_load):
         waited += SETTLE_POLL
 
 
-def run_boot(arguments, core, lifted):
+def boot_command(arguments, lifted):
+    """The command line of one boot. A run to frame 1101 takes 3.87 billion instructions and
+    hexlith-boot stops at two billion unless it is given a limit."""
     command = [arguments.boot, "--rom-dir", arguments.rom_dir, "--work-dir", arguments.work_dir,
-               "--new-game", "--input", arguments.input, "--stop-after", f"frame:{arguments.frame}"]
+               "--new-game", "--input", arguments.input]
+    if arguments.limit is not None:
+        command += ["--limit", str(arguments.limit)]
+    command += ["--stop-after", f"frame:{arguments.frame}"]
     if lifted:
         command += ["--lifted", arguments.lifted]
+    return command
+
+
+def run_boot(arguments, core, lifted):
+    command = boot_command(arguments, lifted)
     pin = (lambda: os.sched_setaffinity(0, {core})) if core is not None else None
     finished = subprocess.run(command, capture_output=True, text=True, check=True, preexec_fn=pin)
     return parse_run(finished.stdout)
@@ -143,6 +153,16 @@ def self_test():
     assert summary["interpreter"] == (3.0, 2.8, 3.4)
     assert summary["lifted"] == (0.6, 0.5, 0.7)
     assert abs(summary["ratio"] - 5.0) < 1e-9
+    arguments = argparse.Namespace(boot="boot", rom_dir="rom", work_dir="work", input="in",
+                                   frame=1101, limit=None, lifted="lib")
+    plain = boot_command(arguments, False)
+    assert "--limit" not in plain, plain
+    assert "--lifted" not in plain, plain
+    assert plain[-2:] == ["--stop-after", "frame:1101"], plain
+    arguments.limit = 20000000000
+    limited = boot_command(arguments, True)
+    assert limited[limited.index("--limit") + 1] == "20000000000", limited
+    assert limited[limited.index("--lifted") + 1] == "lib", limited
     assert parse_cpu_list("0-3\n") == [0, 1, 2, 3]
     assert parse_cpu_list("0-1,6") == [0, 1, 6]
     print("self-test passed")
@@ -157,6 +177,9 @@ def main():
     parser.add_argument("--work-dir")
     parser.add_argument("--input")
     parser.add_argument("--frame", type=int, default=227)
+    parser.add_argument("--limit", type=int,
+                        help="the instruction limit to give hexlith-boot, whose default of two "
+                             "billion stops a run to frame 1101 early")
     parser.add_argument("--runs", type=int, default=7)
     parser.add_argument("--core", type=int,
                         help="the core to run on; the last performance core by default")
