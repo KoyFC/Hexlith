@@ -136,6 +136,33 @@ TEST(ParseBootCommandLine, RefusesAFrameToTimeThatIsNotANumber) {
         ParseBootCommandLine(std::vector<std::string_view>{"--time-frames", "227,,400"}).Ok());
 }
 
+TEST(ParseBootCommandLine, TakesTheFramesToSaveAndWhereToSaveThem) {
+    const std::vector<std::string_view> arguments = {
+        "--window", "--save-frames", "400,220", "--save-frames-to", "/tmp/screens"};
+    const core::Result<BootOptions> options = ParseBootCommandLine(arguments);
+    ASSERT_TRUE(options.Ok()) << options.Failure().Message();
+    EXPECT_EQ(options.Value().save_frames, (std::vector<std::uint64_t>{220, 400}));
+    EXPECT_EQ(options.Value().save_frames_directory, "/tmp/screens");
+}
+
+TEST(ParseBootCommandLine, RefusesFramesToSaveWithoutAPlaceOrAWindow) {
+    // Frames and a directory only mean something together, and there is no
+    // picture to save without the display.
+    EXPECT_FALSE(
+        ParseBootCommandLine(std::vector<std::string_view>{"--window", "--save-frames", "220"})
+            .Ok());
+    EXPECT_FALSE(ParseBootCommandLine(
+                     std::vector<std::string_view>{"--window", "--save-frames-to", "/tmp/screens"})
+                     .Ok());
+    EXPECT_FALSE(ParseBootCommandLine(std::vector<std::string_view>{
+                                          "--save-frames", "220", "--save-frames-to", "/tmp/s"})
+                     .Ok());
+    EXPECT_FALSE(
+        ParseBootCommandLine(std::vector<std::string_view>{
+                                 "--window", "--save-frames", "x", "--save-frames-to", "/tmp/s"})
+            .Ok());
+}
+
 TEST(ParseBootCommandLine, RunsLongEnoughByDefault) {
     const core::Result<BootOptions> options = ParseBootCommandLine({});
     ASSERT_TRUE(options.Ok());

@@ -8,6 +8,8 @@ Phase 10 asks how close the window comes to the speed of the same run without on
 
 After a run with a window, `hexlith-boot` prints where the display's time went: the lists, split into texture decoding, converting the colour and depth buffers into the backend's images and back, the wait for the device and making buffers; the display transfers; and composing and presenting the screens. Whatever remains of the lists is the command processor and the vertices the CPU shades.
 
+The pictures of the live path are checked the same way the replay's are. `hexlith-boot --window --save-frames 220,400,700,1000,1100 --save-frames-to <directory>` writes both screens of those frames as `frame-<n>-top.png` and `frame-<n>-bottom.png`, once with `--backend reference` and once with `--backend vulkan`, and `scripts/compare_screens.py` holds the second directory to the first within the tolerance of [ADR 0021](adr/0021-the-vulkan-backend-is-held-to-the-reference-within-a-measured-tolerance.md). A frame in which the game drew nothing is not handed to the display, and the picture of the next one stands for it, so a frame is saved one picture after it and one after the last picture is never saved. On 2026-11-03 all ten pictures of the five frames were within the tolerance on the Intel GPU, with means between 0.00 and 0.86, the same as the replay gave.
+
 The floor is the same boot without a window. A stretch whose game time alone is longer than the console takes for it is held up by the CPU, not by drawing.
 
 ## Baseline

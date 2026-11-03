@@ -146,6 +146,13 @@ struct BootOptions {
     // ascending order.
     std::vector<std::uint64_t> time_frames;
 
+    // Frames whose two screens the window's run also writes as PNG files in a
+    // directory, so that a live run's pictures can be compared with another's.
+    // Both are given or neither, and they need the window. Kept in ascending
+    // order.
+    std::vector<std::uint64_t> save_frames;
+    std::optional<std::string> save_frames_directory;
+
     // Counts every instruction the run executes by address and writes the table
     // under <work-dir>/<title>/observed, as docs/analysis-tables.md describes.
     // Slows the run by a virtual call per instruction.

@@ -39,6 +39,8 @@ constexpr std::string_view DeviceOption = "--device";
 constexpr std::string_view RecordExecutedOption = "--record-executed";
 constexpr std::string_view LiftedOption = "--lifted";
 constexpr std::string_view TimeFramesOption = "--time-frames";
+constexpr std::string_view SaveFramesOption = "--save-frames";
+constexpr std::string_view SaveFramesToOption = "--save-frames-to";
 
 constexpr std::string_view LoadEvent = "cro-load:";
 constexpr std::string_view UnloadEvent = "cro-unload:";
@@ -322,7 +324,8 @@ TakeBackend(std::span<const std::string_view> arguments, std::size_t& index, boo
 }
 
 // Frame numbers separated by commas, in ascending order.
-core::Status TakeFrames(std::span<const std::string_view> arguments,
+core::Status TakeFrames(std::string_view option,
+                        std::span<const std::string_view> arguments,
                         std::size_t& index,
                         std::vector<std::uint64_t>& frames) {
     std::optional<std::string> text;
@@ -333,8 +336,7 @@ core::Status TakeFrames(std::span<const std::string_view> arguments,
     std::string_view rest = *text;
     while (true) {
         const std::size_t comma = rest.find(',');
-        const core::Result<std::uint64_t> frame =
-            ParseCount(TimeFramesOption, rest.substr(0, comma));
+        const core::Result<std::uint64_t> frame = ParseCount(option, rest.substr(0, comma));
         if (!frame) {
             return frame.Failure();
         }
@@ -379,7 +381,8 @@ core::Result<BootOptions> ParseBootCommandLine(Arguments arguments) {
                     {CompareOption, &options.compare},
                     {GoldenOption, &options.golden},
                     {InputOption, &options.input},
-                    {LiftedOption, &options.lifted}},
+                    {LiftedOption, &options.lifted},
+                    {SaveFramesToOption, &options.save_frames_directory}},
          .others = {
              {StopAfterOption,
               [&](std::size_t& index) {
@@ -389,8 +392,12 @@ core::Result<BootOptions> ParseBootCommandLine(Arguments arguments) {
               [&](std::size_t& index) { return TakeBackend(arguments, index, options.vulkan); }},
              {DeviceOption,
               [&](std::size_t& index) { return TakeDevice(arguments, index, options.device); }},
-             {TimeFramesOption, [&](std::size_t& index) {
-                  return TakeFrames(arguments, index, options.time_frames);
+             {TimeFramesOption,
+              [&](std::size_t& index) {
+                  return TakeFrames(TimeFramesOption, arguments, index, options.time_frames);
+              }},
+             {SaveFramesOption, [&](std::size_t& index) {
+                  return TakeFrames(SaveFramesOption, arguments, index, options.save_frames);
               }}}});
     if (!parsed) {
         return parsed.Failure();
@@ -401,6 +408,14 @@ core::Result<BootOptions> ParseBootCommandLine(Arguments arguments) {
                                        "can be given",
                                        WindowOption,
                                        RecordGpuOption)};
+    }
+    if (options.save_frames.empty() != !options.save_frames_directory.has_value()) {
+        return core::Error{std::format(
+            "{} and {} are given together or not at all", SaveFramesOption, SaveFramesToOption)};
+    }
+    if (options.save_frames_directory.has_value() && !options.window) {
+        return core::Error{std::format(
+            "{} saves what the window shows, so it needs {}", SaveFramesOption, WindowOption)};
     }
     if (limit.has_value()) {
         const core::Result<std::uint64_t> count = ParseCount(LimitOption, *limit);
@@ -435,6 +450,8 @@ std::string BootUsage() {
         "  {} <name>        the Vulkan device to use, by a part of its name\n"
         "  {} <list>  print the wall time and the game's own time at these frames, like\n"
         "                       227,400,1101\n"
+        "  {} <list>  with {}, write both screens of these frames as PNG files\n"
+        "  {} <path>  the directory they are written in, which must exist\n"
         "  {}   count the instructions executed, by address, under <work-dir>/<title>/observed\n"
         "  {} <path>      run through the lifted library at that path where it covers the code\n"
         "  {}               this text\n"
@@ -465,6 +482,9 @@ std::string BootUsage() {
         BackendOption,
         DeviceOption,
         TimeFramesOption,
+        SaveFramesOption,
+        WindowOption,
+        SaveFramesToOption,
         RecordExecutedOption,
         LiftedOption,
         HelpOption,

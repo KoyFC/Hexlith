@@ -14,6 +14,8 @@ target_sources(
             file_rom_source.h
             png_file.cpp
             png_file.h
+            png_frame_sink.cpp
+            png_frame_sink.h
             scripted_input.cpp
             scripted_input.h
             workspace_locator.cpp

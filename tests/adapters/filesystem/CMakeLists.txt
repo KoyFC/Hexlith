@@ -7,6 +7,7 @@ hexlith_add_test(
     gpu_recording_files_test.cpp
     file_rom_source_test.cpp
     png_file_test.cpp
+    png_frame_sink_test.cpp
     scripted_input_test.cpp
 )
 

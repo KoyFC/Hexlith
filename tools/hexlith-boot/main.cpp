@@ -3,6 +3,7 @@
 #include "adapters/filesystem/directory_tree_store.h"
 #include "adapters/filesystem/file_rom_source.h"
 #include "adapters/filesystem/gpu_recording_directory.h"
+#include "adapters/filesystem/png_frame_sink.h"
 #include "adapters/filesystem/scripted_input.h"
 #include "adapters/filesystem/workspace_locator.h"
 #include "adapters/lifted/lifted_library.h"
@@ -335,6 +336,8 @@ struct Display {
     std::unique_ptr<hexlith::adapters::vulkan::VulkanContext> context;
     std::unique_ptr<hexlith::ports::GpuBackend> backend;
     std::unique_ptr<hexlith::adapters::sdl::SdlWindow> window;
+    // In front of the window, when --save-frames asks for pictures.
+    std::unique_ptr<hexlith::adapters::filesystem::PngFrameSink> pictures;
     std::unique_ptr<hexlith::application::LiveDisplay> display;
 };
 
@@ -375,8 +378,14 @@ bool AttachWindow(const application::BootOptions& options,
         return false;
     }
     shown.window = std::move(window.Value());
+    hexlith::ports::ScreenSink* sink = shown.window.get();
+    if (options.save_frames_directory.has_value()) {
+        shown.pictures = std::make_unique<hexlith::adapters::filesystem::PngFrameSink>(
+            *options.save_frames_directory, options.save_frames, shown.window.get());
+        sink = shown.pictures.get();
+    }
     shown.display =
-        std::make_unique<application::LiveDisplay>(*shown.memory, *shown.backend, *shown.window);
+        std::make_unique<application::LiveDisplay>(*shown.memory, *shown.backend, *sink);
     shown.display->Watch(title.Gpu());
     // A script makes a run repeatable, so it wins over the keyboard.
     if (!options.input.has_value()) {
