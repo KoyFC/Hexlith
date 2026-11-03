@@ -1,6 +1,6 @@
 # 0029. CRO modules are lifted against a base the loader gives
 
-Status: Provisional, for Phase 9 to build. Settled by the measurement under "What settles this".
+Status: Accepted. Provisional from 2026-11-02, settled on 2026-11-03 by the count under "What the count found".
 Date: 2026-11-02
 
 ## Context
@@ -21,6 +21,8 @@ What is already in place for modules: the analysis reads each one at its file of
 
 **A call from one module to another, or to the main executable, stays an indirect call** through the pointer the loader wrote, and goes through the engine's lookup. ADR 0004's optimisation, binding an import to the lifted function it resolves to when the loader links it, is left for after the rest works and is checked.
 
+**A word a relocation writes is never lifted as an instruction.** The lifter is given the position of every relocated word in a module's code segment, and an instruction at one of them is left to the interpreter, which reads the word from memory where the loader has written it. This holds whatever the analysis says the word is.
+
 **Runs record a module's executed instructions by module and offset,** a second form of `observed/executed.txt`, so that the analysis can take them as facts as it does for the main executable ([`classification.md`](../classification.md#what-a-run-executed-as-a-fact)). An absolute address means nothing across runs once modules move.
 
 **`hexlith-lift-verify` checks it as it is.** It compares whole machines, so it does not need to know where a module is.
@@ -33,9 +35,26 @@ What is already in place for modules: the analysis reads each one at its file of
 
 **Lift each module once for every address it has been seen at.** The addresses depend on what was loaded before, so the list is never complete, and code for an address not seen would silently be missing.
 
-## What settles this
+## What settled it
 
-That no relocation in any of the 133 modules writes a word the analysis classifies as an instruction. Lifted code takes instructions from the file and literals from memory, so a relocated instruction would make the lifted code differ from what the processor runs, and nothing else in this design would notice. The relocation tables are read already (`hexlith-cro-dump`) and so are the regions, so this is a count to make before the first module is lifted. If the count is not zero, the modules that have such a word are lifted with that instruction left to the interpreter, which reads it from memory.
+That no relocation in any of the 133 modules writes a word the analysis classifies as an instruction. Lifted code takes instructions from the file and literals from memory, so a relocated instruction would make the lifted code differ from what the processor runs, and nothing else in this design would notice. The relocation tables are read already and so are the regions, so this was a count to make before the first module was lifted. If the count was not zero, the modules that have such a word were to be lifted with that instruction left to the interpreter, which reads it from memory.
+
+## What the count found
+
+On 2026-11-03 all 133 modules were linked onto the static module at addresses that do not overlap, with `hexlith-cro-link`, which gives the position of every word the loader writes. Each word was then placed against the module's own `regions.txt`, and the static module's against the main executable's.
+
+| Where the relocated word falls | Words |
+| --- | --- |
+| Code segment, in a region of kind data | 29,337 |
+| Code segment, in no region | 9,192 |
+| **Code segment, in a region of kind code** | **146** |
+| Read-only data | 26,743 |
+| Data | 601 |
+| Main executable, written by the static module | 331, all in data |
+
+The count is not zero. The 146 are all internal relocations of the absolute kind, and the file holds zero in every one of them. 140 are in 113 modules and are a table of pointers that ends exactly where the code segment does: one pointer in 110 modules, and tables of 6, 7 and 17 in the other three. The remaining 6 are in `DllTitle`, in three pairs of neighbouring words. All 146 lie inside a function the analysis took from a relocation target, which is how a table of pointers came to be read as code.
+
+They are data the analysis classified wrongly, and nothing says the processor executes them. That cannot be shown until a run records the instructions it executed in modules, which comes later in this phase. So the rule above applies to the position of the word and not to the classification, and it covers the 9,192 words in no region as well, in case one of them is code.
 
 ## Consequences
 

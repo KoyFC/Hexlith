@@ -210,5 +210,5 @@ What is not done, and why:
 - **Registers and flags in local variables.** Lifted code reads and writes every register in `CpuState`, and a store to guest memory is a store through a pointer to bytes, which the compiler has to assume may change `CpuState`, so it reads the registers again after each one. It is the largest lever left, and a change to every instruction the emitter writes and to every place lifted code leaves, so it was not started once the gate was met.
 - **The handlers behind the dispatch.** `Execute` calls them out of line at `-O1`; inlining them is the next step for floating point and the exclusive pair, to be weighed against the size of 65,000 call sites.
 - **The fifteen conflicts nothing executes.** Their verdicts are in [`classification.md`](classification.md#the-conflicts-read); one region and a few function records still hold the losing side, at no cost at run time.
-- **The modules**, which are Phase 9 and [ADR 0029](adr/0029-cro-modules-are-lifted-against-a-base-the-loader-gives.md).
+- **The modules**, which are Phase 9 and [ADR 0029](adr/0029-cro-modules-are-lifted-against-a-base-the-loader-gives.md). The count it asked for found 146 words in module code that a relocation writes and the analysis calls code, and so the lifter will leave any instruction at a relocated word to the interpreter.
 

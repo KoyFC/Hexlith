@@ -23,7 +23,7 @@ Everything written into the repository is in English: code, identifiers, comment
 
 ## Status
 
-Phase 9, lifting the 133 CRO modules, is next and waits for a plan the maintainer approves. [ADR 0029](docs/adr/0029-cro-modules-are-lifted-against-a-base-the-loader-gives.md) is its starting design, provisional on a count to make first.
+Phase 9, lifting the 133 CRO modules, is in progress on a plan the maintainer approved. [ADR 0029](docs/adr/0029-cro-modules-are-lifted-against-a-base-the-loader-gives.md) is its design, accepted after a count of the words relocations write into module code.
 
 Phases 0 to 8 are closed. What each one settled is in `docs/adr/` and the history; where Phase 8 ended is at the end of `docs/lifter.md`.
 
