@@ -86,6 +86,12 @@ std::size_t BytesPerPixel(PixelFormat format);
 void EncodePixel(PixelFormat format, const Color& color, std::span<std::uint8_t> bytes);
 Color DecodePixel(PixelFormat format, std::span<const std::uint8_t> bytes);
 
+// A run of pixels one after the other in memory, converted with the format
+// looked up once. `colors` says how many: the bytes must hold that many pixels.
+// The result is what EncodePixel and DecodePixel give for each.
+void EncodePixels(PixelFormat format, std::span<const Color> colors, std::span<std::uint8_t> bytes);
+void DecodePixels(PixelFormat format, std::span<const std::uint8_t> bytes, std::span<Color> colors);
+
 // Depth buffer formats by GPUREG_DEPTHBUFFER_FORMAT's value. Source: GBATEK,
 // Framebuffer registers.
 enum class DepthFormat : std::uint8_t { D16 = 0, D24 = 2, D24S8 = 3 };

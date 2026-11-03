@@ -268,6 +268,10 @@ std::size_t BytesPerPixel(PixelFormat format) {
 
 namespace {
 
+constexpr std::size_t BytesPerPixelOf(PixelFormat format) {
+    return format == PixelFormat::Rgba8 ? 4 : (format == PixelFormat::Rgb8 ? 3 : 2);
+}
+
 // Red in the most significant bits, alpha in the least, little-endian.
 // Source: GBATEK, Texture Formats.
 template<PixelFormat Format>
@@ -325,6 +329,22 @@ Color DecodeAs(std::span<const std::uint8_t> bytes) {
     }
 }
 
+template<PixelFormat Format>
+void EncodeRun(std::span<const Color> colors, std::span<std::uint8_t> bytes) {
+    constexpr std::size_t Size = BytesPerPixelOf(Format);
+    for (std::size_t pixel = 0; pixel < colors.size(); ++pixel) {
+        EncodeAs<Format>(colors[pixel], bytes.subspan(pixel * Size, Size));
+    }
+}
+
+template<PixelFormat Format>
+void DecodeRun(std::span<const std::uint8_t> bytes, std::span<Color> colors) {
+    constexpr std::size_t Size = BytesPerPixelOf(Format);
+    for (std::size_t pixel = 0; pixel < colors.size(); ++pixel) {
+        colors[pixel] = DecodeAs<Format>(bytes.subspan(pixel * Size, Size));
+    }
+}
+
 }  // namespace
 
 void EncodePixel(PixelFormat format, const Color& color, std::span<std::uint8_t> bytes) {
@@ -356,6 +376,40 @@ Color DecodePixel(PixelFormat format, std::span<const std::uint8_t> bytes) {
         return DecodeAs<PixelFormat::Rgba4>(bytes);
     }
     return Color{};
+}
+
+void EncodePixels(PixelFormat format,
+                  std::span<const Color> colors,
+                  std::span<std::uint8_t> bytes) {
+    switch (format) {
+    case PixelFormat::Rgba8:
+        return EncodeRun<PixelFormat::Rgba8>(colors, bytes);
+    case PixelFormat::Rgb8:
+        return EncodeRun<PixelFormat::Rgb8>(colors, bytes);
+    case PixelFormat::Rgb5A1:
+        return EncodeRun<PixelFormat::Rgb5A1>(colors, bytes);
+    case PixelFormat::Rgb565:
+        return EncodeRun<PixelFormat::Rgb565>(colors, bytes);
+    case PixelFormat::Rgba4:
+        return EncodeRun<PixelFormat::Rgba4>(colors, bytes);
+    }
+}
+
+void DecodePixels(PixelFormat format,
+                  std::span<const std::uint8_t> bytes,
+                  std::span<Color> colors) {
+    switch (format) {
+    case PixelFormat::Rgba8:
+        return DecodeRun<PixelFormat::Rgba8>(bytes, colors);
+    case PixelFormat::Rgb8:
+        return DecodeRun<PixelFormat::Rgb8>(bytes, colors);
+    case PixelFormat::Rgb5A1:
+        return DecodeRun<PixelFormat::Rgb5A1>(bytes, colors);
+    case PixelFormat::Rgb565:
+        return DecodeRun<PixelFormat::Rgb565>(bytes, colors);
+    case PixelFormat::Rgba4:
+        return DecodeRun<PixelFormat::Rgba4>(bytes, colors);
+    }
 }
 
 std::optional<DepthFormat> DepthBufferFormat(std::uint32_t value) {

@@ -12,6 +12,61 @@ std::vector<std::uint8_t> Blank(TextureFormat format, std::uint32_t width, std::
     return std::vector<std::uint8_t>(TextureBytes(format, width, height));
 }
 
+constexpr std::array<PixelFormat, 5> AllPixelFormats = {PixelFormat::Rgba8,
+                                                        PixelFormat::Rgb8,
+                                                        PixelFormat::Rgb5A1,
+                                                        PixelFormat::Rgb565,
+                                                        PixelFormat::Rgba4};
+
+// Bytes that no format would produce by accident: every value, in an order
+// that repeats nothing for a long while.
+std::vector<std::uint8_t> Noise(std::size_t count) {
+    std::vector<std::uint8_t> bytes(count);
+    std::uint32_t state = 12345;
+    for (std::uint8_t& byte : bytes) {
+        state = (state * 1664525U) + 1013904223U;
+        byte = static_cast<std::uint8_t>(state >> 24U);
+    }
+    return bytes;
+}
+
+TEST(DecodePixels, GivesWhatDecodingEachPixelGives) {
+    constexpr std::size_t Count = 200;
+    for (const PixelFormat format : AllPixelFormats) {
+        const std::size_t size = BytesPerPixel(format);
+        const std::vector<std::uint8_t> bytes = Noise(Count * size);
+        std::vector<Color> decoded(Count);
+        DecodePixels(format, bytes, decoded);
+        for (std::size_t pixel = 0; pixel < Count; ++pixel) {
+            EXPECT_EQ(decoded[pixel],
+                      DecodePixel(format, std::span(bytes).subspan(pixel * size, size)))
+                << "format " << static_cast<int>(format) << " pixel " << pixel;
+        }
+    }
+}
+
+TEST(EncodePixels, GivesWhatEncodingEachPixelGives) {
+    constexpr std::size_t Count = 200;
+    for (const PixelFormat format : AllPixelFormats) {
+        const std::size_t size = BytesPerPixel(format);
+        const std::vector<std::uint8_t> noise = Noise(Count * 4);
+        std::vector<Color> colors(Count);
+        for (std::size_t pixel = 0; pixel < Count; ++pixel) {
+            colors[pixel] = Color{.red = noise[pixel * 4],
+                                  .green = noise[(pixel * 4) + 1],
+                                  .blue = noise[(pixel * 4) + 2],
+                                  .alpha = noise[(pixel * 4) + 3]};
+        }
+        std::vector<std::uint8_t> encoded(Count * size);
+        EncodePixels(format, colors, encoded);
+        std::vector<std::uint8_t> expected(Count * size);
+        for (std::size_t pixel = 0; pixel < Count; ++pixel) {
+            EncodePixel(format, colors[pixel], std::span(expected).subspan(pixel * size, size));
+        }
+        EXPECT_EQ(encoded, expected) << "format " << static_cast<int>(format);
+    }
+}
+
 TEST(TextureBytes, CountsWholeTiles) {
     EXPECT_EQ(TextureBytes(TextureFormat::Rgba8, 16, 8), 512U);
     EXPECT_EQ(TextureBytes(TextureFormat::A4, 8, 8), 32U);
