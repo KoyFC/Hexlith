@@ -65,6 +65,27 @@ BoundsResult FindFunctionBounds(const WalkImage& image,
                                 std::span<const FunctionRange> entries,
                                 std::span<const Region> regions);
 
+// The same, with an entry made for each run of executed instructions that
+// starts outside every function, and the extents measured again with them.
+//
+// A run that starts outside every function the image gave or a guess found is
+// code that something enters which nothing in the image names. Lifted code can
+// be entered at any of its blocks (ADR 0025), and only a function is lifted, so
+// the start of such a run becomes an entry of its own. Runs that start inside a
+// known function are left to it.
+//
+// A run can hold more than one function, one ending where the next begins, and
+// only the extent of the first is measured from its start; so this is repeated
+// until every executed instruction is in some extent, or the rounds run out. An
+// entry whose extent cannot be measured stays outside every extent, so what was
+// added once is not added again. The entries are added to the vector, and
+// `added` counts them.
+BoundsResult FindFunctionBoundsCoveringObserved(const WalkImage& image,
+                                                std::vector<FunctionRange>& entries,
+                                                std::span<const Region> regions,
+                                                std::span<const WalkSeed> observed,
+                                                std::size_t& added);
+
 }  // namespace hexlith::domain::analysis
 
 #endif  // HEXLITH_DOMAIN_ANALYSIS_FUNCTION_BOUNDS_H

@@ -5,7 +5,9 @@
 #include "domain/arm/decode_thumb.h"
 
 #include <algorithm>
+#include <iterator>
 #include <map>
+#include <set>
 #include <unordered_set>
 
 namespace hexlith::domain::analysis {
@@ -208,6 +210,62 @@ private:
     std::vector<std::uint32_t> reached_;
 };
 
+// Where a run of executed instructions starts outside every function's
+// extent, as function entries. An instruction outside every extent whose
+// predecessor is too belongs to the same run and to the entry made for it.
+std::vector<FunctionRange> EntriesOutsideEveryFunction(std::span<const FunctionRange> functions,
+                                                       std::span<const WalkSeed> observed) {
+    // The extents merged into sorted, disjoint ranges, so that each place is
+    // one search.
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> covered;
+    for (const FunctionRange& function : functions) {
+        // A size of zero is a function whose extent could not be measured.
+        if (function.size != UnknownSize) {
+            covered.emplace_back(function.address, function.address + function.size);
+        }
+    }
+    std::ranges::sort(covered);
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> merged;
+    for (const auto& range : covered) {
+        if (!merged.empty() && range.first <= merged.back().second) {
+            merged.back().second = std::max(merged.back().second, range.second);
+        } else {
+            merged.push_back(range);
+        }
+    }
+    const auto inside = [&merged](std::uint32_t address) {
+        const auto after = std::ranges::upper_bound(
+            merged, address, {}, [](const auto& range) { return range.first; });
+        return after != merged.begin() && address < std::prev(after)->second;
+    };
+
+    std::set<std::pair<std::uint32_t, bool>> outside;
+    for (const WalkSeed& seed : observed) {
+        if (!inside(seed.address)) {
+            outside.emplace(seed.address, seed.instruction_set == arm::InstructionSet::Thumb);
+        }
+    }
+    // An ARM instruction is four bytes, a Thumb one two or four.
+    constexpr std::uint32_t ArmSize = 4;
+    constexpr std::uint32_t ThumbHalf = 2;
+    std::vector<FunctionRange> entries;
+    for (const auto& [address, thumb] : outside) {
+        const bool continues = thumb ? outside.contains({address - ThumbHalf, true}) ||
+                                           outside.contains({address - (2 * ThumbHalf), true})
+                                     : outside.contains({address - ArmSize, false});
+        if (continues) {
+            continue;
+        }
+        entries.push_back(FunctionRange{.address = address,
+                                        .size = UnknownSize,
+                                        .instruction_set = thumb ? arm::InstructionSet::Thumb
+                                                                 : arm::InstructionSet::Arm,
+                                        .alternate_entries = {},
+                                        .source = Provenance::Observed});
+    }
+    return entries;
+}
+
 }  // namespace
 
 BoundsResult FindFunctionBounds(const WalkImage& image,
@@ -294,6 +352,30 @@ BoundsResult FindFunctionBounds(const WalkImage& image,
     }
 
     return result;
+}
+
+BoundsResult FindFunctionBoundsCoveringObserved(const WalkImage& image,
+                                                std::vector<FunctionRange>& entries,
+                                                std::span<const Region> regions,
+                                                std::span<const WalkSeed> observed,
+                                                std::size_t& added_count) {
+    BoundsResult bounds = FindFunctionBounds(image, entries, regions);
+    constexpr int MostRounds = 8;
+    std::set<std::uint32_t> added;
+    for (int round = 0; round < MostRounds; ++round) {
+        std::vector<FunctionRange> unclaimed =
+            EntriesOutsideEveryFunction(bounds.functions, observed);
+        std::erase_if(unclaimed, [&added](const FunctionRange& entry) {
+            return !added.insert(entry.address).second;
+        });
+        if (unclaimed.empty()) {
+            break;
+        }
+        added_count += unclaimed.size();
+        entries.insert(entries.end(), unclaimed.begin(), unclaimed.end());
+        bounds = FindFunctionBounds(image, entries, regions);
+    }
+    return bounds;
 }
 
 }  // namespace hexlith::domain::analysis

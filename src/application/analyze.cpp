@@ -118,65 +118,6 @@ void CountSettledConflicts(AnalyzeReport& report,
     }
 }
 
-// Where a run of executed instructions starts outside every function's
-// extent, as function entries. An instruction outside every extent whose
-// predecessor is too belongs to the same run and to the entry made for it.
-std::vector<analysis::FunctionRange>
-EntriesOutsideEveryFunction(std::span<const analysis::FunctionRange> functions,
-                            std::span<const analysis::WalkSeed> observed) {
-    // The extents merged into sorted, disjoint ranges, so that each place is
-    // one search.
-    std::vector<std::pair<std::uint32_t, std::uint32_t>> covered;
-    for (const analysis::FunctionRange& function : functions) {
-        // A size of zero is a function whose extent could not be measured.
-        if (function.size != analysis::UnknownSize) {
-            covered.emplace_back(function.address, function.address + function.size);
-        }
-    }
-    std::ranges::sort(covered);
-    std::vector<std::pair<std::uint32_t, std::uint32_t>> merged;
-    for (const auto& range : covered) {
-        if (!merged.empty() && range.first <= merged.back().second) {
-            merged.back().second = std::max(merged.back().second, range.second);
-        } else {
-            merged.push_back(range);
-        }
-    }
-    const auto inside = [&merged](std::uint32_t address) {
-        const auto after = std::ranges::upper_bound(
-            merged, address, {}, [](const auto& range) { return range.first; });
-        return after != merged.begin() && address < std::prev(after)->second;
-    };
-
-    std::set<std::pair<std::uint32_t, bool>> outside;
-    for (const analysis::WalkSeed& seed : observed) {
-        if (!inside(seed.address)) {
-            outside.emplace(seed.address,
-                            seed.instruction_set == domain::arm::InstructionSet::Thumb);
-        }
-    }
-    // An ARM instruction is four bytes, a Thumb one two or four.
-    constexpr std::uint32_t ArmSize = 4;
-    constexpr std::uint32_t ThumbHalf = 2;
-    std::vector<analysis::FunctionRange> entries;
-    for (const auto& [address, thumb] : outside) {
-        const bool continues = thumb ? outside.contains({address - ThumbHalf, true}) ||
-                                           outside.contains({address - (2 * ThumbHalf), true})
-                                     : outside.contains({address - ArmSize, false});
-        if (continues) {
-            continue;
-        }
-        entries.push_back(
-            analysis::FunctionRange{.address = address,
-                                    .size = analysis::UnknownSize,
-                                    .instruction_set = thumb ? domain::arm::InstructionSet::Thumb
-                                                             : domain::arm::InstructionSet::Arm,
-                                    .alternate_entries = {},
-                                    .source = analysis::Provenance::Observed});
-    }
-    return entries;
-}
-
 // The entry point, plus every exported function with the instruction set its
 // exported address settled.
 std::vector<analysis::WalkSeed> SeedsFromImage(const domain::profile::GameProfile& profile,
@@ -231,45 +172,6 @@ std::vector<analysis::FunctionRange> EntriesOf(std::span<const analysis::WalkSee
     }
     entries.insert(entries.end(), walked.functions.begin(), walked.functions.end());
     return entries;
-}
-
-// The functions' extents, with an entry made for each run of executed
-// instructions that starts outside every function.
-//
-// A run that starts outside every function the image gave or a guess found
-// is code that something enters which nothing in the image names. Lifted
-// code can be entered at any of its blocks (ADR 0025), and only a function
-// is lifted, so the start of such a run becomes an entry of its own. Runs
-// that start inside a known function are left to it.
-//
-// A run can hold more than one function, one ending where the next
-// begins, and only the extent of the first is measured from its start; so
-// this is repeated until every executed instruction is in some extent, or
-// the rounds run out.
-// An entry whose extent cannot be measured stays outside every extent, so
-// what was added once is not added again.
-analysis::BoundsResult BoundsWithObservedEntries(const analysis::WalkImage& image,
-                                                 std::vector<analysis::FunctionRange>& entries,
-                                                 const analysis::WalkResult& walked,
-                                                 std::span<const analysis::WalkSeed> observed,
-                                                 AnalyzeReport& report) {
-    analysis::BoundsResult bounds = analysis::FindFunctionBounds(image, entries, walked.regions);
-    constexpr int MostRounds = 8;
-    std::set<std::uint32_t> added;
-    for (int round = 0; round < MostRounds; ++round) {
-        std::vector<analysis::FunctionRange> unclaimed =
-            EntriesOutsideEveryFunction(bounds.functions, observed);
-        std::erase_if(unclaimed, [&added](const analysis::FunctionRange& entry) {
-            return !added.insert(entry.address).second;
-        });
-        if (unclaimed.empty()) {
-            break;
-        }
-        report.observed_functions += unclaimed.size();
-        entries.insert(entries.end(), unclaimed.begin(), unclaimed.end());
-        bounds = analysis::FindFunctionBounds(image, entries, walked.regions);
-    }
-    return bounds;
 }
 
 std::uint32_t CodeBytes(std::span<const analysis::Region> regions) {
@@ -378,8 +280,8 @@ Analyze(const AnalyzeRequest& request, const ExistingTables& existing, ports::Bl
     report.walk = walked.report;
 
     std::vector<analysis::FunctionRange> entries = EntriesOf(seeds, walked);
-    const analysis::BoundsResult bounds =
-        BoundsWithObservedEntries(image, entries, walked, observed_seeds, report);
+    const analysis::BoundsResult bounds = analysis::FindFunctionBoundsCoveringObserved(
+        image, entries, walked.regions, observed_seeds, report.observed_functions);
     report.bounds = bounds.report;
     CountSettledConflicts(report, observed.Value());
 
