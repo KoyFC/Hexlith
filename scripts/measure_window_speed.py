@@ -61,6 +61,9 @@ FRAMES_PER_SECOND = 59.83
 CONFIGS = {
     "none": [],
     "intel": ["--window", "--backend", "vulkan", "--device", "Intel"],
+    # The same, with the one fragment shader that reads the stage's registers
+    # (ADR 0031), to say what making one for each configuration saved.
+    "intel-generic": ["--window", "--backend", "vulkan", "--device", "Intel", "--generic-fragments"],
     "llvmpipe": ["--window", "--backend", "vulkan", "--device", "llvmpipe"],
     "reference": ["--window", "--backend", "reference"],
 }
