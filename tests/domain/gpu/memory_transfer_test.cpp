@@ -2,6 +2,8 @@
 #include "domain/gpu/memory_transfer.h"
 #include "domain/gpu/pixel_formats.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <gtest/gtest.h>
 #include <vector>
@@ -138,6 +140,132 @@ TEST(DisplayTransfer, TilesLinearInput) {
     ASSERT_EQ(RunTransfer(memory, config), TransferOutcome::Done);
     EXPECT_EQ(Read(memory, Output + static_cast<std::uint32_t>(TiledOffset(1, 1, 8, 4)), 4),
               (std::vector<std::uint8_t>{5, 6, 7, 8}));
+}
+
+// What a display transfer does, one pixel at a time and in the order the
+// description gives: read each pixel of the output's rows from the input in its
+// layout, convert it, write it in the output's layout, flipped if asked.
+std::vector<std::uint8_t> TransferByPixel(const std::vector<std::uint8_t>& input,
+                                          PixelFormat in_format,
+                                          PixelFormat out_format,
+                                          bool input_tiled,
+                                          bool flip,
+                                          bool crop,
+                                          std::uint32_t input_width,
+                                          std::uint32_t width,
+                                          std::uint32_t height) {
+    const std::size_t in_bytes = BytesPerPixel(in_format);
+    const std::size_t out_bytes = BytesPerPixel(out_format);
+    // A flipped transfer that crops lands lower (docs/pica-rasterizer.md).
+    const std::size_t shift = flip && crop ? (input_width - width) * (height - 1) * out_bytes : 0;
+    // A tiled layout takes whole tiles, so a size that is not a multiple of eight
+    // has room for the pixels past its edge.
+    const std::size_t padded =
+        std::size_t{(width + 7) / 8 * 8} * ((height + 7) / 8 * 8) * out_bytes;
+    std::vector<std::uint8_t> output(shift + padded);
+    for (std::uint32_t y = 0; y < height; ++y) {
+        for (std::uint32_t x = 0; x < width; ++x) {
+            const std::size_t from = input_tiled ? TiledOffset(x, y, input_width, in_bytes)
+                                                 : ((std::size_t{y} * input_width) + x) * in_bytes;
+            const Color color = DecodePixel(in_format, std::span(input).subspan(from, in_bytes));
+            const std::uint32_t row = flip ? height - y - 1 : y;
+            const std::size_t to = input_tiled ? ((std::size_t{row} * width) + x) * out_bytes
+                                               : TiledOffset(x, row, width, out_bytes);
+            EncodePixel(out_format, color, std::span(output).subspan(shift + to, out_bytes));
+        }
+    }
+    return output;
+}
+
+constexpr std::uint32_t OutputCleared = 4096;
+
+// Every pair of formats, both ways of laying the pixels out, flipped or not,
+// cropped or not, over sizes whole tiles make up and sizes they do not.
+TEST(DisplayTransfer, DoesWhatConvertingEachPixelDoes) {
+    constexpr std::array<PixelFormat, 5> Formats = {PixelFormat::Rgba8,
+                                                    PixelFormat::Rgb8,
+                                                    PixelFormat::Rgb565,
+                                                    PixelFormat::Rgb5A1,
+                                                    PixelFormat::Rgba4};
+
+    struct Shape {
+        std::uint32_t input_width;
+        std::uint32_t width;
+        std::uint32_t height;
+    };
+
+    GpuMemory memory;
+    for (const Shape shape : {Shape{24, 16, 16}, Shape{16, 16, 8}, Shape{12, 10, 6}}) {
+        for (const PixelFormat in_format : Formats) {
+            for (const PixelFormat out_format : Formats) {
+                for (const bool input_tiled : {true, false}) {
+                    for (const bool flip : {false, true}) {
+                        for (const bool crop : {false, true}) {
+                            const std::size_t in_bytes = BytesPerPixel(in_format);
+                            std::vector<std::uint8_t> input(
+                                std::size_t{(shape.input_width + 7) / 8 * 8} *
+                                ((shape.height + 7) / 8 * 8) * in_bytes);
+                            std::uint32_t state = 7;
+                            for (std::uint8_t& byte : input) {
+                                state = (state * 1664525U) + 1013904223U;
+                                byte = static_cast<std::uint8_t>(state >> 24U);
+                            }
+                            // The output is zero where nothing is written, as in a new memory.
+                            std::ranges::fill(memory.Bytes(Output, OutputCleared), 0);
+                            std::ranges::copy(
+                                input,
+                                memory.Bytes(Base, static_cast<std::uint32_t>(input.size()))
+                                    .begin());
+                            const auto code = [](PixelFormat format) {
+                                switch (format) {
+                                case PixelFormat::Rgba8:
+                                    return 0U;
+                                case PixelFormat::Rgb8:
+                                    return 1U;
+                                case PixelFormat::Rgb565:
+                                    return 2U;
+                                case PixelFormat::Rgb5A1:
+                                    return 3U;
+                                case PixelFormat::Rgba4:
+                                    return 4U;
+                                }
+                                return 0U;
+                            };
+                            const std::uint32_t flags =
+                                (flip ? FlipVertically : 0U) | (input_tiled ? 0U : InputLinear) |
+                                (crop ? (1U << 2) : 0U) | (code(in_format) << 8) |
+                                (code(out_format) << 12);
+                            ASSERT_EQ(
+                                RunTransfer(memory,
+                                            {.input = Base,
+                                             .output = Output,
+                                             .input_size = Size(shape.input_width, shape.height),
+                                             .output_size = Size(shape.width, shape.height),
+                                             .flags = flags}),
+                                TransferOutcome::Done);
+                            const std::vector<std::uint8_t> expected =
+                                TransferByPixel(input,
+                                                in_format,
+                                                out_format,
+                                                input_tiled,
+                                                flip,
+                                                crop,
+                                                shape.input_width,
+                                                shape.width,
+                                                shape.height);
+                            EXPECT_EQ(
+                                Read(memory, Output, static_cast<std::uint32_t>(expected.size())),
+                                expected)
+                                << "in " << static_cast<int>(in_format) << " out "
+                                << static_cast<int>(out_format) << " tiled " << input_tiled
+                                << " flip " << flip << " crop " << crop << " width " << shape.width
+                                << "x" << shape.height;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 TEST(DisplayTransfer, RefusesWhatAzaharDoesNotImplement) {

@@ -1,6 +1,7 @@
 #include "domain/gpu/memory_transfer.h"
 
 #include "domain/gpu/pixel_formats.h"
+#include "domain/video/morton.h"
 
 #include <algorithm>
 #include <array>
@@ -148,6 +149,126 @@ TransferOutcome CopyTexture(GpuMemory& memory, const TransferConfig& config) {
     return TransferOutcome::Done;
 }
 
+constexpr std::uint32_t TileSide = 8;
+constexpr std::size_t TilePixels = std::size_t{TileSide} * TileSide;
+
+// Where each pixel of a tile is, by its place in memory: the inverse of
+// MortonIndex.
+struct TilePlace {
+    std::uint8_t x;
+    std::uint8_t y;
+};
+
+constexpr std::array<TilePlace, TilePixels> TilePlaces = [] {
+    std::array<TilePlace, TilePixels> places{};
+    for (std::uint32_t y = 0; y < TileSide; ++y) {
+        for (std::uint32_t x = 0; x < TileSide; ++x) {
+            places.at(video::MortonIndex(x, y)) =
+                TilePlace{.x = static_cast<std::uint8_t>(x), .y = static_cast<std::uint8_t>(y)};
+        }
+    }
+    return places;
+}();
+
+// What a transfer between a tiled layout and a linear one does, with the
+// conversion done a tile at a time and the format looked up once for each
+// tile instead of each pixel. It is the same transfer as the general one: each
+// pixel of the output's rows is read from the input, converted and written,
+// flipped as asked. It is taken only when the pixels it touches are all in
+// the memory handed in, and whole tiles make up the output, which is what the
+// screens' transfers are; the general one does the rest.
+struct TiledTransfer {
+    std::span<const std::uint8_t> input;
+    std::span<std::uint8_t> output;
+    PixelFormat input_format;
+    PixelFormat output_format;
+    bool input_tiled;
+    bool flip;
+    std::uint32_t input_width;
+    std::uint32_t width;
+    std::uint32_t height;
+};
+
+bool Fits(const TiledTransfer& transfer) {
+    const std::size_t in_bytes = BytesPerPixel(transfer.input_format);
+    const std::size_t out_bytes = BytesPerPixel(transfer.output_format);
+    const std::uint32_t last_x = transfer.width - TileSide;
+    const std::uint32_t last_y = transfer.height - TileSide;
+    const std::size_t input_end =
+        (transfer.input_tiled
+             ? TiledOffset(last_x, last_y, transfer.input_width, in_bytes)
+             : ((std::size_t{last_y} * transfer.input_width) + last_x) * in_bytes) +
+        (TilePixels * in_bytes);
+    const std::size_t output_end =
+        (transfer.input_tiled ? ((std::size_t{last_y} * transfer.width) + last_x) * out_bytes
+                              : TiledOffset(last_x, last_y, transfer.width, out_bytes)) +
+        (TilePixels * out_bytes);
+    // The linear side's last row ends where its tile's does only if the tile is
+    // a whole number of rows from the buffer's end, so the rows are checked too.
+    const std::size_t linear_input_end =
+        transfer.input_tiled
+            ? 0
+            : (std::size_t{transfer.height - 1} * transfer.input_width + transfer.width) * in_bytes;
+    const std::size_t linear_output_end =
+        transfer.input_tiled
+            ? (std::size_t{transfer.height - 1} * transfer.width + transfer.width) * out_bytes
+            : 0;
+    return std::max(input_end, linear_input_end) <= transfer.input.size() &&
+           std::max(output_end, linear_output_end) <= transfer.output.size();
+}
+
+void RunTiledTransfer(const TiledTransfer& transfer) {
+    const std::size_t in_bytes = BytesPerPixel(transfer.input_format);
+    const std::size_t out_bytes = BytesPerPixel(transfer.output_format);
+    std::array<Color, TilePixels> tile{};
+    // The same pixels in rows, for the side that is linear.
+    std::array<Color, TilePixels> rows{};
+    for (std::uint32_t tile_y = 0; tile_y < transfer.height / TileSide; ++tile_y) {
+        for (std::uint32_t tile_x = 0; tile_x < transfer.width / TileSide; ++tile_x) {
+            const std::uint32_t x = tile_x * TileSide;
+            const std::uint32_t y = tile_y * TileSide;
+            // Where the tile's rows end up: the output's rows are the input's,
+            // upside down if flipped.
+            const std::uint32_t target_y = transfer.flip ? transfer.height - TileSide - y : y;
+            if (transfer.input_tiled) {
+                const std::size_t from = TiledOffset(x, y, transfer.input_width, in_bytes);
+                DecodePixels(transfer.input_format,
+                             transfer.input.subspan(from, TilePixels * in_bytes),
+                             tile);
+                for (std::size_t at = 0; at < TilePixels; ++at) {
+                    const std::uint32_t row =
+                        transfer.flip ? TileSide - 1 - TilePlaces.at(at).y : TilePlaces.at(at).y;
+                    rows.at((row * TileSide) + TilePlaces.at(at).x) = tile.at(at);
+                }
+                for (std::uint32_t row = 0; row < TileSide; ++row) {
+                    const std::size_t to =
+                        ((std::size_t{target_y + row} * transfer.width) + x) * out_bytes;
+                    EncodePixels(transfer.output_format,
+                                 std::span<const Color>(rows).subspan(row * TileSide, TileSide),
+                                 transfer.output.subspan(to, TileSide * out_bytes));
+                }
+            } else {
+                for (std::uint32_t row = 0; row < TileSide; ++row) {
+                    const std::size_t from =
+                        ((std::size_t{y + row} * transfer.input_width) + x) * in_bytes;
+                    DecodePixels(transfer.input_format,
+                                 transfer.input.subspan(from, TileSide * in_bytes),
+                                 std::span<Color>(rows).subspan(row * TileSide, TileSide));
+                }
+                for (std::size_t at = 0; at < TilePixels; ++at) {
+                    const std::uint32_t row =
+                        transfer.flip ? TileSide - 1 - TilePlaces.at(at).y : TilePlaces.at(at).y;
+                    tile.at(at) = rows.at((row * TileSide) + TilePlaces.at(at).x);
+                }
+                const std::size_t to = TiledOffset(x, target_y, transfer.width, out_bytes);
+                EncodePixels(transfer.output_format,
+                             tile,
+                             transfer.output.subspan(to, TilePixels * out_bytes));
+            }
+        }
+    }
+}
+
 // Pixels, converted from one format to another, from tiled to linear or the
 // other way or neither, flipped and downscaled as the flags say.
 TransferOutcome TransferDisplay(GpuMemory& memory, const TransferConfig& config) {
@@ -192,6 +313,20 @@ TransferOutcome TransferDisplay(GpuMemory& memory, const TransferConfig& config)
     // swizzling is off, when both stay as they are.
     const bool input_tiled = !input_linear;
     const bool output_tiled = swizzle ? input_linear : !input_linear;
+    const TiledTransfer tiles{.input = input,
+                              .output = output,
+                              .input_format = *input_format,
+                              .output_format = *output_format,
+                              .input_tiled = input_tiled,
+                              .flip = flip,
+                              .input_width = input_width,
+                              .width = output_width,
+                              .height = output_height};
+    if (scaling == NoScale && input_tiled != output_tiled && output_width % TileSide == 0 &&
+        output_height % TileSide == 0 && Fits(tiles)) {
+        RunTiledTransfer(tiles);
+        return TransferOutcome::Done;
+    }
     // A downscale averages the pixel and the ones after it in memory, which
     // in a tile are its neighbours. Source: Azahar.
     const std::size_t averaged = std::size_t{1} << (horizontal + vertical);
