@@ -49,7 +49,8 @@ int main(int argc, char** argv) {
     const std::vector<std::uint32_t> entries = {sample::At(sample::SumIndex),
                                                 sample::At(sample::CallerIndex),
                                                 sample::At(sample::SwitcherIndex),
-                                                sample::At(sample::MixedIndex)};
+                                                sample::At(sample::MixedIndex),
+                                                sample::At(sample::PatchedIndex)};
     const std::unordered_set<std::uint32_t> entry_set{entries.begin(), entries.end()};
     const std::vector<analysis::Region> regions = {
         analysis::Region{.address = sample::At(sample::TableIndex),
@@ -66,6 +67,10 @@ int main(int argc, char** argv) {
             return lift::DefaultFunctionName(address, set);
         }
         return std::nullopt;
+    };
+
+    context.relocated = [](std::uint32_t address) {
+        return address == sample::At(sample::RelocatedIndex);
     };
 
     std::ofstream out{arguments[1]};
@@ -98,7 +103,7 @@ int main(int argc, char** argv) {
         // the one that is running, so the tests that open it say it by name.
         out << std::format(
             "\nextern \"C\" {{\n"
-            "const char* hexlith_lifted_manifest() {{ return \"lifter={} code={} functions=4\"; }}\n"
+            "const char* hexlith_lifted_manifest() {{ return \"lifter={} code={} functions=5\"; }}\n"
             "void hexlith_lifted_register(void* table) {{\n"
             "    hexlith::domain::lift::sample_lifted::Register(\n"
             "        *static_cast<hexlith::domain::lift::runtime::EntryTable*>(table));\n"

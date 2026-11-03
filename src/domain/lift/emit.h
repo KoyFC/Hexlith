@@ -19,6 +19,10 @@ struct EmitContext {
     // instruction set, if there is one. A call or a tail call to an address
     // without one leaves the lifted code for the engine to continue.
     std::function<std::optional<std::string>(std::uint32_t, arm::InstructionSet)> function_at;
+
+    // Whether the word at an aligned address is one a relocation writes.
+    // Nothing is assumed when it is empty.
+    std::function<bool(std::uint32_t)> relocated;
 };
 
 struct EmittedFunction {

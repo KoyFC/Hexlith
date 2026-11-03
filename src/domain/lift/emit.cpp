@@ -368,9 +368,41 @@ private:
             Line(std::format("c.budget -= {};", cost));
         }
         for (std::size_t index = 0; index < block.instructions.size(); ++index) {
-            Instruction(block.instructions.at(index), cost - index);
+            const PlacedInstruction& placed = block.instructions.at(index);
+            if (OverlapsRelocatedWord(placed)) {
+                // Nothing after it can be reached from here: the interpreter takes
+                // it, and the engine picks the lifted code up again at a block.
+                LeaveRelocatedWord(placed, cost - index);
+                return;
+            }
+            Instruction(placed, cost - index);
         }
         EndOfBlock(block);
+    }
+
+    // Whether any word of the instruction is one a relocation writes. The file
+    // holds the word as it was before the loader patched it, so what is lifted
+    // from it would not be what the processor runs.
+    [[nodiscard]] bool OverlapsRelocatedWord(const PlacedInstruction& placed) const {
+        if (!context_->relocated) {
+            return false;
+        }
+        constexpr std::uint32_t WordMask = ~std::uint32_t{3};
+        const std::uint32_t last = placed.address + placed.instruction.width - 1;
+        for (std::uint32_t word = placed.address & WordMask; word <= (last & WordMask);
+             word += sizeof(std::uint32_t)) {
+            if (context_->relocated(word)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void LeaveRelocatedWord(const PlacedInstruction& placed, std::size_t unexecuted) {
+        Line(std::format(
+            "// {:08X} {}", placed.address, arm::Mnemonic(placed.instruction.operation)));
+        Line("// relocated at load: the interpreter reads it from memory");
+        Line(std::format("return runtime::Bail(c, {}, {});", Hex(placed.address), unexecuted));
     }
 
     // `unexecuted` is how many of the block's instructions have not run when this

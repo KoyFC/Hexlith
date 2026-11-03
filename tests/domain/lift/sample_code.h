@@ -35,6 +35,14 @@ constexpr std::uint32_t SumIndex = 0;
 constexpr std::uint32_t CallerIndex = 8;
 constexpr std::uint32_t SwitcherIndex = 18;
 constexpr std::uint32_t MixedIndex = 32;
+constexpr std::uint32_t PatchedIndex = 44;
+
+// The word of the patched function that a module's loader would have written
+// over: the file says one thing and memory another. The generated code is told
+// the word is relocated, so the test runs it against memory's version.
+constexpr std::uint32_t RelocatedIndex = PatchedIndex + 1;
+constexpr std::uint32_t RelocatedFileWord = 0xE3A00002;    // mov r0, #2
+constexpr std::uint32_t RelocatedMemoryWord = 0xE3A00007;  // mov r0, #7
 
 // Where the jump table of the switcher is, and how many entries it holds.
 constexpr std::uint32_t TableIndex = 21;
@@ -103,6 +111,12 @@ constexpr std::array<std::uint32_t, SentinelIndex + 1> Code = [] {
     words[40] = 0xE8930006;                    // ldm r3, {r1, r2}
     words[41] = 0xE0800001;                    // add r0, r0, r1
     words[42] = 0xE8BD8030;                    // pop {r4, r5, pc}
+
+    // patched: r0 is 1, then whatever the relocated word makes it, then 10 more.
+    words[44] = 0xE3A00001;         // mov r0, #1
+    words[45] = RelocatedFileWord;  // mov r0, #2 in the file
+    words[46] = 0xE280000A;         // add r0, r0, #10
+    words[47] = 0xE12FFF1E;         // bx lr
 
     words[SentinelIndex] = 0xEF000000;  // svc #0
     return words;

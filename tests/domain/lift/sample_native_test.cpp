@@ -31,12 +31,20 @@ constexpr std::uint32_t Stack = 0x00300000;
 // The code, a page of data and a page of stack, mapped the way a process has
 // them.
 struct World {
-    World() {
+    // With `patched`, the word the sample marks as relocated holds what a loader
+    // would have written there and not what the file says.
+    explicit World(bool patched) {
         const std::shared_ptr<Backing> code = Backing::Allocate(2 * Page);
         for (std::size_t index = 0; index < sample::Code.size(); ++index) {
             for (unsigned byte = 0; byte < 4; ++byte) {
                 code->Bytes()[(index * 4) + byte] =
                     static_cast<std::uint8_t>(sample::Code.at(index) >> (8U * byte));
+            }
+        }
+        if (patched) {
+            for (unsigned byte = 0; byte < 4; ++byte) {
+                code->Bytes()[(sample::RelocatedIndex * 4) + byte] =
+                    static_cast<std::uint8_t>(sample::RelocatedMemoryWord >> (8U * byte));
             }
         }
         EXPECT_TRUE(memory.Map(sample::Base, 2 * Page, code, 0, Access::ReadExecute));
@@ -54,6 +62,7 @@ struct Start {
     std::uint32_t r1 = 0;
     bool zero = false;
     bool carry = false;
+    bool patched = false;
 };
 
 void Prepare(World& world, const Start& start) {
@@ -108,8 +117,8 @@ std::string Differences(World& expected, World& actual) {
 // limit, and says how they differ.
 std::string
 Disagreement(const runtime::EntryTable& table, const Start& start, std::uint64_t limit) {
-    World reference;
-    World lifted;
+    World reference{start.patched};
+    World lifted{start.patched};
     Prepare(reference, start);
     Prepare(lifted, start);
 
@@ -192,6 +201,22 @@ TEST(GeneratedCode, StoppingAfterAnyNumberOfInstructionsAgreesWithTheInterpreter
             EXPECT_EQ(Disagreement(table, start, limit), "")
                 << "entry " << std::hex << entry << " limit " << std::dec << limit;
         }
+    }
+}
+
+// The lifter reads the file, where a relocation has not yet been applied, so an
+// instruction at a relocated word must come from memory instead.
+TEST(GeneratedCode, ARelocatedWordRunsAsMemoryHasItAndNotAsTheFileHasIt) {
+    const runtime::EntryTable table = SampleTable();
+    const Start start{.entry = sample::At(sample::PatchedIndex), .patched = true};
+    EXPECT_EQ(Disagreement(table, start, 100000), "");
+}
+
+TEST(GeneratedCode, StoppingInAFunctionWithARelocatedWordAgreesWithTheInterpreter) {
+    const runtime::EntryTable table = SampleTable();
+    for (std::uint64_t limit = 1; limit < 8; ++limit) {
+        const Start start{.entry = sample::At(sample::PatchedIndex), .patched = true};
+        EXPECT_EQ(Disagreement(table, start, limit), "") << "limit " << limit;
     }
 }
 
