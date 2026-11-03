@@ -1,5 +1,6 @@
 #include "domain/arm/decode_arm.h"
 #include "domain/arm/decode_thumb.h"
+#include "domain/lift/evaluate.h"
 #include "domain/lift/lower.h"
 
 #include "differential.h"
@@ -57,6 +58,35 @@ void ExpectThumb(std::uint16_t halfword, const test::Setup& setup = DefaultSetup
 
 ir::Instruction LowerArm(std::uint32_t word) {
     return Lower(PlacedInstruction{.address = test::Code, .instruction = Arm(word)});
+}
+
+// What a module's code computes from its own address is an offset from where it
+// is, and the lowering is given the offset.
+TEST(LowerForAModule, AddressesItComputesFromTheProgramCounterMoveWithTheBase) {
+    constexpr std::uint32_t Offset = 0x1230;
+    constexpr std::uint32_t PipelineOffset = 8;
+    for (const std::uint32_t base : {0x006A5000U, 0x007E5000U}) {
+        test::Machine machine;
+        const ir::Instruction lowered = Lower(PlacedInstruction{
+            .address = Offset, .instruction = Arm(0xE28F0004)});  // add r0, pc, #4
+        EXPECT_EQ(Evaluate(lowered, machine.state, machine.memory, base).kind,
+                  EvaluationKind::Completed);
+        EXPECT_EQ(machine.state.registers.at(0), base + Offset + PipelineOffset + 4);
+    }
+}
+
+TEST(LowerForAModule, TheLinkRegisterOfACallPointsBackIntoTheModule) {
+    constexpr std::uint32_t Offset = 0x1230;
+    constexpr std::uint32_t InstructionWidth = 4;
+    for (const std::uint32_t base : {0x006A5000U, 0x007E5000U}) {
+        test::Machine machine;
+        const ir::Instruction lowered =
+            Lower(PlacedInstruction{.address = Offset, .instruction = Arm(0xE12FFF31)});  // blx r1
+        machine.state.registers.at(1) = base + 0x400;
+        EXPECT_EQ(Evaluate(lowered, machine.state, machine.memory, base).kind,
+                  EvaluationKind::Completed);
+        EXPECT_EQ(machine.state.registers.at(arm::LinkRegister), base + Offset + InstructionWidth);
+    }
 }
 
 TEST(Lower, DataProcessingWithTwoRegisters) {

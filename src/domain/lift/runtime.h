@@ -93,6 +93,13 @@ struct Context {
     memory::ProcessMemory* memory = nullptr;
     const EntryTable* entries = nullptr;
 
+    // Where the module whose code is running is mapped. Module code is lifted
+    // at offsets from its start and adds this to every address it computes or
+    // hands back; the main executable's code is lifted at the addresses it runs
+    // at and leaves this alone. A branch or a call inside a module cannot leave
+    // it, so only the engine changes it.
+    std::uint32_t base = 0;
+
     // Ticks the run may still spend. A block is charged when it is entered, so
     // this is what the clock reads at the start of the block that is running.
     std::int64_t budget = 0;

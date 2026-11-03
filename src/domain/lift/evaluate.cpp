@@ -35,10 +35,14 @@ bool& FlagOf(arm::CpuState& state, std::uint32_t index) {
 
 class Temporaries {
 public:
+    explicit Temporaries(std::uint32_t base) : base_(base) {}
+
     [[nodiscard]] std::uint32_t Get(const Operand& operand) const {
         switch (operand.kind) {
         case Operand::Kind::Immediate:
             return operand.value;
+        case Operand::Kind::Address:
+            return base_ + operand.value;
         case Operand::Kind::Temporary:
             return values_.at(operand.value);
         case Operand::Kind::None:
@@ -58,6 +62,7 @@ public:
     }
 
 private:
+    std::uint32_t base_;
     std::array<std::uint32_t, MaximumTemporaries> values_{};
 };
 
@@ -218,21 +223,25 @@ bool PassesItsCondition(const ir::Instruction& instruction, const arm::CpuState&
 // moves it on; r15 is only pointed at the instruction long enough to fetch it,
 // unless the handler stops there.
 template<memory::GuestMemory Memory>
-Early ApplyHandler(const ir::Instruction& instruction, arm::CpuState& state, Memory& memory) {
+Early ApplyHandler(const ir::Instruction& instruction,
+                   arm::CpuState& state,
+                   Memory& memory,
+                   std::uint32_t base) {
+    const std::uint32_t address = base + instruction.address;
     std::uint32_t& pc = state.registers.at(arm::ProgramCounter);
     const std::uint32_t before = pc;
-    pc = instruction.address;
+    pc = address;
     const std::variant<arm::Instruction, arm::Stop> fetched =
         arm::interpreter::Fetch(state, memory);
     pc = before;
     if (const auto* stopped = std::get_if<arm::Stop>(&fetched)) {
         return Early{Evaluation{.kind = EvaluationKind::Stopped, .stop = *stopped}};
     }
-    const arm::Stop stop = arm::ExecuteHandler(
-        state, memory, std::get<arm::Instruction>(fetched), instruction.address);
+    const arm::Stop stop =
+        arm::ExecuteHandler(state, memory, std::get<arm::Instruction>(fetched), address);
     if (stop.Stopped()) {
         // Stopped at the instruction, as the interpreter leaves r15.
-        pc = instruction.address;
+        pc = address;
         return Early{Evaluation{.kind = EvaluationKind::Stopped, .stop = stop}};
     }
     return std::nullopt;
@@ -243,7 +252,8 @@ Early Apply(const ir::Instruction& instruction,
             const ir::Op& op,
             Temporaries& t,
             arm::CpuState& state,
-            Memory& memory) {
+            Memory& memory,
+            std::uint32_t base) {
     switch (op.kind) {
     case OpKind::ReadRegister:
     case OpKind::WriteRegister:
@@ -265,13 +275,13 @@ Early Apply(const ir::Instruction& instruction,
     case OpKind::BailIf:
         return t.Bit(op.a) ? Early{BailedOut} : std::nullopt;
     case OpKind::Interpret: {
-        state.registers.at(arm::ProgramCounter) = instruction.address;
+        state.registers.at(arm::ProgramCounter) = base + instruction.address;
         const arm::Stop stop = arm::Step(state, memory);
         return stop.Stopped() ? Early{Evaluation{.kind = EvaluationKind::Stopped, .stop = stop}}
                               : std::nullopt;
     }
     case OpKind::Execute:
-        return ApplyHandler(instruction, state, memory);
+        return ApplyHandler(instruction, state, memory, base);
     default:
         ApplyArithmetic(op, t);
         return std::nullopt;
@@ -281,23 +291,30 @@ Early Apply(const ir::Instruction& instruction,
 }  // namespace
 
 template<memory::GuestMemory Memory>
-Evaluation Evaluate(const ir::Instruction& instruction, arm::CpuState& state, Memory& memory) {
+Evaluation Evaluate(const ir::Instruction& instruction,
+                    arm::CpuState& state,
+                    Memory& memory,
+                    std::uint32_t base) {
     if (!PassesItsCondition(instruction, state)) {
         return {};
     }
 
-    Temporaries t;
+    Temporaries t{base};
     for (const ir::Op& op : instruction.ops) {
-        if (const Early left = Apply(instruction, op, t, state, memory)) {
+        if (const Early left = Apply(instruction, op, t, state, memory, base)) {
             return *left;
         }
     }
     return {};
 }
 
-template Evaluation
-Evaluate<memory::PagedMemory>(const ir::Instruction&, arm::CpuState&, memory::PagedMemory&);
-template Evaluation
-Evaluate<memory::ProcessMemory>(const ir::Instruction&, arm::CpuState&, memory::ProcessMemory&);
+template Evaluation Evaluate<memory::PagedMemory>(const ir::Instruction&,
+                                                  arm::CpuState&,
+                                                  memory::PagedMemory&,
+                                                  std::uint32_t);
+template Evaluation Evaluate<memory::ProcessMemory>(const ir::Instruction&,
+                                                    arm::CpuState&,
+                                                    memory::ProcessMemory&,
+                                                    std::uint32_t);
 
 }  // namespace hexlith::domain::lift

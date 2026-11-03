@@ -75,6 +75,8 @@ std::string Describe(const Operand& operand) {
             return operand.value != 0 ? "true" : "false";
         }
         return std::format("{:#x}", operand.value);
+    case Operand::Kind::Address:
+        return std::format("@{:#x}", operand.value);
     case Operand::Kind::Temporary:
         return std::format("t{}", operand.value);
     }

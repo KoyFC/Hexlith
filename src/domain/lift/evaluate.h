@@ -44,13 +44,24 @@ struct Evaluation {
 // against the interpreter without building any C++: run the instruction both
 // ways from the same state and compare. The generated code is checked against
 // the interpreter separately, because it is a second translation.
+//
+// For a module's code, `base` is where the module is: the instruction's address
+// is an offset from it, and so is every address the lowering computed from it.
+// The main executable's has a base of zero.
 template<memory::GuestMemory Memory>
-Evaluation Evaluate(const ir::Instruction& instruction, arm::CpuState& state, Memory& memory);
+Evaluation Evaluate(const ir::Instruction& instruction,
+                    arm::CpuState& state,
+                    Memory& memory,
+                    std::uint32_t base = 0);
 
-extern template Evaluation
-Evaluate<memory::PagedMemory>(const ir::Instruction&, arm::CpuState&, memory::PagedMemory&);
-extern template Evaluation
-Evaluate<memory::ProcessMemory>(const ir::Instruction&, arm::CpuState&, memory::ProcessMemory&);
+extern template Evaluation Evaluate<memory::PagedMemory>(const ir::Instruction&,
+                                                         arm::CpuState&,
+                                                         memory::PagedMemory&,
+                                                         std::uint32_t);
+extern template Evaluation Evaluate<memory::ProcessMemory>(const ir::Instruction&,
+                                                           arm::CpuState&,
+                                                           memory::ProcessMemory&,
+                                                           std::uint32_t);
 
 }  // namespace hexlith::domain::lift
 

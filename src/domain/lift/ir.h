@@ -35,9 +35,15 @@ namespace hexlith::domain::lift::ir {
 enum class Type : std::uint8_t { Bit, Word };
 
 // Where an operation's input comes from: nothing, a constant the lifter knew,
-// or a temporary an earlier operation of the same instruction produced.
+// an address of the code being lifted, or a temporary an earlier operation of
+// the same instruction produced.
+//
+// An address is a constant of the code's own address space: the instruction's
+// address plus an offset, or the address after it. For the main executable that
+// is where it is mapped. For a module it is an offset from where the module is,
+// and the base is added where the code runs.
 struct Operand {
-    enum class Kind : std::uint8_t { None, Immediate, Temporary };
+    enum class Kind : std::uint8_t { None, Immediate, Address, Temporary };
 
     Kind kind = Kind::None;
     Type type = Type::Word;
@@ -45,6 +51,10 @@ struct Operand {
 
     [[nodiscard]] static Operand Word(std::uint32_t immediate) {
         return {.kind = Kind::Immediate, .type = Type::Word, .value = immediate};
+    }
+
+    [[nodiscard]] static Operand Address(std::uint32_t address) {
+        return {.kind = Kind::Address, .type = Type::Word, .value = address};
     }
 
     [[nodiscard]] static Operand Bit(bool immediate) {

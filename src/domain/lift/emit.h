@@ -23,6 +23,12 @@ struct EmitContext {
     // Whether the word at an aligned address is one a relocation writes.
     // Nothing is assumed when it is empty.
     std::function<bool(std::uint32_t)> relocated;
+
+    // Whether the code is a module's. Its addresses are then offsets from the
+    // module's start, and every address the code computes or hands back is the
+    // offset added to runtime::Context::base. The main executable's addresses
+    // are where it is mapped, always.
+    bool module = false;
 };
 
 struct EmittedFunction {

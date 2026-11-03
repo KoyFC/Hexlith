@@ -282,7 +282,7 @@ private:
     // instruction's address plus the pipeline offset, which the lifter knows.
     Operand Read(arm::RegisterIndex index) {
         if (index == arm::ProgramCounter) {
-            return Operand::Word(primitives::ReadProgramCounter(address_, thumb_));
+            return Operand::Address(primitives::ReadProgramCounter(address_, thumb_));
         }
         return Produce(OpKind::ReadRegister, Type::Word, {.index = index});
     }
@@ -290,7 +290,7 @@ private:
     // The same, rounded down to a word in Thumb, as a literal address is.
     Operand ReadAligned(arm::RegisterIndex index) {
         if (index == arm::ProgramCounter) {
-            return Operand::Word(primitives::ReadAlignedProgramCounter(address_, thumb_));
+            return Operand::Address(primitives::ReadAlignedProgramCounter(address_, thumb_));
         }
         return Read(index);
     }
@@ -301,7 +301,7 @@ private:
 
     void WriteLink() {
         const std::uint32_t link = (address_ + instruction_.width) | (thumb_ ? 1U : 0U);
-        Write(arm::LinkRegister, Operand::Word(link));
+        Write(arm::LinkRegister, Operand::Address(link));
     }
 
     // --- Branches ---------------------------------------------------------------

@@ -340,6 +340,12 @@ public:
     }
 
 private:
+    // An address of the code being written, as C++. A module's code is lifted at
+    // offsets, and the base the module is at is added where the code runs.
+    [[nodiscard]] std::string Addr(std::uint32_t address) const {
+        return context_->module ? std::format("(c.base + {})", Hex(address)) : Hex(address);
+    }
+
     void Line(std::string_view text) {
         out_ += std::format("{}{}\n", std::string(indent_ * 4, ' '), text);
     }
@@ -348,7 +354,7 @@ private:
     // what lets the engine pick up where the guest left off.
     void EntrySwitch(EmittedFunction& emitted) {
         indent_ = 1;
-        Line("switch (pc) {");
+        Line(context_->module ? "switch (pc - c.base) {" : "switch (pc) {");
         for (const BasicBlock& block : function_->blocks) {
             Line(std::format("case {}: goto {};", Hex(block.start), Label(block.start)));
             emitted.entries.push_back(block.start);
@@ -364,7 +370,7 @@ private:
         const std::size_t cost = block.Cost();
         if (cost != 0) {
             Line(std::format(
-                "if (c.budget < {}) return runtime::OutOfBudget(c, {});", cost, Hex(block.start)));
+                "if (c.budget < {}) return runtime::OutOfBudget(c, {});", cost, Addr(block.start)));
             Line(std::format("c.budget -= {};", cost));
         }
         for (std::size_t index = 0; index < block.instructions.size(); ++index) {
@@ -402,7 +408,7 @@ private:
         Line(std::format(
             "// {:08X} {}", placed.address, arm::Mnemonic(placed.instruction.operation)));
         Line("// relocated at load: the interpreter reads it from memory");
-        Line(std::format("return runtime::Bail(c, {}, {});", Hex(placed.address), unexecuted));
+        Line(std::format("return runtime::Bail(c, {}, {});", Addr(placed.address), unexecuted));
     }
 
     // `unexecuted` is how many of the block's instructions have not run when this
@@ -446,6 +452,8 @@ private:
                 return operand.value != 0 ? "true" : "false";
             }
             return Hex(operand.value);
+        case Operand::Kind::Address:
+            return Addr(operand.value);
         case Operand::Kind::Temporary:
             return values_.at(operand.value);
         case Operand::Kind::None:
@@ -558,12 +566,12 @@ private:
                              a,
                              b,
                              WidthNames.at(op.index),
-                             Hex(address),
+                             Addr(address),
                              unexecuted));
             break;
         case OpKind::BailIf:
             Line(std::format(
-                "if ({}) return runtime::Bail(c, {}, {});", a, Hex(address), unexecuted));
+                "if ({}) return runtime::Bail(c, {}, {});", a, Addr(address), unexecuted));
             break;
         case OpKind::Interpret:
             Interpret(address, unexecuted);
@@ -582,7 +590,7 @@ private:
                          InstructionFields(placed_->instruction)));
         Line(std::format("if (const arm::Stop stop = runtime::ExecuteHandled(c, {}, decoded); "
                          "stop.Stopped()) return runtime::StoppedBy(c, stop, {});",
-                         Hex(address),
+                         Addr(address),
                          unexecuted - 1));
     }
 
@@ -600,7 +608,7 @@ private:
         Line(std::format("static const arm::Instruction decoded = {};", decode));
         Line(std::format("if (const arm::Stop stop = runtime::ExecuteDecoded(c, {}, decoded); "
                          "stop.Stopped()) return runtime::StoppedBy(c, stop, {});",
-                         Hex(address),
+                         Addr(address),
                          unexecuted - 1));
     }
 
@@ -645,7 +653,7 @@ private:
                          address_value,
                          WidthNames.at(op.index)));
         Line(std::format(
-            "if (!{}) return runtime::Bail(c, {}, {});", local, Hex(address), unexecuted));
+            "if (!{}) return runtime::Bail(c, {}, {});", local, Addr(address), unexecuted));
         Define(op.destination, std::format("(*{})", local));
     }
 
@@ -681,8 +689,8 @@ private:
         const std::optional<std::string> name =
             context_->function_at ? context_->function_at(exit.target, exit.target_set)
                                   : std::nullopt;
-        return name.has_value() ? std::format("{}(c, {})", *name, Hex(exit.target))
-                                : Hex(exit.target);
+        return name.has_value() ? std::format("{}(c, {})", *name, Addr(exit.target))
+                                : Addr(exit.target);
     }
 
     void SetInstructionSetIfItChanges(const Exit& exit) {
@@ -735,7 +743,7 @@ private:
             GoToNext(exit);
             break;
         case ExitKind::Trap:
-            Line(std::format("return runtime::OutOfBudget(c, {});", Hex(exit.target)));
+            Line(std::format("return runtime::OutOfBudget(c, {});", Addr(exit.target)));
             break;
         }
     }
@@ -748,7 +756,7 @@ private:
         Line("{");
         ++indent_;
         Line(std::format("const runtime::Pc back = {};", call));
-        Line(std::format("if (back != {}) return back;", Hex(exit.next)));
+        Line(std::format("if (back != {}) return back;", Addr(exit.next)));
         --indent_;
         Line("}");
         Line(std::format("goto {};", Label(exit.next)));
@@ -759,7 +767,8 @@ private:
     // leaves the way an indirect jump does.
     void SwitchExit(const Exit& exit) {
         When(exit, [&] {
-            Line("switch (cpu.registers[15]) {");
+            Line(context_->module ? "switch (cpu.registers[15] - c.base) {"
+                                  : "switch (cpu.registers[15]) {");
             std::vector<std::uint32_t> seen;
             for (const std::uint32_t target : exit.cases) {
                 if (function_->BlockAt(target) != nullptr &&
