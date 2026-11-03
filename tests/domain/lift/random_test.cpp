@@ -4,6 +4,7 @@
 
 #include "differential.h"
 
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <gtest/gtest.h>
@@ -98,6 +99,55 @@ TEST(LowerRandom, ThumbHalfwordsAgreeWithTheInterpreter) {
         }
         const std::string difference = test::Disagreement(instruction, RandomState(random()));
         ASSERT_EQ(difference, "") << "halfword " << std::hex << instruction.encoding;
+    }
+}
+
+// The same words as a module's code, which is lifted at offsets and runs at
+// whatever address the game had it loaded at: two of the addresses one module
+// was loaded at in one run of the title, docs/ldr-ro-trace.md. The interpreter
+// executes at the address and the lowering is given the offset and the base, so
+// an address the lowering got wrong shows only at the base it was not tested at.
+constexpr std::uint32_t ModuleOffset = 0x1000;
+constexpr std::array<std::uint32_t, 2> ModuleBases = {0x006A5000, 0x007E5000};
+
+TEST(LowerRandomForAModule, ArmWordsAgreeWithTheInterpreterAtTwoBases) {
+    // NOLINTNEXTLINE(bugprone-random-generator-seed)
+    std::mt19937_64 random{0x4D4F4455};
+    const std::uint64_t count = CaseCount();
+    for (std::uint64_t each = 0; each < count; ++each) {
+        const arm::Instruction instruction = arm::DecodeArm(static_cast<std::uint32_t>(random()));
+        if (!arm::IsDefined(instruction)) {
+            continue;
+        }
+        const std::uint64_t seed = random();
+        for (const std::uint32_t base : ModuleBases) {
+            const test::Placement placement{.offset = ModuleOffset, .base = base};
+            const std::string difference =
+                test::Disagreement(instruction, RandomState(seed), placement);
+            ASSERT_EQ(difference, "")
+                << "word " << std::hex << instruction.encoding << " at base " << base;
+        }
+    }
+}
+
+TEST(LowerRandomForAModule, ThumbHalfwordsAgreeWithTheInterpreterAtTwoBases) {
+    // NOLINTNEXTLINE(bugprone-random-generator-seed)
+    std::mt19937_64 random{0x4D4F4454};
+    const std::uint64_t count = CaseCount();
+    for (std::uint64_t each = 0; each < count; ++each) {
+        const arm::Instruction instruction =
+            arm::DecodeThumb(static_cast<std::uint16_t>(random()), 0);
+        if (!arm::IsDefined(instruction) || instruction.width != 2) {
+            continue;
+        }
+        const std::uint64_t seed = random();
+        for (const std::uint32_t base : ModuleBases) {
+            const test::Placement placement{.offset = ModuleOffset, .base = base};
+            const std::string difference =
+                test::Disagreement(instruction, RandomState(seed), placement);
+            ASSERT_EQ(difference, "")
+                << "halfword " << std::hex << instruction.encoding << " at base " << base;
+        }
     }
 }
 

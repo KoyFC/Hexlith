@@ -16,10 +16,22 @@ constexpr std::uint32_t Code = 0x00100000;
 constexpr std::uint32_t Data = 0x00200000;
 constexpr std::uint32_t Stack = 0x00300000;
 
+// Where an instruction is, for a test of module code: lifted at `offset` from
+// the start of a module, which is mapped at `base`. The main executable's code
+// has a base of zero and is at the address it is lifted at.
+struct Placement {
+    std::uint32_t offset = Code;
+    std::uint32_t base = 0;
+
+    [[nodiscard]] std::uint32_t Address() const {
+        return base + offset;
+    }
+};
+
 // A processor state and a small address space: a read-only page of code, a
 // page of data and a page of stack.
 struct Machine {
-    Machine();
+    explicit Machine(std::uint32_t code = Code);
 
     arm::CpuState state;
     memory::PagedMemory memory;
@@ -40,10 +52,14 @@ void DefaultSetup(Machine& machine);
 // executes the instruction from the state the bail left and must stop with the
 // same reason and leave the same state, or hands the instruction to the
 // interpreter and stops with the same reason.
-std::string Disagreement(const arm::Instruction& instruction, const Setup& setup);
+std::string Disagreement(const arm::Instruction& instruction,
+                         const Setup& setup,
+                         const Placement& placement = {});
 
 // The same, from every combination of the four condition flags.
-std::string DisagreementForAllFlags(const arm::Instruction& instruction, const Setup& setup);
+std::string DisagreementForAllFlags(const arm::Instruction& instruction,
+                                    const Setup& setup,
+                                    const Placement& placement = {});
 
 }  // namespace hexlith::domain::lift::test
 

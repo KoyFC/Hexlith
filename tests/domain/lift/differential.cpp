@@ -75,24 +75,25 @@ std::string Differences(const Machine& expected, const Machine& actual) {
 
 // The machine with the instruction in its code page, where the interpreter
 // fetches it from, and the processor about to run it.
-Machine Prepare(const arm::Instruction& instruction, const Setup& setup) {
-    Machine machine;
+Machine
+Prepare(const arm::Instruction& instruction, const Setup& setup, const Placement& placement) {
+    Machine machine{placement.Address()};
     setup(machine);
-    machine.state.registers.at(arm::ProgramCounter) = Code;
+    machine.state.registers.at(arm::ProgramCounter) = placement.Address();
     machine.state.thumb = instruction.instruction_set == arm::InstructionSet::Thumb;
 
     std::vector<std::uint8_t> bytes(instruction.width);
     for (unsigned index = 0; index < instruction.width; ++index) {
         bytes.at(index) = static_cast<std::uint8_t>(instruction.encoding >> (8U * index));
     }
-    EXPECT_TRUE(machine.memory.Load(Code, bytes));
+    EXPECT_TRUE(machine.memory.Load(placement.Address(), bytes));
     return machine;
 }
 
 }  // namespace
 
-Machine::Machine() {
-    EXPECT_TRUE(memory.Map(Code, PageSize, false));
+Machine::Machine(std::uint32_t code) {
+    EXPECT_TRUE(memory.Map(code, PageSize, false));
     EXPECT_TRUE(memory.Map(Data, PageSize, true));
     EXPECT_TRUE(memory.Map(Stack, PageSize, true));
     state.registers.at(arm::StackPointer) = Stack + PageSize;
@@ -113,20 +114,21 @@ void DefaultSetup(Machine& machine) {
     }
 }
 
-std::string Disagreement(const arm::Instruction& instruction, const Setup& setup) {
-    Machine reference = Prepare(instruction, setup);
-    Machine lifted = Prepare(instruction, setup);
+std::string
+Disagreement(const arm::Instruction& instruction, const Setup& setup, const Placement& placement) {
+    Machine reference = Prepare(instruction, setup, placement);
+    Machine lifted = Prepare(instruction, setup, placement);
 
     const arm::Stop stopped = arm::Step(reference.state, reference.memory);
 
-    const PlacedInstruction placed{.address = Code, .instruction = instruction};
+    const PlacedInstruction placed{.address = placement.offset, .instruction = instruction};
     const ir::Instruction lowered = Lower(placed);
     // r15 is set to something no branch goes to, so that an instruction that
     // writes it can be told from one that leaves it for the block to move on,
     // including a branch to itself.
     constexpr std::uint32_t Untouched = 0xDEADBEEF;
     lifted.state.registers.at(arm::ProgramCounter) = Untouched;
-    const Evaluation evaluation = Evaluate(lowered, lifted.state, lifted.memory);
+    const Evaluation evaluation = Evaluate(lowered, lifted.state, lifted.memory, placement.base);
 
     if (stopped.Stopped()) {
         if (evaluation.kind == EvaluationKind::Completed) {
@@ -137,7 +139,7 @@ std::string Disagreement(const arm::Instruction& instruction, const Setup& setup
             // The lifted code leaves for the interpreter, which executes the
             // instruction from the state it was left in and has to stop as the
             // reference did, with the same state.
-            lifted.state.registers.at(arm::ProgramCounter) = Code;
+            lifted.state.registers.at(arm::ProgramCounter) = placement.Address();
             const arm::Stop again = arm::Step(lifted.state, lifted.memory);
             if (again.reason != stopped.reason || again.detail != stopped.detail) {
                 return std::format("after the bail the interpreter stops with {}, not {}",
@@ -164,7 +166,7 @@ std::string Disagreement(const arm::Instruction& instruction, const Setup& setup
     // The block moves r15 on, or to a branch's target, unless the operations did.
     std::uint32_t& pc = lifted.state.registers.at(arm::ProgramCounter);
     if (pc == Untouched) {
-        pc = Code + instruction.width;
+        pc = placement.Address() + instruction.width;
         if (lowered.branch_target.has_value()) {
             const primitives::ConditionFlags flags{.negative = lifted.state.negative,
                                                    .zero = lifted.state.zero,
@@ -173,14 +175,16 @@ std::string Disagreement(const arm::Instruction& instruction, const Setup& setup
             // The flags the branch saw are the ones before it ran, and a branch
             // writes none.
             if (primitives::ConditionPassed(lowered.condition, flags)) {
-                pc = *lowered.branch_target;
+                pc = placement.base + *lowered.branch_target;
             }
         }
     }
     return Differences(reference, lifted);
 }
 
-std::string DisagreementForAllFlags(const arm::Instruction& instruction, const Setup& setup) {
+std::string DisagreementForAllFlags(const arm::Instruction& instruction,
+                                    const Setup& setup,
+                                    const Placement& placement) {
     constexpr unsigned Combinations = 16;
     for (unsigned flags = 0; flags < Combinations; ++flags) {
         const Setup with_flags = [&setup, flags](Machine& machine) {
@@ -190,7 +194,7 @@ std::string DisagreementForAllFlags(const arm::Instruction& instruction, const S
             machine.state.carry = (flags & 2U) != 0;
             machine.state.overflow = (flags & 1U) != 0;
         };
-        const std::string difference = Disagreement(instruction, with_flags);
+        const std::string difference = Disagreement(instruction, with_flags, placement);
         if (!difference.empty()) {
             return std::format("with NZCV {:04b}: {}", flags, difference);
         }
