@@ -266,68 +266,94 @@ std::size_t BytesPerPixel(PixelFormat format) {
     return 0;
 }
 
+namespace {
+
 // Red in the most significant bits, alpha in the least, little-endian.
 // Source: GBATEK, Texture Formats.
-void EncodePixel(PixelFormat format, const Color& color, std::span<std::uint8_t> bytes) {
+template<PixelFormat Format>
+void EncodeAs(const Color& color, std::span<std::uint8_t> bytes) {
     // Widened before shifting, or each channel would be promoted to int and the
     // packed value would change signedness on its way into Write16.
     const std::uint32_t red = color.red;
     const std::uint32_t green = color.green;
     const std::uint32_t blue = color.blue;
     const std::uint32_t alpha = color.alpha;
-    switch (format) {
-    case PixelFormat::Rgba8:
+    if constexpr (Format == PixelFormat::Rgba8) {
         bytes[0] = color.alpha;
         bytes[1] = color.blue;
         bytes[2] = color.green;
         bytes[3] = color.red;
-        return;
-    case PixelFormat::Rgb8:
+    } else if constexpr (Format == PixelFormat::Rgb8) {
         bytes[0] = color.blue;
         bytes[1] = color.green;
         bytes[2] = color.red;
-        return;
-    case PixelFormat::Rgb5A1:
+    } else if constexpr (Format == PixelFormat::Rgb5A1) {
         Write16(((red >> 3U) << 11U) | ((green >> 3U) << 6U) | ((blue >> 3U) << 1U) | (alpha >> 7U),
                 bytes);
-        return;
-    case PixelFormat::Rgb565:
+    } else if constexpr (Format == PixelFormat::Rgb565) {
         Write16(((red >> 3U) << 11U) | ((green >> 2U) << 5U) | (blue >> 3U), bytes);
-        return;
-    case PixelFormat::Rgba4:
+    } else {
         Write16(((red >> 4U) << 12U) | ((green >> 4U) << 8U) | ((blue >> 4U) << 4U) | (alpha >> 4U),
                 bytes);
-        return;
     }
 }
 
-Color DecodePixel(PixelFormat format, std::span<const std::uint8_t> bytes) {
-    switch (format) {
-    case PixelFormat::Rgba8:
+template<PixelFormat Format>
+Color DecodeAs(std::span<const std::uint8_t> bytes) {
+    if constexpr (Format == PixelFormat::Rgba8) {
         return Color{.red = bytes[3], .green = bytes[2], .blue = bytes[1], .alpha = bytes[0]};
-    case PixelFormat::Rgb8:
+    } else if constexpr (Format == PixelFormat::Rgb8) {
         return Color{.red = bytes[2], .green = bytes[1], .blue = bytes[0], .alpha = 0xFF};
-    case PixelFormat::Rgb5A1: {
+    } else if constexpr (Format == PixelFormat::Rgb5A1) {
         const std::uint32_t value = Read16(bytes);
         return Color{.red = Widen5(value >> 11U),
                      .green = Widen5((value >> 6U) & 0x1FU),
                      .blue = Widen5((value >> 1U) & 0x1FU),
                      .alpha = Widen1(value)};
-    }
-    case PixelFormat::Rgb565: {
+    } else if constexpr (Format == PixelFormat::Rgb565) {
         const std::uint32_t value = Read16(bytes);
         return Color{.red = Widen5(value >> 11U),
                      .green = Widen6(value >> 5U),
                      .blue = Widen5(value & 0x1FU),
                      .alpha = 0xFF};
-    }
-    case PixelFormat::Rgba4: {
+    } else {
         const std::uint32_t value = Read16(bytes);
         return Color{.red = Widen4(value >> 12U),
                      .green = Widen4(value >> 8U),
                      .blue = Widen4(value >> 4U),
                      .alpha = Widen4(value)};
     }
+}
+
+}  // namespace
+
+void EncodePixel(PixelFormat format, const Color& color, std::span<std::uint8_t> bytes) {
+    switch (format) {
+    case PixelFormat::Rgba8:
+        return EncodeAs<PixelFormat::Rgba8>(color, bytes);
+    case PixelFormat::Rgb8:
+        return EncodeAs<PixelFormat::Rgb8>(color, bytes);
+    case PixelFormat::Rgb5A1:
+        return EncodeAs<PixelFormat::Rgb5A1>(color, bytes);
+    case PixelFormat::Rgb565:
+        return EncodeAs<PixelFormat::Rgb565>(color, bytes);
+    case PixelFormat::Rgba4:
+        return EncodeAs<PixelFormat::Rgba4>(color, bytes);
+    }
+}
+
+Color DecodePixel(PixelFormat format, std::span<const std::uint8_t> bytes) {
+    switch (format) {
+    case PixelFormat::Rgba8:
+        return DecodeAs<PixelFormat::Rgba8>(bytes);
+    case PixelFormat::Rgb8:
+        return DecodeAs<PixelFormat::Rgb8>(bytes);
+    case PixelFormat::Rgb5A1:
+        return DecodeAs<PixelFormat::Rgb5A1>(bytes);
+    case PixelFormat::Rgb565:
+        return DecodeAs<PixelFormat::Rgb565>(bytes);
+    case PixelFormat::Rgba4:
+        return DecodeAs<PixelFormat::Rgba4>(bytes);
     }
     return Color{};
 }
