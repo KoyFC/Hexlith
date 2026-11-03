@@ -195,6 +195,8 @@ After the analysis took in what a run executed ([`classification.md`](classifica
 
 The interpreter, which the library does not touch, ran a third faster than in the morning's measurements, so the machine was in another state of clock and power, and only the ratios are comparable. On a performance core lifted code is now five times faster than the interpreter, by a margin of a few percent; on an efficiency core it is not.
 
+A boot to frame 1101 takes 3.87 billion instructions, and `hexlith-boot` stops at two billion unless given a limit, so a measurement to that frame passes `--limit 20000000000` to the script. Without it the script measured the first two billion instructions of the boot and reported 4.80, which is not the frame's work.
+
 ## What the interpreter's handlers do
 
 Weighed by a run of two billion instructions, what lifted code still left to the interpreter was 7.7 percent of what the main executable executed, and two thirds of that was the exclusive pair `ldrex` and `strex`; in the boot to frame 227 it was 4.6 percent, most of it floating point. Each went through `StepDecoded`: an out-of-line call that checks the condition and the operands, dispatches on the operation and moves r15 on, with the instruction decoded at run time the first time the site ran.
@@ -227,3 +229,28 @@ What is not done, and why:
 - **The fifteen conflicts nothing executes.** Their verdicts are in [`classification.md`](classification.md#the-conflicts-read); one region and a few function records still hold the losing side, at no cost at run time.
 - **The modules**, which are Phase 9 and [ADR 0029](adr/0029-cro-modules-are-lifted-against-a-base-the-loader-gives.md). The count it asked for found 146 words in module code that a relocation writes and the analysis calls code, and so the lifter will leave any instruction at a relocated word to the interpreter.
 
+
+## Where Phase 9 ended
+
+The phase lifted the 133 CRO modules, in a library of their own, and the title now runs lifted from a new game to frame 1101. Measured on 2026-11-03, with the input script `100 tap a`, `200 tap a`:
+
+| | |
+| --- | --- |
+| Boot to frame 1101 | 3,867,002,588 instructions and 4,933,730,742 ticks, the same as the interpreter's, and a golden trace of 21,056 lines that is the interpreter's byte for byte |
+| Left to the interpreter | 124,505,915 instructions, 3.22 percent, where Phase 8 left 64 percent |
+| Entries into lifted code | 82,781,467, of which 30,659,832 into modules |
+| Agreement with the interpreter | every thread and every mapped page, compared every 100,000 instructions to 200 million and every 10 million to frame 1101 |
+| Time, same afternoon | 33 s lifted against 145 s interpreted for the boot to frame 1101 |
+| Speed ratio, on a performance core | 4.58 to frame 1101 (143.6 s against 31.3 s, medians of three runs each); 5.27 to frame 227 over eleven runs, where Phase 8 measured 5.1 to 5.3 |
+| The modules | 44,032 functions in 381 shards, 12.8 million lines and 536 MB of C++, written in 39 s; a library of 144 MB that builds cold in 7 minutes 19 seconds on eight cores |
+| Words of module code a relocation writes | 38,344, whose instructions are left to the interpreter |
+
+Most of the title's first 1101 frames is the title screen's own loop: 2.45 billion of the 3.87 billion instructions are in `DllTitle`, and 1.42 billion in the main executable.
+
+What the interpreter still runs is mostly code the analysis has not found. 118 million instructions of `DllTitle`, 4.81 percent of what ran in it, are in no function the analysis knows, in 21 runs, and two of them, one of 631 instructions and one of 484, are 93 million of the 118. `hexlith-boot --record-executed` writes what a run executed in each module by offset ([`analysis-tables.md`](analysis-tables.md#what-a-run-observed)) and `scripts/executed_coverage.py --modules` measures it, but the analysis of the modules does not read those tables yet, as the analysis of the main executable does ([`classification.md`](classification.md#what-a-run-executed-as-a-fact)). Reading them would have the next lift cover those runs.
+
+What is not done:
+
+- **Binding an import to the lifted function it resolves to** when the loader links it, the optimisation of [ADR 0004](adr/0004-cro-modules-and-the-ldr-ro-hle.md). A call from one module to another still goes through the pointer the loader wrote and the engine's lookup.
+- **The analysis taking in what a run executed in a module.**
+- **Registers and flags in local variables**, and the handlers behind the dispatch, as at the end of Phase 8.
