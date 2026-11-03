@@ -1,6 +1,7 @@
 #include "domain/services/relocatable_objects.h"
 
 #include "core/byte_reader.h"
+#include "core/sha256.h"
 #include "domain/ctr/layout.h"
 
 #include <array>
@@ -84,6 +85,31 @@ kernel::ResultCode RelocatableObjects::CheckMapping(std::uint32_t buffer,
     return kernel::result::Success;
 }
 
+void RelocatableObjects::RecordCode(Resident& resident, std::span<const std::uint8_t> file) {
+    for (const ctr::CroSegment& segment : resident.module->header.segments) {
+        if (!segment.type_known || segment.type != ctr::CroSegmentType::Code || segment.size == 0) {
+            continue;
+        }
+        if (segment.offset > file.size() || segment.size > file.size() - segment.offset) {
+            return;
+        }
+        resident.code_offset = static_cast<std::uint32_t>(segment.offset);
+        resident.code_size = static_cast<std::uint32_t>(segment.size);
+        resident.code_digest = core::Sha256::Of(file.subspan(segment.offset, segment.size)).ToHex();
+        return;
+    }
+}
+
+RelocatableObjects::ModuleEvent RelocatableObjects::EventFor(ModuleEvent::Kind kind,
+                                                             const Resident& resident) {
+    return ModuleEvent{.kind = kind,
+                       .name = resident.module->header.name,
+                       .address = resident.address,
+                       .code_offset = resident.code_offset,
+                       .code_size = resident.code_size,
+                       .code_digest = resident.code_digest};
+}
+
 std::optional<RelocatableObjects::Resident>
 RelocatableObjects::MapModule(kernel::IpcRequest& request,
                               std::uint32_t buffer,
@@ -110,6 +136,7 @@ RelocatableObjects::MapModule(kernel::IpcRequest& request,
     }
 
     const bool is_static = read.Value().header.IsStaticModule();
+    const std::vector<std::uint8_t> image_before_rebase = image;
     const core::Status rebased =
         linker::RebaseModuleImage(image, address, placement, sizes, is_static);
     if (!rebased) {
@@ -124,6 +151,9 @@ RelocatableObjects::MapModule(kernel::IpcRequest& request,
     resident.buffer = buffer;
     resident.size = size;
     resident.external_table = HeaderField(address, cro::ExternalRelocationTableOffsetField);
+    if (!is_static) {
+        RecordCode(resident, image_before_rebase);
+    }
     return resident;
 }
 
@@ -261,9 +291,7 @@ void RelocatableObjects::LoadCro(kernel::IpcRequest& request) {
         }
     }
 
-    Announce(ModuleEvent{.kind = ModuleEvent::Kind::Loaded,
-                         .name = residents_.back().module->header.name,
-                         .address = load.address});
+    Announce(EventFor(ModuleEvent::Kind::Loaded, residents_.back()));
 
     request.Begin(2, 0);
     request.Push(kernel::result::Success);
@@ -336,9 +364,7 @@ void RelocatableObjects::UnloadCro(kernel::IpcRequest& request) {
     static_cast<void>(kernel_->Space().UnmapAlias(
         address, resident.buffer, fixed_size, memory::Access::ReadWrite, true));
 
-    Announce(ModuleEvent{.kind = ModuleEvent::Kind::Unloaded,
-                         .name = resident.module->header.name,
-                         .address = address});
+    Announce(EventFor(ModuleEvent::Kind::Unloaded, resident));
     request.ReplyWith(kernel::result::Success);
 }
 

@@ -1,4 +1,5 @@
 #include "core/byte_reader.h"
+#include "core/sha256.h"
 #include "domain/ctr/cro.h"
 #include "domain/ctr/layout.h"
 #include "domain/services/relocatable_objects.h"
@@ -9,6 +10,7 @@
 #include <cstdint>
 #include <format>
 #include <gtest/gtest.h>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -204,6 +206,12 @@ std::uint32_t SegmentOffset(const std::vector<std::uint8_t>& file, std::uint32_t
     return header.Ok() ? static_cast<std::uint32_t>(header.Value().segments.at(segment).offset) : 0;
 }
 
+std::uint32_t SegmentSize(const std::vector<std::uint8_t>& file, std::uint32_t segment) {
+    const core::Result<ctr::CroHeader> header = ctr::ParseCroHeader(file);
+    EXPECT_TRUE(header.Ok());
+    return header.Ok() ? static_cast<std::uint32_t>(header.Value().segments.at(segment).size) : 0;
+}
+
 TEST(RelocatableObjects, MapsTheStaticModuleAndPointsItsImportsAtItsHook) {
     Harness ro;
     const std::uint32_t buffer = ro.next_buffer;
@@ -248,6 +256,47 @@ TEST(RelocatableObjects, SaysWhichModuleItLoadedAndWhere) {
     ASSERT_TRUE(ro.Load(ro.a, ModuleA));
     EXPECT_EQ(events, std::vector<std::string>{std::format("load DllA {:08X}", ModuleA)})
         << "the static module is not loaded by LoadCRO";
+}
+
+// What the load event of module A says about its code.
+struct CodeSeen {
+    std::uint32_t offset = 0;
+    std::uint32_t size = 0;
+    std::string digest;
+};
+
+CodeSeen LoadAndSeeTheCode(Harness& ro) {
+    CodeSeen seen;
+    ro.service.OnModuleEvent([&seen](const RelocatableObjects::ModuleEvent& event) {
+        seen = CodeSeen{.offset = event.code_offset,
+                        .size = event.code_size,
+                        .digest = std::string{event.code_digest}};
+    });
+    EXPECT_TRUE(ro.InitializeWith(ro.crs, CrsAddress));
+    EXPECT_TRUE(ro.Load(ro.a, ModuleA));
+    return seen;
+}
+
+TEST(RelocatableObjects, SaysWhereTheCodeSegmentOfALoadedModuleIs) {
+    Harness ro;
+    const CodeSeen seen = LoadAndSeeTheCode(ro);
+    EXPECT_EQ(seen.offset, SegmentOffset(ro.a, Code));
+    EXPECT_EQ(seen.size, SegmentSize(ro.a, Code));
+    EXPECT_GT(seen.size, 0U);
+}
+
+// What lifted code is checked against: the module's code as the file has it, and
+// before the loader has patched a word of it.
+TEST(RelocatableObjects, HashesTheCodeAsTheFileHasItAndNotAsTheLoaderLeavesIt) {
+    Harness ro;
+    const CodeSeen seen = LoadAndSeeTheCode(ro);
+    const std::span<const std::uint8_t> file{ro.a};
+    EXPECT_EQ(seen.digest, core::Sha256::Of(file.subspan(seen.offset, seen.size)).ToHex());
+
+    // The linker did patch a word of the code in memory, so a digest of memory
+    // would not be the file's.
+    EXPECT_NE(core::Sha256::Of(ro.harness.ReadBytes(ModuleA + seen.offset, seen.size)).ToHex(),
+              seen.digest);
 }
 
 TEST(RelocatableObjects, PatchesDataInTheFileBeforeTheGameCopiesIt) {

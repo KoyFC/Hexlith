@@ -3,6 +3,35 @@
 #include "domain/lift/runtime.h"
 
 namespace hexlith::domain::lift {
+namespace {
+
+struct LiftedCode {
+    runtime::Function function = nullptr;
+    bool in_module = false;
+};
+
+// The lifted code at an address: the main executable's, or the code of a module
+// that is loaded there, in which case the context is given its base.
+LiftedCode FindLiftedCode(const runtime::EntryTable& entries,
+                          const runtime::LoadedModules* modules,
+                          runtime::Context& context,
+                          std::uint32_t pc,
+                          bool thumb) {
+    if (entries.MayCover(pc)) {
+        if (const runtime::Function function = entries.Find(pc, thumb)) {
+            return {.function = function, .in_module = false};
+        }
+    }
+    if (modules != nullptr) {
+        if (const auto found = modules->Find(pc, thumb)) {
+            context.base = found->base;
+            return {.function = found->function, .in_module = true};
+        }
+    }
+    return {};
+}
+
+}  // namespace
 
 arm::Stop Engine::Run(arm::CpuState& state,
                       memory::ProcessMemory& memory,
@@ -11,6 +40,7 @@ arm::Stop Engine::Run(arm::CpuState& state,
     runtime::Context context{.cpu = &state,
                              .memory = &memory,
                              .entries = entries_,
+                             .modules = modules_,
                              .budget = static_cast<std::int64_t>(limit),
                              .stop = {}};
 
@@ -26,10 +56,11 @@ arm::Stop Engine::Run(arm::CpuState& state,
         // guest continues. An address is somewhere to continue; the two other
         // answers say the lifted code gave up, and have the interpreter run the
         // instruction at r15 or report why it stopped.
-        if (const runtime::Function function =
-                entries_->MayCover(pc) ? entries_->Find(pc, state.thumb) : nullptr) {
+        const LiftedCode lifted = FindLiftedCode(*entries_, modules_, context, pc, state.thumb);
+        if (lifted.function != nullptr) {
             ++statistics_.entries;
-            const runtime::Pc next = function(context, pc);
+            statistics_.module_entries += lifted.in_module ? 1 : 0;
+            const runtime::Pc next = lifted.function(context, pc);
             if (next == runtime::Stopped) {
                 return finish(context.stop);
             }

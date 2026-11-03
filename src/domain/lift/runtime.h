@@ -17,6 +17,8 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -88,10 +90,108 @@ private:
     Pc highest_ = 0;
 };
 
+// The lifted code of the modules, and which of them is loaded where.
+//
+// A library holds one table of entries for each module, keyed by offset from the
+// module's start. It offers them here. The loader then says when a module is
+// loaded or unloaded and at what address, and the code of the modules that are
+// loaded is what can be found. A module loaded twice at once is two ranges over
+// one table.
+class LoadedModules {
+public:
+    enum class Outcome : std::uint8_t {
+        // The module's code will run lifted.
+        Lifted,
+
+        // Nothing was lifted for a module of this name, so it runs interpreted.
+        NotLifted,
+
+        // The module's code is not the code that was lifted. Lifted code against
+        // other bytes is not a crash that announces itself, so the module runs
+        // interpreted.
+        DigestDiffers,
+    };
+
+    struct Found {
+        Function function = nullptr;
+
+        // Where the module is: what the function is run against.
+        std::uint32_t base = 0;
+    };
+
+    // The table must outlive this. The digest is the SHA-256 of the module's code
+    // segment as the file has it, in hexadecimal.
+    void Offer(std::string_view name, std::string_view digest, const EntryTable& table) {
+        offered_.push_back(
+            Offered{.name = std::string{name}, .digest = std::string{digest}, .table = &table});
+    }
+
+    Outcome Loaded(std::string_view name,
+                   std::uint32_t address,
+                   std::uint32_t code_offset,
+                   std::uint32_t code_size,
+                   std::string_view digest) {
+        const auto offer =
+            std::ranges::find_if(offered_, [&](const Offered& each) { return each.name == name; });
+        if (offer == offered_.end()) {
+            return Outcome::NotLifted;
+        }
+        if (offer->digest != digest) {
+            return Outcome::DigestDiffers;
+        }
+        residents_.push_back(Resident{.name = std::string{name},
+                                      .address = address,
+                                      .first = address + code_offset,
+                                      .end = address + code_offset + code_size,
+                                      .table = offer->table});
+        return Outcome::Lifted;
+    }
+
+    // A module that was never loaded as lifted code is not an error here: it ran
+    // interpreted, and there is nothing to forget.
+    void Unloaded(std::string_view name, std::uint32_t address) {
+        std::erase_if(residents_, [&](const Resident& each) {
+            return each.address == address && each.name == name;
+        });
+    }
+
+    [[nodiscard]] std::optional<Found> Find(Pc address, bool thumb) const {
+        for (const Resident& each : residents_) {
+            if (address >= each.first && address < each.end) {
+                if (const Function function = each.table->Find(address - each.address, thumb)) {
+                    return Found{.function = function, .base = each.address};
+                }
+            }
+        }
+        return std::nullopt;
+    }
+
+private:
+    struct Offered {
+        std::string name;
+        std::string digest;
+        const EntryTable* table = nullptr;
+    };
+
+    struct Resident {
+        std::string name;
+        std::uint32_t address = 0;
+        std::uint32_t first = 0;
+        std::uint32_t end = 0;
+        const EntryTable* table = nullptr;
+    };
+
+    std::vector<Offered> offered_;
+    std::vector<Resident> residents_;
+};
+
 struct Context {
     arm::CpuState* cpu = nullptr;
     memory::ProcessMemory* memory = nullptr;
     const EntryTable* entries = nullptr;
+
+    // The modules that are loaded, or none when the run has no lifted modules.
+    const LoadedModules* modules = nullptr;
 
     // Where the module whose code is running is mapped. Module code is lifted
     // at offsets from its start and adds this to every address it computes or
@@ -117,8 +217,21 @@ struct Context {
 // Enters the lifted code at an address, or answers the address when there is
 // none, so that the caller passes it up.
 [[nodiscard]] inline Pc Dispatch(Context& context, Pc target) {
-    const Function function = context.entries->Find(target, context.cpu->thumb);
-    return function == nullptr ? target : function(context, target);
+    if (const Function function = context.entries->Find(target, context.cpu->thumb)) {
+        return function(context, target);
+    }
+    if (context.modules != nullptr) {
+        if (const std::optional<LoadedModules::Found> found =
+                context.modules->Find(target, context.cpu->thumb)) {
+            // The caller may be in another module, and is again once this returns.
+            const std::uint32_t caller = context.base;
+            context.base = found->base;
+            const Pc next = found->function(context, target);
+            context.base = caller;
+            return next;
+        }
+    }
+    return target;
 }
 
 // The block at `address` costs more ticks than the run has left. The

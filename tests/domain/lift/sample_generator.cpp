@@ -16,6 +16,7 @@
 #include <span>
 #include <string>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -60,44 +61,54 @@ int main(int argc, char** argv) {
                          .source = analysis::Provenance::Heuristic}};
     const lift::FlowContext flow{.entries = &entry_set, .regions = regions};
 
-    lift::EmitContext context;
-    context.function_at = [&entry_set](std::uint32_t address,
-                                       arm::InstructionSet set) -> std::optional<std::string> {
+    lift::EmitContext main_context;
+    main_context.function_at = [&entry_set](std::uint32_t address,
+                                            arm::InstructionSet set) -> std::optional<std::string> {
         if (set == arm::InstructionSet::Arm && entry_set.contains(address)) {
             return lift::DefaultFunctionName(address, set);
         }
         return std::nullopt;
     };
-
-    context.relocated = [](std::uint32_t address) {
+    main_context.relocated = [](std::uint32_t address) {
         return address == sample::At(sample::RelocatedIndex);
     };
+    // The same functions as a module's, lifted at offsets: the sample's addresses
+    // are the offsets, and the test chooses where the module is.
+    lift::EmitContext module_context = main_context;
+    module_context.module = true;
 
     std::ofstream out{arguments[1]};
-    out << "#include \"domain/lift/runtime.h\"\n\n"
-           "namespace hexlith::domain::lift::sample_lifted {\n\n"
-           "namespace arm = hexlith::domain::arm;\n"
-           "namespace memory = hexlith::domain::memory;\n"
-           "namespace primitives = hexlith::domain::arm::primitives;\n\n";
-    for (const std::uint32_t entry : entries) {
-        out << lift::DeclarationOf(lift::DefaultFunctionName(entry, arm::InstructionSet::Arm))
-            << '\n';
-    }
-    out << '\n';
-
-    std::string registration = "void Register(runtime::EntryTable& table) {\n";
-    for (const std::uint32_t entry : entries) {
-        const lift::Function function =
-            lift::BuildFunction(image, entry, arm::InstructionSet::Arm, flow);
-        const std::string name = lift::DefaultFunctionName(entry, arm::InstructionSet::Arm);
-        const lift::EmittedFunction emitted = lift::EmitFunction(function, name, context);
-        out << emitted.text << '\n';
-        for (const std::uint32_t address : emitted.entries) {
-            registration += std::format("    table.Add(0x{:08X}U, false, &{});\n", address, name);
+    out << "#include \"domain/lift/runtime.h\"\n\n";
+    for (const auto& [name, context] : {std::pair{"sample_lifted", &main_context},
+                                        std::pair{"sample_lifted_module", &module_context}}) {
+        out << std::format("namespace hexlith::domain::lift::{} {{\n\n"
+                           "namespace arm = hexlith::domain::arm;\n"
+                           "namespace memory = hexlith::domain::memory;\n"
+                           "namespace primitives = hexlith::domain::arm::primitives;\n\n",
+                           name);
+        for (const std::uint32_t entry : entries) {
+            out << lift::DeclarationOf(lift::DefaultFunctionName(entry, arm::InstructionSet::Arm))
+                << '\n';
         }
+        out << '\n';
+
+        std::string registration = "void Register(runtime::EntryTable& table) {\n";
+        for (const std::uint32_t entry : entries) {
+            const lift::Function function =
+                lift::BuildFunction(image, entry, arm::InstructionSet::Arm, flow);
+            const std::string function_name =
+                lift::DefaultFunctionName(entry, arm::InstructionSet::Arm);
+            const lift::EmittedFunction emitted =
+                lift::EmitFunction(function, function_name, *context);
+            out << emitted.text << '\n';
+            for (const std::uint32_t address : emitted.entries) {
+                registration +=
+                    std::format("    table.Add(0x{:08X}U, false, &{});\n", address, function_name);
+            }
+        }
+        registration += std::format("}}\n\n}}  // namespace hexlith::domain::lift::{}\n\n", name);
+        out << registration;
     }
-    registration += "}\n\n}  // namespace hexlith::domain::lift::sample_lifted\n";
-    out << registration;
     if (arguments.size() == 3) {
         // The version is the lifter's, and the library is refused when it is not
         // the one that is running, so the tests that open it say it by name.

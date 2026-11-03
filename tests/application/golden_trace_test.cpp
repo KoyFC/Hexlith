@@ -20,10 +20,11 @@ TEST(GoldenTrace, WritesARequestAsFrameServiceAndHeader) {
 TEST(GoldenTrace, WritesAModuleEventWithItsAddress) {
     constexpr std::uint64_t Frame = 5;
     constexpr std::uint32_t Address = 0x006A5000;
-    const ModuleEvent loaded{.kind = ModuleEvent::Kind::Loaded, .name = "DllA", .address = Address};
+    const ModuleEvent loaded{
+        .kind = ModuleEvent::Kind::Loaded, .name = "DllA", .address = Address, .code_digest = {}};
     EXPECT_EQ(GoldenModuleLine(Frame, loaded), "5 cro-load DllA 006A5000");
     const ModuleEvent unloaded{
-        .kind = ModuleEvent::Kind::Unloaded, .name = "DllA", .address = Address};
+        .kind = ModuleEvent::Kind::Unloaded, .name = "DllA", .address = Address, .code_digest = {}};
     EXPECT_EQ(GoldenModuleLine(Frame, unloaded), "5 cro-unload DllA 006A5000");
 }
 

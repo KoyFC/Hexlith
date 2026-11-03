@@ -61,6 +61,13 @@ public:
         Kind kind = Kind::Loaded;
         std::string_view name;
         std::uint32_t address = 0;
+
+        // The module's code segment: where it starts in the file, how long it is,
+        // and the SHA-256 of it as the file has it, in hexadecimal, before the
+        // loader patched a word of it. What lifted code was made from.
+        std::uint32_t code_offset = 0;
+        std::uint32_t code_size = 0;
+        std::string_view code_digest;
     };
 
     // Adds an observer, called once a module is mapped and linked or once it
@@ -84,6 +91,9 @@ private:
         std::uint32_t buffer = 0;
         std::uint32_t size = 0;
         std::uint32_t external_table = 0;
+        std::uint32_t code_offset = 0;
+        std::uint32_t code_size = 0;
+        std::string code_digest;
         std::vector<std::optional<std::uint32_t>> written;
         std::vector<bool> resolved;
     };
@@ -144,6 +154,11 @@ private:
     // Null until Initialize has linked the static module.
     std::unique_ptr<linker::Linker> linker_;
     std::vector<Resident> residents_;
+    // Where a module's code is and what it hashes to, from the file as the game
+    // gave it, which is the last time it is as the file has it.
+    static void RecordCode(Resident& resident, std::span<const std::uint8_t> file);
+    static ModuleEvent EventFor(ModuleEvent::Kind kind, const Resident& resident);
+
     void Announce(const ModuleEvent& event) const;
 
     std::vector<std::function<void(const ModuleEvent&)>> module_observers_;

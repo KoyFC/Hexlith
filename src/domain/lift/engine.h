@@ -11,6 +11,7 @@ namespace hexlith::domain::lift {
 
 namespace runtime {
 class EntryTable;
+class LoadedModules;
 }  // namespace runtime
 
 // Runs a thread's code natively where it has been lifted and through the
@@ -31,12 +32,18 @@ public:
         // them, or because lifted code gave up at them.
         std::uint64_t interpreted = 0;
 
-        // Times lifted code was entered.
+        // Times lifted code was entered, in the main executable or a module.
         std::uint64_t entries = 0;
+
+        // The part of those that were into a module.
+        std::uint64_t module_entries = 0;
     };
 
-    // The table must outlive the engine.
-    explicit Engine(const runtime::EntryTable& entries) : entries_(&entries) {}
+    // The table, and the modules when there are lifted ones, must outlive the
+    // engine. A module's code is found through what the loader says is loaded.
+    explicit Engine(const runtime::EntryTable& entries,
+                    const runtime::LoadedModules* modules = nullptr)
+        : entries_(&entries), modules_(modules) {}
 
     arm::Stop Run(arm::CpuState& state,
                   memory::ProcessMemory& memory,
@@ -49,6 +56,7 @@ public:
 
 private:
     const runtime::EntryTable* entries_;
+    const runtime::LoadedModules* modules_;
     mutable Statistics statistics_;
 };
 
