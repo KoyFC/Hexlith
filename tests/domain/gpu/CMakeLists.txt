@@ -12,6 +12,7 @@ hexlith_add_test(
     screen_test.cpp
     shader_glsl_test.cpp
     shader_interpreter_test.cpp
+    texture_cache_test.cpp
     pixel_formats_test.cpp
     vertex_stage_test.cpp
 )

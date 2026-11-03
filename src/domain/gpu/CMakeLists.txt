@@ -27,6 +27,8 @@ target_sources(
             shader_glsl.h
             shader_interpreter.cpp
             shader_interpreter.h
+            texture_cache.cpp
+            texture_cache.h
             vertex_stage.cpp
             vertex_stage.h
             pixel_formats.cpp

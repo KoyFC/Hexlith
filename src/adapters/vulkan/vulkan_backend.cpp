@@ -7,6 +7,7 @@
 #include "domain/gpu/pixel_formats.h"
 #include "domain/gpu/reference_renderer.h"
 #include "domain/gpu/shader_glsl.h"
+#include "domain/gpu/texture_cache.h"
 #include "domain/gpu/vertex_stage.h"
 
 #include <algorithm>
@@ -490,7 +491,8 @@ private:
     std::vector<float> input_data_;
     std::vector<std::uint32_t> draw_words_;
     std::vector<std::uint32_t> texels_;
-    std::map<std::array<std::uint32_t, 5>, std::uint32_t> decoded_;
+    std::map<std::array<std::uint32_t, 4>, std::uint32_t> decoded_;
+    gpu::TextureCache texture_cache_;
 
     std::uint64_t lists_ = 0;
     std::uint64_t draws_ = 0;
@@ -730,11 +732,18 @@ void VulkanGpuBackend::Implementation::WriteDrawWords(const gpu::PicaState& stat
     }
 }
 
-// A level's texels as the shader reads them, decoded once per flush.
+// A level's texels as the shader reads them, put in the flush's buffer once.
+// What was decoded for an earlier list is found again as long as the texture's
+// bytes are the same.
 std::uint32_t VulkanGpuBackend::Implementation::Decode(std::uint32_t address,
                                                        gpu::TextureFormat format,
                                                        std::uint32_t width,
                                                        std::uint32_t height) {
+    const std::array<std::uint32_t, 4> key = {
+        address, static_cast<std::uint32_t>(format), width, height};
+    if (const auto found = decoded_.find(key); found != decoded_.end()) {
+        return found->second;
+    }
     const Stopwatch timed{times_.textures};
     const auto size = static_cast<std::uint32_t>(gpu::TextureBytes(format, width, height));
     const std::span<const std::uint8_t> bytes = memory_->Bytes(address, size);
@@ -745,24 +754,10 @@ std::uint32_t VulkanGpuBackend::Implementation::Decode(std::uint32_t address,
     if (!MakeTrue({.start = address, .size = size})) {
         unsupported_ = true;
     }
-    // The contents are part of the key: the CPU or a list may have changed
-    // them since the last draw.
-    std::uint32_t hash = 2166136261U;
-    for (const std::uint8_t byte : bytes) {
-        hash = (hash ^ byte) * 16777619U;
-    }
-    const std::array<std::uint32_t, 5> key = {
-        address, static_cast<std::uint32_t>(format), width, height, hash};
-    if (const auto found = decoded_.find(key); found != decoded_.end()) {
-        return found->second;
-    }
     const auto offset = static_cast<std::uint32_t>(texels_.size());
-    for (const gpu::Color& color : gpu::DecodeTexture(bytes, format, width, height)) {
-        texels_.push_back(static_cast<std::uint32_t>(color.red) |
-                          (static_cast<std::uint32_t>(color.green) << 8U) |
-                          (static_cast<std::uint32_t>(color.blue) << 16U) |
-                          (static_cast<std::uint32_t>(color.alpha) << 24U));
-    }
+    const std::span<const std::uint32_t> texels =
+        texture_cache_.Texels(address, format, width, height, bytes);
+    texels_.insert(texels_.end(), texels.begin(), texels.end());
     decoded_.emplace(key, offset);
     return offset;
 }
