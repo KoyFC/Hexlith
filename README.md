@@ -48,7 +48,7 @@ Requires a C++20 compiler, CMake 3.25 or later, Ninja, OpenSSL, Vulkan, glslang,
 
 ```sh
 sudo dnf install gcc-c++ cmake ninja-build gtest-devel openssl-devel ccache pre-commit \
-    vulkan-headers vulkan-loader-devel glslang-devel sdl3-devel \
+    vulkan-headers vulkan-loader-devel glslang-devel SDL3-devel \
     mesa-vulkan-drivers vulkan-validation-layers
 ```
 

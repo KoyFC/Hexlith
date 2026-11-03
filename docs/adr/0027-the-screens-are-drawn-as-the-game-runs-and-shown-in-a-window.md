@@ -13,7 +13,7 @@ Until now the only way to see what the title draws was to record the GPU's work 
 
 **What shows the pictures is a port, `ScreenSink`**, with one adapter, `SdlWindow`. It copies the two screens into one texture, the top over the bottom and centred as on the console, and lets SDL scale it, keeping the proportions. It also reports when the window was closed, and `hexlith-boot` stops the run at the next vertical blank when it is.
 
-**SDL has a library of its own,** like Vulkan, so that only what opens a window links it. SDL3 is required to build the repository, `sdl3-devel` on Fedora; the tests use SDL's dummy video driver and need no display.
+**SDL has a library of its own,** like Vulkan, so that only what opens a window links it. SDL3 is required to build the repository, `SDL3-devel` on Fedora; the tests use SDL's dummy video driver and need no display.
 
 **`hexlith-boot --window`** takes the GPU's events in the place of `--record-gpu`, which the two cannot share because `gsp::Gpu` has one observer for each kind of event, and the command line refuses both together. `--backend reference|vulkan` and `--device` choose what draws.
 

@@ -63,7 +63,7 @@ OpenSSL's development package (`openssl-devel` on Fedora) is required, not optio
 
 Vulkan and glslang are required in the same way, for the GPU backend: `vulkan-headers`, `vulkan-loader-devel` and `glslang-devel` on Fedora. Running what draws needs a Vulkan 1.2 driver, `mesa-vulkan-drivers` at least, whose llvmpipe needs no GPU; `vulkan-validation-layers` lets the tools and tests count validation messages, which have to be none. A test that needs a device skips itself when there is none. ADR 0020.
 
-SDL3 is required for the window `hexlith-boot --window` opens: `sdl3-devel` on Fedora. The tests of the window use SDL's dummy video driver and need no display. ADR 0027.
+SDL3 is required for the window `hexlith-boot --window` opens: `SDL3-devel` on Fedora. The tests of the window use SDL's dummy video driver and need no display. ADR 0027.
 
 ## Game data
 
