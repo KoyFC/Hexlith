@@ -4,6 +4,7 @@
 #include "support/synthetic_cro.h"
 
 #include <cstdint>
+#include <format>
 #include <gtest/gtest.h>
 #include <string>
 #include <vector>
@@ -86,7 +87,8 @@ struct Fixture {
     std::vector<core::ByteSpan> modules{core::ByteSpan{a}, core::ByteSpan{b}};
 
     [[nodiscard]] AnalyzeModulesRequest Request() const {
-        return AnalyzeModulesRequest{.static_module = static_file, .modules = modules};
+        return AnalyzeModulesRequest{
+            .static_module = static_file, .modules = modules, .executed = {}};
     }
 
     [[nodiscard]] std::uint32_t CodeOfAAt(std::uint32_t offset) const {
@@ -134,6 +136,74 @@ TEST(AnalyzeModules, SeedsAModuleWithWhatAnotherImportsFromIt) {
                           function.source == analysis::Provenance::Relocation);
     }
     EXPECT_TRUE(found) << "the function DllB imports from DllA";
+}
+
+// What a run executed in DllB: one instruction of its code that nothing in
+// the module or in any other names, at the offset the table gives it.
+std::string
+ExecutedInB(const Fixture& fixture, std::uint32_t offset_in_code, std::string_view isa) {
+    const core::Result<ctr::CroHeader> header = ctr::ParseCroHeader(core::ByteSpan{fixture.b});
+    return std::format("format version=1\n0x{:08X} isa={} count=3\n",
+                       static_cast<std::uint32_t>(header.Value().segments.at(0).offset) +
+                           offset_in_code,
+                       isa);
+}
+
+std::vector<analysis::FunctionRange> FunctionsOf(const MemoryBlobSink& sink,
+                                                 std::string_view module) {
+    const core::Result<std::vector<analysis::FunctionRange>> functions = analysis::ParseFunctions(
+        sink.Text(TablePath(module, analysis::FunctionsFileName)).value_or(""));
+    EXPECT_TRUE(functions.Ok());
+    return functions.Ok() ? functions.Value() : std::vector<analysis::FunctionRange>{};
+}
+
+// DllB's code is reached from nowhere, so without a run it has no function.
+TEST(AnalyzeModules, FindsNoFunctionInCodeNothingReachesWithoutARun) {
+    const Fixture fixture;
+    MemoryBlobSink sink;
+    ASSERT_TRUE(AnalyzeModules(fixture.Request(), ExistingModuleTables{}, sink).Ok());
+    EXPECT_TRUE(FunctionsOf(sink, "DllB").empty());
+}
+
+TEST(AnalyzeModules, MakesAFunctionOfCodeARunExecutedInAModule) {
+    const Fixture fixture;
+    MemoryBlobSink sink;
+    AnalyzeModulesRequest request = fixture.Request();
+    const std::string executed = ExecutedInB(fixture, 0, "arm");
+    request.executed["DllB"] = executed;
+
+    const core::Result<AnalyzeModulesReport> report =
+        AnalyzeModules(request, ExistingModuleTables{}, sink);
+    ASSERT_TRUE(report.Ok()) << report.Failure().Message();
+
+    const std::vector<analysis::FunctionRange> functions = FunctionsOf(sink, "DllB");
+    ASSERT_EQ(functions.size(), 1U);
+    EXPECT_EQ(functions.front().source, analysis::Provenance::Observed);
+    EXPECT_EQ(report.Value().modules.at(1).report.observed_functions, 1U);
+    EXPECT_GT(report.Value().modules.at(1).report.code_reached, 0U);
+}
+
+TEST(AnalyzeModules, LeavesOutAnExecutedAddressOutsideTheModulesCode) {
+    const Fixture fixture;
+    MemoryBlobSink sink;
+    AnalyzeModulesRequest request = fixture.Request();
+    request.executed["DllB"] = "format version=1\n0x00000000 isa=arm count=1\n";
+
+    ASSERT_TRUE(AnalyzeModules(request, ExistingModuleTables{}, sink).Ok());
+    EXPECT_TRUE(FunctionsOf(sink, "DllB").empty());
+}
+
+TEST(AnalyzeModules, RefusesAnExecutedTableNamingAnUnknownInstructionSet) {
+    const Fixture fixture;
+    MemoryBlobSink sink;
+    AnalyzeModulesRequest request = fixture.Request();
+    const std::string executed = ExecutedInB(fixture, 0, "mips");
+    request.executed["DllB"] = executed;
+
+    const core::Result<AnalyzeModulesReport> report =
+        AnalyzeModules(request, ExistingModuleTables{}, sink);
+    ASSERT_FALSE(report.Ok());
+    EXPECT_NE(report.Failure().Message().find("DllB"), std::string::npos);
 }
 
 TEST(AnalyzeModules, KeepsARecordAPersonEnteredForAModule) {

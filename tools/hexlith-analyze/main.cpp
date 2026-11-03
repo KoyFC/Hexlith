@@ -16,6 +16,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -115,7 +116,27 @@ core::Result<Modules> ReadModules(const std::filesystem::path& romfs) {
     return modules;
 }
 
-int AnalyzeTheModules(const std::filesystem::path& output,
+// What a run executed in each module, if one was recorded: the table beside the
+// extraction's under observed/modules/<name>/, by offsets from the module's
+// start. A module the run never loaded has none.
+std::map<std::string, std::string> ReadExecutedInModules(const std::filesystem::path& extraction,
+                                                         const std::vector<std::string>& names) {
+    std::map<std::string, std::string> executed;
+    for (const std::string& name : names) {
+        const std::filesystem::path path =
+            extraction / "observed" / "modules" / name / "executed.txt";
+        if (std::filesystem::exists(path)) {
+            std::ifstream file{path};
+            executed.emplace(name,
+                             std::string{std::istreambuf_iterator<char>{file},
+                                         std::istreambuf_iterator<char>{}});
+        }
+    }
+    return executed;
+}
+
+int AnalyzeTheModules(const std::filesystem::path& extraction,
+                      const std::filesystem::path& output,
                       core::ByteSpan static_module,
                       const Modules& modules,
                       adapters::DirectoryBlobSink& writing) {
@@ -126,11 +147,19 @@ int AnalyzeTheModules(const std::filesystem::path& output,
         existing.emplace(name, ReadExistingTables(output / application::ModulesDirectory / name));
     }
 
-    const core::Result<application::AnalyzeModulesReport> report = application::AnalyzeModules(
-        application::AnalyzeModulesRequest{.static_module = static_module,
-                                           .modules = modules.bytes},
-        existing,
-        writing);
+    const std::map<std::string, std::string> executed =
+        ReadExecutedInModules(extraction, modules.names);
+    application::AnalyzeModulesRequest request{
+        .static_module = static_module, .modules = modules.bytes, .executed = {}};
+    for (const auto& [name, text] : executed) {
+        request.executed.emplace(name, text);
+    }
+    if (!executed.empty()) {
+        std::cout << std::format("observed    what a run executed in {} module(s)\n\n",
+                                 executed.size());
+    }
+    const core::Result<application::AnalyzeModulesReport> report =
+        application::AnalyzeModules(request, existing, writing);
     if (!report) {
         Report(report.Failure().Message());
         return Failure;
@@ -262,7 +291,7 @@ int Run(const application::AnalyzeOptions& options) {
     }
 
     std::cout << application::RenderAnalyzeSummary(report.Value());
-    return AnalyzeTheModules(output, module_bytes.Value(), modules.Value(), writing);
+    return AnalyzeTheModules(extraction, output, module_bytes.Value(), modules.Value(), writing);
 }
 
 }  // namespace

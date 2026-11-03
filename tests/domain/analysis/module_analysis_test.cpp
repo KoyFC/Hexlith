@@ -131,10 +131,12 @@ struct Fixture {
     }
 
     [[nodiscard]] ModuleAnalysis Analyze(std::span<const ctr::CroSegmentTag> imported) const {
-        const core::Result<ModuleAnalysis> analysed = AnalyzeModule(
-            static_module,
-            ModuleAnalysisRequest{
-                .module = &module, .file = module_file, .imported_by_others = imported});
+        const core::Result<ModuleAnalysis> analysed =
+            AnalyzeModule(static_module,
+                          ModuleAnalysisRequest{.module = &module,
+                                                .file = module_file,
+                                                .imported_by_others = imported,
+                                                .executed = {}});
         EXPECT_TRUE(analysed.Ok()) << analysed.Failure().Message();
         return analysed.Ok() ? analysed.Value() : ModuleAnalysis{};
     }

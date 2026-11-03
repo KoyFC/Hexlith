@@ -40,6 +40,13 @@ struct ModuleAnalysisRequest {
     const linker::CroModule* module = nullptr;
     core::ByteSpan file;
     std::span<const ctr::CroSegmentTag> imported_by_others;
+
+    // The instructions a run executed in the module, as the offsets from its
+    // start that its analysis uses, in the instruction set they ran in. Facts of
+    // the strongest kind (export_seed.h): the walk starts from each, and a run
+    // of them that no function covers becomes an entry of its own. Those outside
+    // the code segment are left out.
+    std::span<const ObservedInstruction> executed;
 };
 
 struct ModuleAnalysisReport {
@@ -53,6 +60,11 @@ struct ModuleAnalysisReport {
 
     std::uint32_t code_bytes = 0;
     std::uint32_t code_reached = 0;
+
+    // Walk seeds taken from what a run executed in the code, and the functions
+    // made of runs that no other function covered.
+    std::size_t observed_seeds = 0;
+    std::size_t observed_functions = 0;
 
     WalkReport walk;
     BoundsReport bounds;

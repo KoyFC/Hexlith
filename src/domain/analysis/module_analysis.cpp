@@ -134,6 +134,18 @@ core::Result<ModuleAnalysis> AnalyzeModule(const linker::CroModule& static_modul
     }
     analysis.report.imported_words = linked.Value().external.size();
 
+    // What a run executed is walked from as a fact, and the runs no function
+    // covers are made functions below.
+    std::vector<ObservedInstruction> executed;
+    for (const ObservedInstruction& instruction : request.executed) {
+        if (code->Contains(instruction.address)) {
+            executed.push_back(instruction);
+        }
+    }
+    const std::vector<WalkSeed> observed_seeds = SeedFromObservations(executed);
+    analysis.report.observed_seeds = observed_seeds.size();
+    seeds.insert(seeds.end(), observed_seeds.begin(), observed_seeds.end());
+
     // The walk sees the code segment and nothing else, so that a path running
     // off the end of the code stops there instead of decoding read-only data.
     if (code->end > request.file.size()) {
@@ -161,6 +173,10 @@ core::Result<ModuleAnalysis> AnalyzeModule(const linker::CroModule& static_modul
     std::vector<FunctionRange> entries;
     entries.reserve(seeds.size() + walked.functions.size());
     for (const WalkSeed& seed : seeds) {
+        // Having run says nothing about where a function starts (analyze.cpp).
+        if (seed.source == Provenance::Observed) {
+            continue;
+        }
         entries.push_back(FunctionRange{.address = seed.address,
                                         .size = UnknownSize,
                                         .instruction_set = seed.instruction_set,
@@ -169,7 +185,8 @@ core::Result<ModuleAnalysis> AnalyzeModule(const linker::CroModule& static_modul
     }
     entries.insert(entries.end(), walked.functions.begin(), walked.functions.end());
 
-    BoundsResult bounds = FindFunctionBounds(image, entries, walked.regions);
+    BoundsResult bounds = FindFunctionBoundsCoveringObserved(
+        image, entries, walked.regions, observed_seeds, analysis.report.observed_functions);
     analysis.report.bounds = bounds.report;
     analysis.functions = std::move(bounds.functions);
     return analysis;

@@ -10,6 +10,7 @@
 #include <map>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace hexlith::application {
@@ -28,6 +29,12 @@ constexpr std::string_view ModulesDirectory = "modules";
 struct AnalyzeModulesRequest {
     core::ByteSpan static_module;
     std::span<const core::ByteSpan> modules;
+
+    // What a run executed in each module, by the name in its header: the table
+    // hexlith-boot --record-executed writes for it, in the grammar of
+    // docs/analysis-tables.md, with offsets from the module's start. A module
+    // with no entry was not run.
+    std::map<std::string, std::string_view> executed;
 };
 
 struct ModuleSummary {
@@ -42,6 +49,7 @@ struct AnalyzeModulesReport {
     std::uint64_t code_bytes = 0;
     std::uint64_t code_reached = 0;
     std::size_t functions = 0;
+    std::size_t observed_functions = 0;
 };
 
 // The existing tables of each module, by module name. A module missing from the

@@ -1,5 +1,7 @@
 #include "application/analyze_modules.h"
 
+#include "domain/analysis/record_text.h"
+
 #include <format>
 
 namespace hexlith::application {
@@ -30,6 +32,35 @@ ImportedPositions(const linker::CroModule& static_module,
         collect(module);
     }
     return imported;
+}
+
+// The instructions a run executed in a module, from its table. A table that
+// names an instruction set other than arm and thumb is refused.
+core::Result<std::vector<analysis::ObservedInstruction>> ObservedIn(std::string_view text) {
+    std::vector<analysis::ObservedInstruction> observed;
+    if (text.empty()) {
+        return observed;
+    }
+    const core::Result<analysis::RecordFile> parsed = analysis::ParseRecordText(text);
+    if (!parsed) {
+        return parsed.Failure();
+    }
+    for (const analysis::Record& record : parsed.Value().records) {
+        const core::Result<std::string_view> isa = analysis::RequiredField(record, "isa");
+        if (!isa) {
+            return isa.Failure();
+        }
+        if (isa.Value() != "arm" && isa.Value() != "thumb") {
+            return core::Error{std::format("0x{:08X} was executed in an instruction set called {}",
+                                           record.address,
+                                           isa.Value())};
+        }
+        observed.push_back(analysis::ObservedInstruction{
+            .address = record.address,
+            .instruction_set = isa.Value() == "thumb" ? domain::arm::InstructionSet::Thumb
+                                                      : domain::arm::InstructionSet::Arm});
+    }
+    return observed;
 }
 
 double PercentOf(std::uint64_t part, std::uint64_t whole) {
@@ -66,10 +97,19 @@ core::Result<AnalyzeModulesReport> AnalyzeModules(const AnalyzeModulesRequest& r
         const linker::CroModule& module = modules.at(index);
         const auto found = imported.find(module.header.name);
 
+        const auto ran = request.executed.find(module.header.name);
+        const core::Result<std::vector<analysis::ObservedInstruction>> observed =
+            ObservedIn(ran == request.executed.end() ? std::string_view{} : ran->second);
+        if (!observed) {
+            return observed.Failure().WithContext(
+                std::format("{}: executed.txt", module.header.name));
+        }
+
         const analysis::ModuleAnalysisRequest one{
             .module = &module,
             .file = request.modules[index],
-            .imported_by_others = found == imported.end() ? NothingImported : found->second};
+            .imported_by_others = found == imported.end() ? NothingImported : found->second,
+            .executed = observed.Value()};
         const core::Result<analysis::ModuleAnalysis> analysed =
             analysis::AnalyzeModule(static_module.Value(), one);
         if (!analysed) {
@@ -93,6 +133,7 @@ core::Result<AnalyzeModulesReport> AnalyzeModules(const AnalyzeModulesRequest& r
         report.code_bytes += analysed.Value().report.code_bytes;
         report.code_reached += analysed.Value().report.code_reached;
         report.functions += written.Value().functions;
+        report.observed_functions += analysed.Value().report.observed_functions;
         report.modules.push_back(ModuleSummary{.name = module.header.name,
                                                .report = analysed.Value().report,
                                                .tables = written.Value()});
@@ -139,7 +180,9 @@ std::string RenderModulesSummary(const AnalyzeModulesReport& report) {
                             report.code_reached,
                             report.code_bytes,
                             PercentOf(report.code_reached, report.code_bytes)));
-    text.append(std::format("{} function(s)\n", report.functions));
+    text.append(std::format("{} function(s), {} of them made from what a run executed\n",
+                            report.functions,
+                            report.observed_functions));
     text.append(std::format("{} instruction set conflict(s), {} stop(s) at a word that is not an "
                             "instruction\n",
                             conflicts,
