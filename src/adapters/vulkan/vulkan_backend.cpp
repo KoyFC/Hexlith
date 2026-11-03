@@ -840,6 +840,14 @@ bool Overlaps(const gpu::MemoryRange& first, const gpu::MemoryRange& second) {
     return Overlaps(first.start, first.size, second.start, second.size);
 }
 
+// Whether memory is one pixel repeated, as a memory fill leaves a buffer. The
+// pixels' order, tiled or not, makes no difference to such a buffer, so it can
+// be decoded once.
+bool IsOnePixelRepeated(std::span<const std::uint8_t> bytes, std::size_t pixel_bytes) {
+    return bytes.size() > pixel_bytes &&
+           std::memcmp(bytes.data(), bytes.data() + pixel_bytes, bytes.size() - pixel_bytes) == 0;
+}
+
 bool Covers(const gpu::MemoryRange& outer, const gpu::MemoryRange& inner) {
     return outer.start <= inner.start && inner.start + inner.size <= outer.start + outer.size;
 }
@@ -1327,6 +1335,17 @@ void VulkanGpuBackend::Implementation::UploadColor(const Target& target,
     const std::size_t color_bytes = gpu::BytesPerPixel(target.color_format);
     const std::span<const std::uint8_t> colors =
         memory_->Bytes(target.color_address, target.ColorBytes());
+    if (IsOnePixelRepeated(colors, color_bytes)) {
+        const gpu::Color value = gpu::DecodePixel(target.color_format, colors.first(color_bytes));
+        for (std::size_t pixel = 0; pixel < static_cast<std::size_t>(target.width) * target.height;
+             ++pixel) {
+            color[pixel * 4] = value.red;
+            color[(pixel * 4) + 1] = value.green;
+            color[(pixel * 4) + 2] = value.blue;
+            color[(pixel * 4) + 3] = value.alpha;
+        }
+        return;
+    }
     for (std::uint32_t y = 0; y < target.height; ++y) {
         for (std::uint32_t x = 0; x < target.width; ++x) {
             const std::size_t pixel = (static_cast<std::size_t>(y) * target.width) + x;
@@ -1351,6 +1370,19 @@ void VulkanGpuBackend::Implementation::UploadDepth(const Target& target,
     const std::span<const std::uint8_t> depths =
         memory_->Bytes(target.depth_address, target.DepthBytes());
     const auto maximum = static_cast<float>(gpu::MaximumDepth(target.depth_format));
+    if (IsOnePixelRepeated(depths, depth_bytes)) {
+        const std::span<const std::uint8_t> stored = depths.first(depth_bytes);
+        const float stored_depth =
+            static_cast<float>(gpu::DecodeDepth(target.depth_format, stored)) / maximum;
+        const std::uint8_t stored_stencil =
+            target.depth_format == gpu::DepthFormat::D24S8 ? gpu::DecodeStencil(stored) : 0;
+        for (std::size_t pixel = 0; pixel < static_cast<std::size_t>(target.width) * target.height;
+             ++pixel) {
+            std::memcpy(&depth[pixel * 4], &stored_depth, sizeof(float));
+            stencil[pixel] = stored_stencil;
+        }
+        return;
+    }
     for (std::uint32_t y = 0; y < target.height; ++y) {
         for (std::uint32_t x = 0; x < target.width; ++x) {
             const std::size_t pixel = (static_cast<std::size_t>(y) * target.width) + x;

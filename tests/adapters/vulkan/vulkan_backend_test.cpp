@@ -354,6 +354,35 @@ TEST(VulkanGpuBackend, DropsATargetAFillCoversWithoutWritingItBack) {
     EXPECT_EQ(run.backend->Statistics().conflicts, 0U);
 }
 
+// A buffer a fill left is one pixel repeated, which is taken from memory
+// faster; a single pixel that differs, even the last, must still be seen.
+TEST(VulkanGpuBackend, SeesTheOnePixelThatDiffersInOtherwiseUniformMemory) {
+    Resident run = MakeResident();
+    if (!run.backend) {
+        GTEST_SKIP() << "no Vulkan device that can draw";
+    }
+    const auto prepare = [](gpu::GpuMemory& memory) {
+        EXPECT_TRUE(memory.Write(ColorAddress, Fill(0x7F)));
+        EXPECT_TRUE(
+            memory.Write(ColorAddress + ColorBytes - 4, std::vector<std::uint8_t>(4, 0x11)));
+        EXPECT_TRUE(memory.Write(DepthAddress, std::vector<std::uint8_t>(DepthBytes, 0xFF)));
+        EXPECT_TRUE(
+            memory.Write(DepthAddress + DepthBytes - 4, std::vector<std::uint8_t>(4, 0x80)));
+    };
+    auto reference_memory = Memory();
+    prepare(*reference_memory);
+    application::ReferenceGpuBackend reference(*reference_memory, gpu::Sampling::Hardware);
+    ASSERT_TRUE(reference.RunCommandList(Scene().Bytes()).Ok());
+    prepare(*run.memory);
+
+    ASSERT_TRUE(run.backend->RunCommandList(Scene().Bytes()).Ok());
+    ASSERT_TRUE(run.backend->BeforeRead(ColorAddress, ColorBytes).Ok());
+    ASSERT_TRUE(run.backend->BeforeRead(DepthAddress, DepthBytes).Ok());
+
+    EXPECT_EQ(Differences(*run.memory, *reference_memory, ColorAddress), "");
+    EXPECT_EQ(DepthsApart(*run.memory, *reference_memory), 0U);
+}
+
 TEST(VulkanGpuBackend, WritesBackWhatAPartialWriteWouldLose) {
     Resident run = MakeResident();
     if (!run.backend) {
