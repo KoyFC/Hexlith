@@ -1,6 +1,7 @@
 #include "application/live_display.h"
 #include "domain/gpu/gx_command.h"
 
+#include <algorithm>
 #include <array>
 #include <format>
 #include <gtest/gtest.h>
@@ -49,6 +50,11 @@ public:
         return {};
     }
 
+    core::Result<bool> RunDisplayTransfer(const gpu::TransferConfig& transfer) override {
+        offered.push_back(transfer.output);
+        return carries_out_transfers;
+    }
+
     [[nodiscard]] ports::GpuBackendStatistics Statistics() const override {
         return {};
     }
@@ -61,6 +67,10 @@ public:
     std::vector<gpu::Color> first_pixels;
     std::vector<std::size_t> list_sizes;
     std::vector<std::string> calls;
+    // The outputs of the transfers the backend was offered, and whether it
+    // takes them.
+    std::vector<std::uint32_t> offered;
+    bool carries_out_transfers = false;
 };
 
 // A game's description of a framebuffer in VRAM, shown as soon as it is told.
@@ -198,6 +208,48 @@ TEST(LiveDisplay, TellsTheBackendWhatATransferReadsAndWrites) {
 
     ASSERT_TRUE(display.Command(1, transfer));
     EXPECT_EQ(watcher.calls, (std::vector<std::string>{"read 18000000 40", "write 18010000 40"}));
+}
+
+// A 4 by 4 copy of RGBA8 from one page of VRAM to another, which memory can
+// carry out and a backend may offer to.
+constexpr std::array<std::uint32_t, 8> SmallTransfer = {
+    static_cast<std::uint32_t>(gpu::GxCommandId::DisplayTransfer),
+    VramVirtual,
+    VramVirtual + 0x10000,
+    (4U << 16) | 4U,
+    (4U << 16) | 4U,
+    0,
+    0,
+    0};
+
+// ADR 0033: a backend that takes a transfer owes memory its output when it is
+// read, so neither the announcements nor the copy on memory are made for it.
+TEST(LiveDisplay, LeavesATransferToTheBackendThatTakesIt) {
+    gpu::GpuMemory memory;
+    std::ranges::fill(memory.Bytes(gpu::GpuMemory::VramBase, 0x40), White);
+    Watcher watcher;
+    watcher.carries_out_transfers = true;
+    LiveDisplay display{memory, watcher, watcher};
+
+    ASSERT_TRUE(display.Command(1, SmallTransfer));
+
+    EXPECT_EQ(watcher.offered, std::vector<std::uint32_t>{gpu::GpuMemory::VramBase + 0x10000});
+    EXPECT_TRUE(watcher.calls.empty()) << "nothing is announced for a transfer it carries out";
+    EXPECT_EQ(memory.Bytes(gpu::GpuMemory::VramBase + 0x10000, 1).front(), 0);
+    EXPECT_EQ(display.Work().transfers, 1U);
+}
+
+TEST(LiveDisplay, DoesTheTransferOnMemoryWhenTheBackendDeclinesIt) {
+    gpu::GpuMemory memory;
+    std::ranges::fill(memory.Bytes(gpu::GpuMemory::VramBase, 0x40), White);
+    Watcher watcher;
+    LiveDisplay display{memory, watcher, watcher};
+
+    ASSERT_TRUE(display.Command(1, SmallTransfer));
+
+    EXPECT_EQ(watcher.offered.size(), 1U);
+    EXPECT_EQ(watcher.calls, (std::vector<std::string>{"read 18000000 40", "write 18010000 40"}));
+    EXPECT_EQ(memory.Bytes(gpu::GpuMemory::VramBase + 0x10000, 1).front(), White);
 }
 
 TEST(LiveDisplay, TellsTheBackendWhatAFrameShowsBeforeTakingItsPicture) {

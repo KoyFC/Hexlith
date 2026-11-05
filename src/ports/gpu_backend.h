@@ -2,6 +2,7 @@
 #define HEXLITH_PORTS_GPU_BACKEND_H
 
 #include "core/result.h"
+#include "domain/gpu/memory_transfer.h"
 
 #include <chrono>
 #include <cstdint>
@@ -88,6 +89,16 @@ public:
     [[nodiscard]] virtual core::Status BeforeWrite(std::uint32_t /*physical*/,
                                                    std::uint32_t /*size*/) {
         return {};
+    }
+
+    // A display transfer the game asked for, offered to the backend before
+    // anything is announced or done to memory. A backend that carries it out
+    // answers true and owes memory the transfer's output by the time anything
+    // reads it, through BeforeRead; one that answers false leaves it to the
+    // caller, which does it on memory as before. ADR 0033.
+    [[nodiscard]] virtual core::Result<bool>
+    RunDisplayTransfer(const domain::gpu::TransferConfig& /*transfer*/) {
+        return false;
     }
 
     [[nodiscard]] virtual GpuBackendStatistics Statistics() const = 0;

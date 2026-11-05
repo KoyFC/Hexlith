@@ -117,12 +117,14 @@ core::Status LiveDisplay::Announce(const std::array<std::uint32_t, 8>& words) {
 // display transfer run here is done where the console would do it, and the
 // backend can be told before anything touches the memory it draws in.
 core::Status LiveDisplay::Command(std::uint64_t frame, const std::array<std::uint32_t, 8>& words) {
-    core::Status before = Before(frame, false);
-    if (before) {
-        before = Announce(words);
-    }
-    if (!before) {
+    if (const core::Status before = Before(frame, false); !before) {
         return before;
+    }
+    if (gpu::CommandId(words) == gpu::GxCommandId::DisplayTransfer) {
+        return DisplayTransfer(words);
+    }
+    if (const core::Status announced = Announce(words); !announced) {
+        return announced;
     }
     switch (gpu::CommandId(words)) {
     case gpu::GxCommandId::ProcessCommandList: {
@@ -142,18 +144,36 @@ core::Status LiveDisplay::Command(std::uint64_t frame, const std::array<std::uin
         ++work_.lists;
         return Timed(work_.lists_time, [&] { return backend_->RunCommandList(list_); });
     }
-    case gpu::GxCommandId::DisplayTransfer:
-        if (const std::optional<gpu::TransferConfig> transfer = gpu::Transfer(words)) {
-            ++work_.transfers;
-            Timed(work_.transfers_time, [&] {
-                static_cast<void>(gpu::RunTransfer(*memory_, *transfer));
-                return 0;
-            });
-        }
-        return {};
     default:
         return {};
     }
+}
+
+// The backend is offered a transfer first, and one that takes it owes memory
+// the output when it is read, so nothing is announced or copied here for it
+// (ADR 0033). One that declines it leaves the transfer to memory.
+core::Status LiveDisplay::DisplayTransfer(const std::array<std::uint32_t, 8>& words) {
+    const std::optional<gpu::TransferConfig> transfer = gpu::Transfer(words);
+    if (!transfer) {
+        return {};
+    }
+    ++work_.transfers;
+    const core::Result<bool> taken =
+        Timed(work_.transfers_time, [&] { return backend_->RunDisplayTransfer(*transfer); });
+    if (!taken) {
+        return taken.Failure();
+    }
+    if (taken.Value()) {
+        return {};
+    }
+    if (const core::Status announced = Announce(words); !announced) {
+        return announced;
+    }
+    Timed(work_.transfers_time, [&] {
+        static_cast<void>(gpu::RunTransfer(*memory_, *transfer));
+        return 0;
+    });
+    return {};
 }
 
 core::Status LiveDisplay::Framebuffer(std::uint64_t frame,
