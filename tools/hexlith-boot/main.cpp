@@ -587,6 +587,10 @@ void PrintDisplayWork(const Display& shown) {
         statistics.pipelines,
         Seconds(times.pipelines),
         statistics.fallback_draws);
+    std::cout << std::format(
+        "        {} display transfers on the device, {} waits for the device\n",
+        statistics.transfers,
+        statistics.waits);
 }
 
 // Closes what watched the run: the GPU recording and the window.
