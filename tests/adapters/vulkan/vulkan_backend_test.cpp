@@ -2,6 +2,7 @@
 #include "application/gpu_render.h"
 #include "domain/gpu/pica_registers.h"
 
+#include <algorithm>
 #include <bit>
 #include <chrono>
 #include <cstdlib>
@@ -456,6 +457,161 @@ TEST(VulkanGpuBackend, ReturnsFromAListWithoutWaitingForTheDevice) {
     ASSERT_TRUE(run.backend->BeforeRead(ColorAddress, ColorBytes).Ok());
     EXPECT_EQ(run.backend->Statistics().waits, 1U) << "the read waits for the copy, once";
     EXPECT_EQ(Differences(*run.memory, *reference, ColorAddress), "");
+    EXPECT_EQ(run.context->ValidationMessages(), 0U) << run.context->FirstValidationMessage();
+}
+
+// A display transfer of the kind the title makes: the colour buffer in RGBA8
+// and in tiles, cut to its first 24 by 24 pixels and written as RGB8 in rows,
+// with no flip and no scale. Flags: GBATEK's GPU_MEMCOPY_FLAGS, bit 2 crops
+// the input lines and bits 12 to 14 are the output format, 1 for RGB8.
+constexpr std::uint32_t TransferOutput = gpu::GpuMemory::VramBase + 0x30000;
+constexpr std::uint32_t TransferSide = 24;
+constexpr std::uint32_t TransferBytes = TransferSide * TransferSide * 3;
+
+gpu::TransferConfig TitleTransfer() {
+    return {.input = ColorAddress,
+            .output = TransferOutput,
+            .input_size = (Side << 16) | Side,
+            .output_size = (TransferSide << 16) | TransferSide,
+            .flags = (1U << 12) | (1U << 2)};
+}
+
+std::vector<std::uint8_t> OutputOf(const gpu::GpuMemory& memory) {
+    const std::span<const std::uint8_t> bytes = memory.Bytes(TransferOutput, TransferBytes);
+    return {bytes.begin(), bytes.end()};
+}
+
+// The reference's memory after the scene and the same transfer done on it.
+std::unique_ptr<gpu::GpuMemory> ReferenceWithTransfer() {
+    return Reference({Scene()}, [](gpu::GpuMemory& memory) {
+        EXPECT_EQ(gpu::RunTransfer(memory, TitleTransfer()), gpu::TransferOutcome::Done);
+    });
+}
+
+// ADR 0033: the transfer is done on the device, and its output reaches memory
+// when something reads it, the same bytes as when memory does the transfer.
+TEST(VulkanGpuBackend, CarriesOutTheTitlesDisplayTransferAsMemoryDoes) {
+    Resident run = MakeResident();
+    if (!run.backend) {
+        GTEST_SKIP() << "no Vulkan device that can draw";
+    }
+    const auto reference = ReferenceWithTransfer();
+    const std::vector<std::uint8_t> expected = OutputOf(*reference);
+    ASSERT_NE(std::ranges::count(expected, 0), static_cast<std::ptrdiff_t>(expected.size()))
+        << "the transfer of a drawn scene is not all zero";
+
+    ASSERT_TRUE(run.backend->RunCommandList(Scene().Bytes()).Ok());
+    const core::Result<bool> taken = run.backend->RunDisplayTransfer(TitleTransfer());
+    ASSERT_TRUE(taken.Ok());
+    EXPECT_TRUE(taken.Value());
+    EXPECT_EQ(run.backend->Statistics().waits, 0U) << "neither the list nor the transfer waits";
+    EXPECT_EQ(OutputOf(*run.memory), std::vector<std::uint8_t>(TransferBytes, 0))
+        << "memory has nothing until it is read";
+
+    ASSERT_TRUE(run.backend->BeforeRead(TransferOutput, TransferBytes).Ok());
+    EXPECT_EQ(OutputOf(*run.memory), expected);
+    EXPECT_EQ(run.backend->Statistics().transfers, 1U);
+    EXPECT_EQ(run.backend->Statistics().downloaded_bytes, 0U) << "the colour is never written back";
+    EXPECT_EQ(run.backend->Statistics().conflicts, 0U);
+    EXPECT_EQ(run.context->ValidationMessages(), 0U) << run.context->FirstValidationMessage();
+}
+
+// The title's transfers read the last rows of a taller target, starting on a
+// row of tiles: a screen of 400 rows from the bottom of 512. The pixels are
+// the ones memory takes from that address.
+TEST(VulkanGpuBackend, CarriesOutATransferThatStartsLowerInTheTarget) {
+    Resident run = MakeResident();
+    if (!run.backend) {
+        GTEST_SKIP() << "no Vulkan device that can draw";
+    }
+    // Eight rows down: a row of tiles is eight rows of Side pixels of 4 bytes.
+    gpu::TransferConfig lower = TitleTransfer();
+    lower.input += 8 * Side * 4;
+    const auto reference = Reference({Scene()}, [&](gpu::GpuMemory& memory) {
+        EXPECT_EQ(gpu::RunTransfer(memory, lower), gpu::TransferOutcome::Done);
+    });
+    const std::vector<std::uint8_t> expected = OutputOf(*reference);
+    ASSERT_NE(expected, OutputOf(*ReferenceWithTransfer())) << "the rows differ from the top";
+
+    ASSERT_TRUE(run.backend->RunCommandList(Scene().Bytes()).Ok());
+    const core::Result<bool> taken = run.backend->RunDisplayTransfer(lower);
+    ASSERT_TRUE(taken.Ok());
+    EXPECT_TRUE(taken.Value());
+    ASSERT_TRUE(run.backend->BeforeRead(TransferOutput, TransferBytes).Ok());
+    EXPECT_EQ(OutputOf(*run.memory), expected);
+    EXPECT_EQ(run.context->ValidationMessages(), 0U) << run.context->FirstValidationMessage();
+}
+
+// What the backend cannot do the way memory does is left to memory.
+TEST(VulkanGpuBackend, DeclinesATransferItDoesNotCarryOut) {
+    Resident run = MakeResident();
+    if (!run.backend) {
+        GTEST_SKIP() << "no Vulkan device that can draw";
+    }
+    ASSERT_TRUE(run.backend->RunCommandList(Scene().Bytes()).Ok());
+    const auto changed = [](auto change) {
+        gpu::TransferConfig transfer = TitleTransfer();
+        change(transfer);
+        return transfer;
+    };
+    const std::vector<std::pair<std::string, gpu::TransferConfig>> declined = {
+        {"flipped", changed([](auto& t) { t.flags |= 1U << 0; })},
+        {"linear input", changed([](auto& t) { t.flags |= 1U << 1; })},
+        {"a texture copy", changed([](auto& t) { t.flags |= 1U << 3; })},
+        {"unswizzled", changed([](auto& t) { t.flags |= 1U << 5; })},
+        {"downscaled", changed([](auto& t) { t.flags |= 1U << 24; })},
+        {"RGBA4 output", changed([](auto& t) { t.flags = (t.flags & ~(7U << 12)) | (4U << 12); })},
+        {"RGB565 input", changed([](auto& t) { t.flags |= 2U << 8; })},
+        {"not a target", changed([](auto& t) { t.input += 0x1000; })},
+        {"not on a row of tiles", changed([](auto& t) { t.input += 4; })},
+        {"past the target's last row", changed([](auto& t) { t.input += 9 * Side * 4; })},
+        {"not whole tiles", changed([](auto& t) { t.output_size = (20U << 16) | 20U; })},
+        {"wider than the target", changed([](auto& t) { t.output_size = (40U << 16) | 40U; })},
+        {"outside memory", changed([](auto& t) { t.output = 0x30000000; })}};
+
+    for (const auto& [name, transfer] : declined) {
+        const core::Result<bool> taken = run.backend->RunDisplayTransfer(transfer);
+        ASSERT_TRUE(taken.Ok()) << name;
+        EXPECT_FALSE(taken.Value()) << name << " is left to memory";
+    }
+    EXPECT_EQ(run.backend->Statistics().transfers, 0U);
+}
+
+// A write nobody announced to the transfer's output, made after the transfer,
+// is the later of the two and stays, as it would on the console.
+TEST(VulkanGpuBackend, KeepsWhatTheCpuWroteOverAPendingTransfer) {
+    Resident run = MakeResident();
+    if (!run.backend) {
+        GTEST_SKIP() << "no Vulkan device that can draw";
+    }
+    const std::vector<std::uint8_t> expected = OutputOf(*ReferenceWithTransfer());
+    ASSERT_TRUE(run.backend->RunCommandList(Scene().Bytes()).Ok());
+    ASSERT_TRUE(run.backend->RunDisplayTransfer(TitleTransfer()).Value());
+
+    constexpr std::size_t Written = 5;
+    const auto theirs = static_cast<std::uint8_t>(expected.at(Written) ^ 0xFF);
+    run.memory->Bytes(TransferOutput, TransferBytes)[Written] = theirs;
+    ASSERT_TRUE(run.backend->BeforeRead(TransferOutput, TransferBytes).Ok());
+
+    std::vector<std::uint8_t> wanted = expected;
+    wanted.at(Written) = theirs;
+    EXPECT_EQ(OutputOf(*run.memory), wanted);
+    EXPECT_EQ(run.backend->Statistics().conflicts, 1U);
+}
+
+// An overwrite that covers the whole output makes it pointless to write.
+TEST(VulkanGpuBackend, DropsATransferTheGameOverwritesWhole) {
+    Resident run = MakeResident();
+    if (!run.backend) {
+        GTEST_SKIP() << "no Vulkan device that can draw";
+    }
+    ASSERT_TRUE(run.backend->RunCommandList(Scene().Bytes()).Ok());
+    ASSERT_TRUE(run.backend->RunDisplayTransfer(TitleTransfer()).Value());
+
+    ASSERT_TRUE(run.backend->BeforeWrite(TransferOutput, TransferBytes).Ok());
+    ASSERT_TRUE(run.backend->BeforeRead(TransferOutput, TransferBytes).Ok());
+
+    EXPECT_EQ(OutputOf(*run.memory), std::vector<std::uint8_t>(TransferBytes, 0));
     EXPECT_EQ(run.context->ValidationMessages(), 0U) << run.context->FirstValidationMessage();
 }
 

@@ -46,6 +46,8 @@ struct GpuBackendStatistics {
     std::uint64_t conflicts = 0;
     // Times the host stopped to wait for the device.
     std::uint64_t waits = 0;
+    // Display transfers the backend carried out itself.
+    std::uint64_t transfers = 0;
     // Pipelines made, and the different configurations of the fragment stage
     // the draws had: how many shaders specialised for a draw would have been
     // made (docs/gpu-speed.md).

@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <deque>
 #include <format>
 #include <future>
 #include <map>
@@ -422,6 +423,29 @@ struct Frame {
 // more than this in one frame waits for the oldest.
 constexpr std::size_t FramesInFlight = 4;
 
+// A display transfer given to the device whose output is not in memory yet
+// (ADR 0033): the first pixels of a target's colour image, in rows, in a buffer
+// the host reads when something needs the bytes, and what memory held over the
+// range when the transfer was made, to tell a later write from the transfer's.
+struct PendingTransfer {
+    gpu::MemoryRange range;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::unique_ptr<HostBuffer> pixels;
+    std::vector<std::uint8_t> before;
+    Ticket ticket = 0;
+};
+
+// A transfer the backend can do: the target it reads and the pixels it writes.
+struct DeviceTransfer {
+    Slot* slot = nullptr;
+    // The first row of the target's image the transfer reads.
+    std::uint32_t first_row = 0;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    gpu::MemoryRange output;
+};
+
 // How many targets stay resident; the least recently used is written back to
 // make room. The title draws to a handful.
 constexpr std::size_t MaxResidentTargets = 16;
@@ -454,6 +478,8 @@ public:
     core::Status Initialise();
     core::Status RunCommandList(std::span<const std::uint8_t> list);
 
+    core::Result<bool> RunDisplayTransfer(const gpu::TransferConfig& transfer);
+
     core::Status BeforeRead(std::uint32_t physical, std::uint32_t size) {
         return MakeTrue({.start = physical, .size = size});
     }
@@ -471,6 +497,7 @@ public:
                 .allocations = allocations_,
                 .conflicts = conflicts_,
                 .waits = waits_,
+                .transfers = transfers_,
                 .pipelines = pipelines_.size(),
                 .fragment_configurations = fragment_numbers_.size(),
                 .fallback_draws = fallback_draws_,
@@ -543,6 +570,10 @@ private:
     core::Status MakeTrue(const gpu::MemoryRange& range);
     core::Status Forget(const gpu::MemoryRange& range, bool overwritten, const Slot* except);
     core::Status WriteBackAll();
+    std::optional<DeviceTransfer> Carries(const gpu::TransferConfig& transfer);
+    core::Result<PendingTransfer> TakePending(VkDeviceSize pixel_bytes);
+    core::Status ResolveOutputs(const gpu::MemoryRange& range, bool drop_covered);
+    core::Status Resolve(PendingTransfer& pending);
     core::Result<HostBuffer*>
     Reserve(std::unique_ptr<HostBuffer>& kept, Scratch which, VkDeviceSize size);
     void TakeSnapshot(Part& part, const gpu::MemoryRange& range);
@@ -604,6 +635,10 @@ private:
     // Where a writeback's copy lands. It is waited for before it is read, so
     // one is enough.
     std::unique_ptr<HostBuffer> readback_;
+    // Transfers given to the device whose output memory does not hold yet, in
+    // the order they were made; and the buffers of those that are done with.
+    std::deque<PendingTransfer> outputs_;
+    std::vector<PendingTransfer> spare_;
 
     // What the pending draws of the current list need.
     std::vector<PendingDraw> pending_;
@@ -623,6 +658,7 @@ private:
     std::uint64_t allocations_ = 0;
     std::uint64_t conflicts_ = 0;
     std::uint64_t waits_ = 0;
+    std::uint64_t transfers_ = 0;
     ports::GpuBackendTimes times_;
     bool unsupported_ = false;
 };
@@ -1017,6 +1053,39 @@ bool Covers(const gpu::MemoryRange& outer, const gpu::MemoryRange& inner) {
     return outer.start <= inner.start && inner.start + inner.size <= outer.start + outer.size;
 }
 
+void PipelineBarrier(VkCommandBuffer commands,
+                     VkPipelineStageFlags from,
+                     VkPipelineStageFlags to,
+                     VkAccessFlags written,
+                     VkAccessFlags read) {
+    VkMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    barrier.srcAccessMask = written;
+    barrier.dstAccessMask = read;
+    vkCmdPipelineBarrier(commands, from, to, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+}
+
+// What earlier groups drew, in submissions that may still be running, is made
+// visible to a copy out of the images, which the render pass left in the layout
+// the copy reads them in.
+void MakeDrawnVisibleToCopy(VkCommandBuffer commands) {
+    PipelineBarrier(commands,
+                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                    VK_ACCESS_TRANSFER_READ_BIT);
+}
+
+// What a copy wrote is made visible to the host once the fence is signalled.
+void MakeCopyVisibleToHost(VkCommandBuffer commands) {
+    PipelineBarrier(commands,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_PIPELINE_STAGE_HOST_BIT,
+                    VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_ACCESS_HOST_READ_BIT);
+}
+
 }  // namespace
 
 void VulkanGpuBackend::Implementation::TakeSnapshot(Part& part, const gpu::MemoryRange& range) {
@@ -1105,24 +1174,7 @@ core::Status VulkanGpuBackend::Implementation::WriteBack(Slot& slot, bool color,
     ++waits_;
     const core::Result<Ticket> submitted =
         context_->SubmitWithoutWaiting([&](VkCommandBuffer commands) {
-            // What earlier groups drew, in submissions that may still be running,
-            // is made visible to the copy; the render pass left the images in the
-            // layout it reads them in.
-            VkMemoryBarrier drawn{};
-            drawn.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-            drawn.srcAccessMask =
-                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-            drawn.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            vkCmdPipelineBarrier(commands,
-                                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 0,
-                                 1,
-                                 &drawn,
-                                 0,
-                                 nullptr,
-                                 0,
-                                 nullptr);
+            MakeDrawnVisibleToCopy(commands);
             if (color) {
                 vkCmdCopyImageToBuffer(commands,
                                        slot.images.color.image,
@@ -1139,20 +1191,7 @@ core::Status VulkanGpuBackend::Implementation::WriteBack(Slot& slot, bool color,
                                        2,
                                        depth_regions.data());
             }
-            VkMemoryBarrier host{};
-            host.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-            host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-            vkCmdPipelineBarrier(commands,
-                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 VK_PIPELINE_STAGE_HOST_BIT,
-                                 0,
-                                 1,
-                                 &host,
-                                 0,
-                                 nullptr,
-                                 0,
-                                 nullptr);
+            MakeCopyVisibleToHost(commands);
         });
     if (!submitted) {
         return submitted.Failure();
@@ -1219,6 +1258,9 @@ core::Result<HostBuffer*> VulkanGpuBackend::Implementation::Reserve(
 
 // Memory is made true over a range for whoever is about to read it.
 core::Status VulkanGpuBackend::Implementation::MakeTrue(const gpu::MemoryRange& range) {
+    if (const core::Status resolved = ResolveOutputs(range, false); !resolved) {
+        return resolved;
+    }
     for (const std::unique_ptr<Slot>& slot : slots_) {
         const bool color =
             slot->color.state == PartState::Dirty && Overlaps(range, ColorRange(slot->target));
@@ -1237,6 +1279,9 @@ core::Status VulkanGpuBackend::Implementation::MakeTrue(const gpu::MemoryRange& 
 core::Status VulkanGpuBackend::Implementation::Forget(const gpu::MemoryRange& range,
                                                       bool overwritten,
                                                       const Slot* except) {
+    if (const core::Status resolved = ResolveOutputs(range, overwritten); !resolved) {
+        return resolved;
+    }
     for (const std::unique_ptr<Slot>& slot : slots_) {
         if (slot.get() == except) {
             continue;
@@ -1260,13 +1305,238 @@ core::Status VulkanGpuBackend::Implementation::Forget(const gpu::MemoryRange& ra
 }
 
 core::Status VulkanGpuBackend::Implementation::WriteBackAll() {
-    core::Status status;
+    core::Status status = ResolveOutputs({.start = 0, .size = UINT32_MAX}, false);
     for (const std::unique_ptr<Slot>& slot : slots_) {
         if (const core::Status written = WriteBack(*slot, true, true); !written && status) {
             status = written;
         }
     }
     return status;
+}
+
+// ---------------------------------------------------------------------------
+// Display transfers on the device (ADR 0033).
+
+namespace {
+
+// GPU_MEMCOPY_FLAGS, as memory_transfer.cpp reads them. Source: GBATEK;
+// Azahar's DisplayTransferConfig.
+constexpr unsigned TransferFlip = 0;
+constexpr unsigned TransferInputLinear = 1;
+constexpr unsigned TransferTextureCopy = 3;
+constexpr unsigned TransferDontSwizzle = 5;
+constexpr unsigned TransferInputFormat = 8;
+constexpr unsigned TransferOutputFormat = 12;
+constexpr unsigned TransferScaling = 24;
+
+// A transfer's dimensions, in the halfwords of its size words, and the side of
+// the tiles the output has to be whole ones of for memory to take the same way.
+constexpr std::uint32_t HalfwordMask = 0xFFFF;
+constexpr unsigned HalfwordBits = 16;
+constexpr std::uint32_t TileSide = 8;
+// An RGB8 pixel in memory is blue, green, red; the image holds red, green,
+// blue, alpha. Source: EncodeAs<Rgb8> in pixel_formats.cpp.
+constexpr std::uint32_t Rgb8Bytes = 3;
+constexpr std::uint32_t ImagePixelBytes = 4;
+
+// The pixels of a transfer's output, from the buffer the device copied them
+// into, converted to what memory holds for RGB8.
+void ConvertToRgb8(const PendingTransfer& pending, std::span<std::uint8_t> output) {
+    const std::span<const std::uint8_t> pixels = pending.pixels->Bytes();
+    const std::size_t count = static_cast<std::size_t>(pending.width) * pending.height;
+    for (std::size_t pixel = 0; pixel < count; ++pixel) {
+        output[(pixel * Rgb8Bytes)] = pixels[(pixel * ImagePixelBytes) + 2];
+        output[(pixel * Rgb8Bytes) + 1] = pixels[(pixel * ImagePixelBytes) + 1];
+        output[(pixel * Rgb8Bytes) + 2] = pixels[pixel * ImagePixelBytes];
+    }
+}
+
+}  // namespace
+
+// The transfer, if it is the title's kind and the backend holds the target it
+// reads: RGBA8 in tiles to RGB8 in rows of whole tiles, no flip, no scale, the
+// output no larger than the target and read from a row of its tiles. Anything
+// else is for memory to do.
+std::optional<DeviceTransfer>
+VulkanGpuBackend::Implementation::Carries(const gpu::TransferConfig& transfer) {
+    const std::uint32_t flags = transfer.flags;
+    const bool plain =
+        Field(flags, TransferFlip, 1) == 0 && Field(flags, TransferInputLinear, 1) == 0 &&
+        Field(flags, TransferTextureCopy, 1) == 0 && Field(flags, TransferDontSwizzle, 1) == 0 &&
+        Field(flags, TransferScaling, 2) == 0;
+    if (!plain ||
+        gpu::TransferFormat(Field(flags, TransferInputFormat, 3)) != gpu::PixelFormat::Rgba8 ||
+        gpu::TransferFormat(Field(flags, TransferOutputFormat, 3)) != gpu::PixelFormat::Rgb8) {
+        return std::nullopt;
+    }
+    const std::uint32_t input_width = transfer.input_size & HalfwordMask;
+    const std::uint32_t width = transfer.output_size & HalfwordMask;
+    const std::uint32_t height = transfer.output_size >> HalfwordBits;
+    if (width == 0 || height == 0 || width % TileSide != 0 || height % TileSide != 0) {
+        return std::nullopt;
+    }
+    // The input starts on a row of tiles somewhere in a target's colour, which
+    // is where the title's screens are: the last rows of a taller target.
+    Slot* found = nullptr;
+    std::uint32_t first_row = 0;
+    for (const std::unique_ptr<Slot>& slot : slots_) {
+        const Target& target = slot->target;
+        const std::uint32_t tile_row_bytes = target.width * TileSide * ImagePixelBytes;
+        if (target.width != input_width || target.color_format != gpu::PixelFormat::Rgba8 ||
+            slot->color.state == PartState::Stale || width > target.width ||
+            transfer.input < target.color_address ||
+            (transfer.input - target.color_address) % tile_row_bytes != 0 ||
+            (found != nullptr && slot->used <= found->used)) {
+            continue;
+        }
+        const std::uint32_t row =
+            (transfer.input - target.color_address) / (target.width * ImagePixelBytes);
+        if (row + height <= target.height) {
+            found = slot.get();
+            first_row = row;
+        }
+    }
+    const auto size = static_cast<std::uint32_t>(width * height * Rgb8Bytes);
+    if (found == nullptr || memory_->Bytes(transfer.output, size).size() != size) {
+        return std::nullopt;
+    }
+    return DeviceTransfer{.slot = found,
+                          .first_row = first_row,
+                          .width = width,
+                          .height = height,
+                          .output = {.start = transfer.output, .size = size}};
+}
+
+// A record for a transfer, from those that are done with or new, holding a
+// buffer for this many bytes.
+core::Result<PendingTransfer>
+VulkanGpuBackend::Implementation::TakePending(VkDeviceSize pixel_bytes) {
+    PendingTransfer pending;
+    const auto spare = std::ranges::find_if(
+        spare_, [&](const PendingTransfer& one) { return context_->Finished(one.ticket); });
+    if (spare != spare_.end()) {
+        pending = std::move(*spare);
+        spare_.erase(spare);
+    }
+    if (!pending.pixels || pending.pixels->Bytes().size() < pixel_bytes) {
+        const Stopwatch allocating{times_.allocate};
+        ++allocations_;
+        pending.pixels.reset();
+        auto made = HostBuffer::Create(
+            *context_, pixel_bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, HostUse::ReadBack);
+        if (!made) {
+            return made.Failure();
+        }
+        pending.pixels = std::move(made.Value());
+    }
+    return pending;
+}
+
+core::Result<bool>
+VulkanGpuBackend::Implementation::RunDisplayTransfer(const gpu::TransferConfig& transfer) {
+    const std::optional<DeviceTransfer> shape = Carries(transfer);
+    if (!shape) {
+        return false;
+    }
+    Slot& slot = *shape->slot;
+    slot.used = ++clock_;
+    // What is already in the output's place, or about to be written there by an
+    // earlier transfer, is replaced.
+    if (const core::Status forgotten = Forget(shape->output, true, nullptr); !forgotten) {
+        return forgotten.Failure();
+    }
+    core::Result<PendingTransfer> taken =
+        TakePending(static_cast<VkDeviceSize>(shape->width) * shape->height * ImagePixelBytes);
+    if (!taken) {
+        return taken.Failure();
+    }
+    PendingTransfer& pending = taken.Value();
+    pending.range = shape->output;
+    pending.width = shape->width;
+    pending.height = shape->height;
+    const std::span<const std::uint8_t> memory =
+        std::as_const(*memory_).Bytes(shape->output.start, shape->output.size);
+    pending.before.assign(memory.begin(), memory.end());
+
+    const VkBufferImageCopy region{
+        .bufferOffset = 0,
+        .bufferRowLength = 0,
+        .bufferImageHeight = 0,
+        .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                             .mipLevel = 0,
+                             .baseArrayLayer = 0,
+                             .layerCount = 1},
+        .imageOffset = {.x = 0, .y = static_cast<std::int32_t>(shape->first_row), .z = 0},
+        .imageExtent = {.width = shape->width, .height = shape->height, .depth = 1}};
+    const core::Result<Ticket> submitted =
+        context_->SubmitWithoutWaiting([&](VkCommandBuffer commands) {
+            MakeDrawnVisibleToCopy(commands);
+            vkCmdCopyImageToBuffer(commands,
+                                   slot.images.color.image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   pending.pixels->Buffer(),
+                                   1,
+                                   &region);
+            MakeCopyVisibleToHost(commands);
+        });
+    if (!submitted) {
+        return submitted.Failure();
+    }
+    pending.ticket = submitted.Value();
+    outputs_.push_back(std::move(pending));
+    ++transfers_;
+    return true;
+}
+
+// The output reaches memory where memory is still what it was when the
+// transfer was made. Where someone wrote since, that is the later of the two
+// and stays, and counts as a write nobody announced.
+core::Status VulkanGpuBackend::Implementation::Resolve(PendingTransfer& pending) {
+    if (!context_->Finished(pending.ticket)) {
+        const Stopwatch waiting{times_.wait};
+        ++waits_;
+        if (const core::Status finished = context_->Wait(pending.ticket); !finished) {
+            return finished;
+        }
+    }
+    const Stopwatch downloading{times_.download};
+    const std::span<std::uint8_t> memory = memory_->Bytes(pending.range.start, pending.range.size);
+    if (memory.size() != pending.range.size) {
+        return {};
+    }
+    if (std::memcmp(memory.data(), pending.before.data(), memory.size()) == 0) {
+        ConvertToRgb8(pending, memory);
+        return {};
+    }
+    ++conflicts_;
+    std::vector<std::uint8_t> converted(memory.size());
+    ConvertToRgb8(pending, converted);
+    for (std::size_t at = 0; at < memory.size(); ++at) {
+        if (memory[at] == pending.before[at]) {
+            memory[at] = converted[at];
+        }
+    }
+    return {};
+}
+
+// Makes memory true over a range for the transfers that write in it, or
+// drops those the range overwrites whole when asked to.
+core::Status VulkanGpuBackend::Implementation::ResolveOutputs(const gpu::MemoryRange& range,
+                                                              bool drop_covered) {
+    for (auto pending = outputs_.begin(); pending != outputs_.end();) {
+        if (!Overlaps(range, pending->range)) {
+            ++pending;
+            continue;
+        }
+        if (!(drop_covered && Covers(range, pending->range))) {
+            if (const core::Status resolved = Resolve(*pending); !resolved) {
+                return resolved;
+            }
+        }
+        spare_.push_back(std::move(*pending));
+        pending = outputs_.erase(pending);
+    }
+    return {};
 }
 
 core::Status VulkanGpuBackend::Implementation::DrawGroup(std::size_t first, std::size_t end) {
@@ -2183,6 +2453,11 @@ core::Status VulkanGpuBackend::RunCommandList(std::span<const std::uint8_t> list
 
 core::Status VulkanGpuBackend::BeforeRead(std::uint32_t physical, std::uint32_t size) {
     return implementation_->BeforeRead(physical, size);
+}
+
+core::Result<bool>
+VulkanGpuBackend::RunDisplayTransfer(const domain::gpu::TransferConfig& transfer) {
+    return implementation_->RunDisplayTransfer(transfer);
 }
 
 core::Status VulkanGpuBackend::BeforeWrite(std::uint32_t physical, std::uint32_t size) {

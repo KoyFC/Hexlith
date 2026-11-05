@@ -50,6 +50,8 @@ public:
     [[nodiscard]] core::Status RunCommandList(std::span<const std::uint8_t> list) override;
     [[nodiscard]] core::Status BeforeRead(std::uint32_t physical, std::uint32_t size) override;
     [[nodiscard]] core::Status BeforeWrite(std::uint32_t physical, std::uint32_t size) override;
+    [[nodiscard]] core::Result<bool>
+    RunDisplayTransfer(const domain::gpu::TransferConfig& transfer) override;
     [[nodiscard]] ports::GpuBackendStatistics Statistics() const override;
     [[nodiscard]] std::string Describe() const override;
 
