@@ -86,6 +86,17 @@ def parse_gpu_time(text):
     return len(rows), sum(float(row["time_us"]) for row in rows) / 1e6
 
 
+def describe_gpu_time(submissions, worked, waited):
+    """What the device's own time says about the host's wait. Where the host
+    waited longer than the device worked, the rest was latency; where it waited
+    less, the difference is work the game's code ran alongside."""
+    start = f"the device worked {worked:.2f} s over {int(submissions)} submissions; "
+    if waited >= worked:
+        return start + f"the host waited {waited:.2f} s, so {waited - worked:.2f} s was latency"
+    return start + (f"the host waited {waited:.2f} s, so {worked - waited:.2f} s of the "
+                    f"device's work overlapped the game")
+
+
 def parse_run(text):
     """What one boot printed: the timeline by frame, the totals and the display
     work, which is empty for a run without a window."""
@@ -240,9 +251,7 @@ def print_summary(summary, configs):
               f"{display['up_bytes'] / 1e6:.0f} MB up, {display['down_bytes'] / 1e6:.0f} MB down")
         if summary[name]["gpu"]:
             submissions, seconds = summary[name]["gpu"]
-            waited = display["device_s"]
-            print(f"{name}: the device worked {seconds:.2f} s over {int(submissions)} submissions; "
-                  f"the host waited {waited:.2f} s, so {waited - seconds:.2f} s was latency")
+            print(f"{name}: " + describe_gpu_time(submissions, seconds, display["device_s"]))
 
 
 def performance_cores():
@@ -320,6 +329,9 @@ def self_test():
     submissions, seconds = parse_gpu_time(csv_text)
     assert submissions == 3 and abs(seconds - 0.002) < 1e-9, (submissions, seconds)
     assert parse_gpu_time("draw_start,time_us\n") == (0, 0.0)
+    assert "2.50 s was latency" in describe_gpu_time(3150, 1.49, 3.99), describe_gpu_time(3150, 1.49, 3.99)
+    overlapped = describe_gpu_time(3150, 1.35, 0.28)
+    assert "latency" not in overlapped and "1.07 s" in overlapped, overlapped
     print("self-test passed")
 
 
