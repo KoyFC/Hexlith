@@ -144,3 +144,38 @@ Where the display's time went in the boot to frame 1101, with the window: lists 
 **The device worked at least 1.49 s of the 3.99 s the host waited.** The backend made 3,229 submissions, 1,909 groups of draws and 1,320 writebacks, and Mesa's file held 3,153 rows of them in these runs, so the 1.49 s is a floor and the other 2.50 s at most latency, at most 0.77 ms for each submission. A diagnostic run on 2026-11-05 with SDL's dummy video driver measured the device at 2.53 s of 4.37 s waited, over 3,229 rows, all of them: how long the device takes varies from run to run, with the clocks the driver chooses, and the latency does not. A writeback is made for each display transfer, and the CPU converts its colour. Half of the wait is not drawing and is not reduced by drawing faster, only by waiting for fewer submissions or not waiting.
 
 **What the title's display transfers are.** In the recording of the boot to frame 1150, 1,369 display transfers, and 1,321 of them to frame 1101. All but one are the same: RGBA8 in tiles to RGB8 in rows, flags `0x1004`, no flip and no scale, an input of 256 by 512 and an output of 240 by 400 (684 of them) or 240 by 320 (684). The one that differs is in frame 0, 128 by 128 from RGBA4 in tiles to RGBA4 in rows, flags `0x4400`. The bytes written back to memory in a boot to frame 1101 are 1,320 colour buffers of 256 by 512 by 4, so every writeback is the colour a display transfer reads.
+
+### Where Phase 12 ended
+
+Measured on 2026-11-05 the same way as the baseline above, an hour later: the binary of the end of the phase, a real window on the Wayland desktop, five alternating runs on the four performance cores, every run executing 3,867,002,588 instructions. The first two runs started with the load average at 2.5 and 2.1, the desktop's own, and the rest between 0.92 and 1.00.
+
+| 227 to 1101 | No window | Intel, window | Over the floor |
+| --- | --- | --- | --- |
+| Baseline of the phase | 27.89 s | 35.01 s | +26% |
+| End of the phase | 27.39 s | 30.20 s | +10% |
+| The milestone | | | +15% |
+
+**The milestone was met.** The window adds 2.81 s to the stretch where it added 7.12 s.
+
+Where the display's time went in the boot to frame 1101, with the window, seconds in the display's own accounting:
+
+| | Baseline | Now |
+| --- | --- | --- |
+| Lists, whole | 6.26 | 1.90 |
+| Waiting for the device | 3.99 | 0.28 |
+| Colour and depth back to memory | 1.16 | 0.13 |
+| Colour and depth into the images | 0.62 | 0.39 |
+| Making buffers | 0.57 | 0.01 |
+| Textures decoded | 0.23 | 0.21 |
+| Display transfers | 0.41 | 0.08 |
+| Composing and presenting the screens | 1.39 | 1.18 |
+
+The device worked at least 1.35 s over 3,150 of its submissions (Mesa's file holds a few fewer rows than the backend made, as before) and the host waited 0.28 s, so most of its work now runs alongside the game's code. A single boot reports 221 waits for the device in all, ring, writebacks and transfer outputs together; they were not told apart.
+
+- **Making buffers, 0.57 s to 0.01 s,** is the commit that keeps them from group to group: 10,865 buffers made in a boot became 109.
+- **Submitting without waiting and carrying out the transfer on the device** are [ADR 0032](adr/0032-groups-of-draws-are-submitted-without-waiting.md) and [ADR 0033](adr/0033-the-display-transfer-runs-on-the-device-and-its-output-is-written-when-read.md). Neither was measured alone with the protocol of five alternating runs. Single boots to frame 1101 with SDL's dummy video driver, which draws the window in software, took 42.1 s before the phase's changes, 39.3 s with the buffers kept and the groups submitted without waiting, and 34.3 s with the transfers on the device too, so the order of what each is worth is in those numbers and no more than that.
+- **1,319 of the 1,321 display transfers** to frame 1101 are done on the device. The title's transfers read the last rows of a taller target, 112 rows down in a target of 512 for the top screen and 192 for the bottom's 320, which the first tests of the backend did not cover: it declined every one of them, with 1,320 waits, until a test that starts below the top of the target was written.
+
+What is left of the 2.81 s the window adds to the stretch: the command processor and the vertices the CPU shades, which are the 0.88 s of the 1.90 s of lists that is left once uploads, textures, writing back, the wait and buffers are taken out; composing and presenting, 1.18 s; and what the driver's own threads take from the game's cores, which nothing here measures. Presenting from the device, and the CPU's vertex work moving there, are what would reduce them. The stretch with the window is 1.10 times the one without, and 2.07 times the console's 14.61 s, where the one without is 1.87 times: the game's own code is what stands between this and real time, not the window.
+
+The pictures of frames 220, 400, 700, 1000 and 1100, saved from the live run with `--save-frames` with the backend submitting without waiting and carrying out the transfers on the device, are within the tolerance of ADR 0021 as before, the same figures to the last digit as with the changes of Phase 11. The golden trace of the boot is the one of the same boot without a window, byte for byte, and the boot to frame 400 with the Khronos validation layer loaded gives it no message. `src/domain/gpu` is as Phase 11 left it, so the comparisons with Azahar's renderer were not run again.

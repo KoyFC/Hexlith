@@ -23,9 +23,9 @@ Everything written into the repository is in English: code, identifiers, comment
 
 ## Status
 
-Phases 0 to 10 are closed. What each one settled is in `docs/adr/` and the history; where Phase 10 ended is at the end of `docs/lifter.md` and in `docs/gpu-speed.md`. The title runs lifted, the 133 CRO modules included, from a new game to frame 1101, with 0.31 percent of its instructions left to the interpreter, in 27.6 s without a window and 43.4 s with one on the Intel GPU, against the console's 18.4 s. Phase 10's milestone, a window within 15 percent of the run without one, was not met: it adds 30 to 40 percent.
+Phases 0 to 12 are closed. What each one settled is in `docs/adr/` and the history; where Phase 10 ended is at the end of `docs/lifter.md`, and where Phases 10 to 12 left the window is in `docs/gpu-speed.md`. The title runs lifted, the 133 CRO modules included, from a new game to frame 1101, with 0.31 percent of its instructions left to the interpreter. Phase 12's milestone was met: from frame 227 to 1101 the window, with a real window on the Intel GPU, adds 10 percent to the same stretch without one (30.20 s against 27.39 s, medians of five alternating runs on 2026-11-05), where Phase 11 left it at 28. The game's own code is what stands between the title and real time, 1.87 times the console's in that stretch without a window.
 
-The next phase waits for a plan the maintainer approves. Candidates the closing notes of Phase 10 name are fragment shaders specialised for a draw's configuration, the colour conversions and display transfers on the GPU, and registers and flags in local variables.
+The next phase waits for a plan the maintainer approves. Candidates the closing notes name are registers and flags in local variables for the lifter, and the vertices the CPU still shades and the composing of the screens moved to the device.
 
 Each phase starts from a plan the maintainer approves, with its scope, its sequence of commits and a milestone that can be checked. Work stops when the milestone is met and the result is reported. When a phase closes, this section is rewritten. It stays a few lines long; findings belong in `docs/` and decisions in `docs/adr/`.
 
