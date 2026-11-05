@@ -439,6 +439,30 @@ TEST(VulkanGpuBackend, KeepsATargetOnTheDeviceUntilSomethingReadsIt) {
     EXPECT_EQ(run.context->ValidationMessages(), 0U) << run.context->FirstValidationMessage();
 }
 
+// The buffers a group reads are made for the first one and kept: a list the
+// same size as the last needs none of its own, and the pictures are as before.
+TEST(VulkanGpuBackend, ReusesItsBuffersFromGroupToGroup) {
+    Resident run = MakeResident();
+    if (!run.backend) {
+        GTEST_SKIP() << "no Vulkan device that can draw";
+    }
+    const std::vector<List> lists(10, Scene());
+    const auto reference = Reference(lists, [](gpu::GpuMemory&) {});
+
+    for (std::size_t at = 0; at < 2; ++at) {
+        ASSERT_TRUE(run.backend->RunCommandList(lists.at(at).Bytes()).Ok());
+    }
+    const std::uint64_t made = run.backend->Statistics().allocations;
+    for (std::size_t at = 2; at < lists.size(); ++at) {
+        ASSERT_TRUE(run.backend->RunCommandList(lists.at(at).Bytes()).Ok());
+    }
+
+    EXPECT_EQ(run.backend->Statistics().allocations, made) << "eight more groups, no new buffer";
+    ASSERT_TRUE(run.backend->BeforeRead(ColorAddress, ColorBytes).Ok());
+    EXPECT_EQ(Differences(*run.memory, *reference, ColorAddress), "");
+    EXPECT_EQ(run.context->ValidationMessages(), 0U) << run.context->FirstValidationMessage();
+}
+
 TEST(VulkanGpuBackend, DropsATargetAFillCoversWithoutWritingItBack) {
     Resident run = MakeResident();
     if (!run.backend) {

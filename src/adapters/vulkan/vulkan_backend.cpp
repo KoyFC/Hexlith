@@ -402,6 +402,13 @@ struct Slot {
     std::uint64_t used = 0;
 };
 
+// The host-visible buffers a submission reads or fills. They are made when a
+// group first needs one, kept between groups, and made again only when a group
+// needs more than the one kept holds. A submission is waited for before the
+// next is made, so one of each is enough.
+enum class Scratch : std::uint8_t { Staging, Vertices, Inputs, Words, Texels };
+constexpr std::size_t ScratchCount = 5;
+
 // How many targets stay resident; the least recently used is written back to
 // make room. The title draws to a handful.
 constexpr std::size_t MaxResidentTargets = 16;
@@ -522,6 +529,7 @@ private:
     core::Status MakeTrue(const gpu::MemoryRange& range);
     core::Status Forget(const gpu::MemoryRange& range, bool overwritten, const Slot* except);
     core::Status WriteBackAll();
+    core::Result<HostBuffer*> ScratchBuffer(Scratch which, VkDeviceSize size);
     void TakeSnapshot(Part& part, const gpu::MemoryRange& range);
     [[nodiscard]] bool MemoryChanged(const Part& part, const gpu::MemoryRange& range) const;
     core::Status CreateImage(Image& image,
@@ -577,6 +585,7 @@ private:
     std::map<std::uint64_t, VkShaderModule> shaded_modules_;
     std::vector<std::unique_ptr<Slot>> slots_;
     std::uint64_t clock_ = 0;
+    std::array<std::unique_ptr<HostBuffer>, ScratchCount> scratch_;
 
     // What the pending draws of the current list need.
     std::vector<PendingDraw> pending_;
@@ -1048,14 +1057,8 @@ core::Status VulkanGpuBackend::Implementation::WriteBack(Slot& slot, bool color,
     const VkDeviceSize color_size = pixels * 4;
     const VkDeviceSize depth_size = pixels * 4;
     const VkDeviceSize stencil_size = pixels;
-    std::optional<Stopwatch> allocating{times_.allocate};
-    ++allocations_;
-    auto staging =
-        HostBuffer::Create(*context_,
-                           color_size + depth_size + stencil_size,
-                           VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                           HostUse::ReadBack);
-    allocating.reset();
+    const core::Result<HostBuffer*> staging =
+        ScratchBuffer(Scratch::Staging, color_size + depth_size + stencil_size);
     if (!staging) {
         return staging.Failure();
     }
@@ -1130,6 +1133,43 @@ core::Status VulkanGpuBackend::Implementation::WriteBack(Slot& slot, bool color,
         downloaded_bytes_ += target.DepthBytes();
     }
     return {};
+}
+
+// The buffer kept for a use, as large as asked for. One that is too small is
+// made again, and nothing in flight reads it, since every submission is waited
+// for before the next is made.
+core::Result<HostBuffer*> VulkanGpuBackend::Implementation::ScratchBuffer(Scratch which,
+                                                                          VkDeviceSize size) {
+    constexpr VkDeviceSize Smallest = 16;
+    size = std::max(size, Smallest);
+    std::unique_ptr<HostBuffer>& kept = scratch_.at(static_cast<std::size_t>(which));
+    if (kept && kept->Bytes().size() >= size) {
+        return kept.get();
+    }
+    VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    HostUse use = HostUse::Write;
+    switch (which) {
+    case Scratch::Staging:
+        usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        use = HostUse::ReadBack;
+        break;
+    case Scratch::Vertices:
+    case Scratch::Inputs:
+        usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        break;
+    case Scratch::Words:
+    case Scratch::Texels:
+        break;
+    }
+    const Stopwatch allocating{times_.allocate};
+    ++allocations_;
+    kept.reset();
+    auto made = HostBuffer::Create(*context_, size, usage, use);
+    if (!made) {
+        return made.Failure();
+    }
+    kept = std::move(made.Value());
+    return kept.get();
 }
 
 // Memory is made true over a range for whoever is about to read it.
@@ -1228,28 +1268,14 @@ core::Status VulkanGpuBackend::Implementation::DrawGroup(std::size_t first, std:
     const VkDeviceSize color_size = pixels * 4;
     const VkDeviceSize depth_size = pixels * 4;
     const VkDeviceSize stencil_size = pixels;
-    constexpr std::uint64_t BuffersPerGroup = 5;
-    allocations_ += BuffersPerGroup;
-    std::optional<Stopwatch> allocating{times_.allocate};
-    auto staging =
-        HostBuffer::Create(*context_,
-                           color_size + depth_size + stencil_size,
-                           VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                           HostUse::ReadBack);
-    auto vertices =
-        HostBuffer::Create(*context_,
-                           std::max<VkDeviceSize>(vertex_data_.size() * sizeof(float), 16),
-                           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-    auto words = HostBuffer::Create(*context_,
-                                    std::max<VkDeviceSize>(draw_words_.size() * 4, 16),
-                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    auto texels = HostBuffer::Create(*context_,
-                                     std::max<VkDeviceSize>(texels_.size() * 4, 16),
-                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    auto inputs = HostBuffer::Create(*context_,
-                                     std::max<VkDeviceSize>(input_data_.size() * sizeof(float), 16),
-                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-    allocating.reset();
+    const core::Result<HostBuffer*> staging =
+        ScratchBuffer(Scratch::Staging, color_size + depth_size + stencil_size);
+    const core::Result<HostBuffer*> vertices =
+        ScratchBuffer(Scratch::Vertices, vertex_data_.size() * sizeof(float));
+    const core::Result<HostBuffer*> words = ScratchBuffer(Scratch::Words, draw_words_.size() * 4);
+    const core::Result<HostBuffer*> texels = ScratchBuffer(Scratch::Texels, texels_.size() * 4);
+    const core::Result<HostBuffer*> inputs =
+        ScratchBuffer(Scratch::Inputs, input_data_.size() * sizeof(float));
     for (const auto* buffer : {&staging, &vertices, &inputs, &words, &texels}) {
         if (!*buffer) {
             return buffer->Failure();
