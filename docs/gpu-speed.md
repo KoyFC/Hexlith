@@ -117,3 +117,30 @@ What each change took off the boot to frame 1101 on the Intel GPU, seconds in th
 The pictures of frames 220, 400, 700, 1000 and 1100, saved from the live run with `--save-frames`, are within the tolerance of ADR 0021 as before, and `compare_pica_textures.py` and `compare_pica_rasterizer.py` agree with Azahar on 2,000 textures, 3,500 transfers and steps and the recording to frame 400 after the transfer changes.
 
 Making a configuration's pipeline on another thread, and drawing with the generic shader's until it is ready, also takes the compile out of the lists, 5.30 s to 4.53 s, and is what keeps the game from standing still at a new screen: with Mesa's cache off, frames 200 to 420 paused up to 7.6 s while the pipelines were made on the game's thread and pause 0.58 s at most now. The last measurement was made on 2026-11-03 in the same way, medians of five runs, a real window, the floor at 18.0 s that session for the same stretch; the window takes 23.07 s, 28 percent over, where the milestone is 15.
+
+## Phase 12
+
+Phase 12 asks the window to overlap the game's code instead of following it: lists submitted without waiting for them, and the display transfer done on the device. What it does with each is recorded below as it is done. The milestone is a ratio, measured in one session: from frame 227 to 1101 the window adds no more than 15 percent to the same stretch without one, which `scripts/measure_window_speed.py --configs none,intel --runs 5` reports with a real window on the Intel GPU.
+
+### How the device's own time is measured
+
+`--gpu-time` sets `INTEL_MEASURE=batch` for the runs that draw with Vulkan. Mesa's Intel driver then writes one line for each command buffer it submits, with the time the device spent on it between its own timestamps, and the script adds those up. What the host waited for beyond that is latency: submitting, the device starting, and the host noticing it has finished. Mesa now and then leaves a short line of three fields among the rows, which the script skips, and in a run with a real window its file held 3,153 rows of the 3,229 submissions. The driver's own bookkeeping costs a little: a boot with it took 42.9 s where one without took 42.1.
+
+### Baseline
+
+Measured on 2026-11-05 with the binary of the end of Phase 11, a real window on the Wayland desktop, five alternating runs on the four performance cores, load average 0.93 to 0.99 before each. Every run executed 3,867,002,588 instructions. The machine ran the game slower than in Phase 11's session, 27.9 s without a window for a stretch that took 18.0 s then, so only the ratios of one session compare.
+
+| 227 to 1101 | Seconds | Over the floor |
+| --- | --- | --- |
+| Console | 14.61 | |
+| No window | 27.89 | |
+| Intel, window | 35.01 | +26% |
+| The milestone, 15% | 32.07 | +15% |
+
+The window adds 7.12 s to the stretch, and the milestone allows 4.18, so the phase has to take 2.94 s off it.
+
+Where the display's time went in the boot to frame 1101, with the window: lists 6.26 s (textures 0.23, up 0.62, down 1.16, waiting for the device 3.99, buffers 0.57), transfers 0.41 s, present 1.39 s. 1,909 groups of draws, 1,383 MB up and 692 MB down, no conflicts.
+
+**The device worked at least 1.49 s of the 3.99 s the host waited.** The backend made 3,229 submissions, 1,909 groups of draws and 1,320 writebacks, and Mesa's file held 3,153 rows of them in these runs, so the 1.49 s is a floor and the other 2.50 s at most latency, at most 0.77 ms for each submission. A diagnostic run on 2026-11-05 with SDL's dummy video driver measured the device at 2.53 s of 4.37 s waited, over 3,229 rows, all of them: how long the device takes varies from run to run, with the clocks the driver chooses, and the latency does not. A writeback is made for each display transfer, and the CPU converts its colour. Half of the wait is not drawing and is not reduced by drawing faster, only by waiting for fewer submissions or not waiting.
+
+**What the title's display transfers are.** In the recording of the boot to frame 1150, 1,369 display transfers, and 1,321 of them to frame 1101. All but one are the same: RGBA8 in tiles to RGB8 in rows, flags `0x1004`, no flip and no scale, an input of 256 by 512 and an output of 240 by 400 (684 of them) or 240 by 320 (684). The one that differs is in frame 0, 128 by 128 from RGBA4 in tiles to RGBA4 in rows, flags `0x4400`. The bytes written back to memory in a boot to frame 1101 are 1,320 colour buffers of 256 by 512 by 4, so every writeback is the colour a display transfer reads.

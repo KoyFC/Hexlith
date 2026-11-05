@@ -26,16 +26,18 @@ Usage:
     scripts/measure_window_speed.py --boot BOOT --lifted LIBRARY --rom-dir ROM
         --work-dir WORK --input SCRIPT [--frames 227,400,700,1000,1101]
         [--configs none,intel,llvmpipe] [--limit N] [--runs 5] [--cores LIST]
-        [--max-load 1.0] [--dummy-video]
+        [--max-load 1.0] [--dummy-video] [--gpu-time]
     scripts/measure_window_speed.py --self-test
 """
 
 import argparse
+import csv
 import os
 import re
 import statistics
 import subprocess
 import sys
+import tempfile
 
 import measure_lift_speed
 
@@ -72,6 +74,16 @@ CONFIGS = {
 DISPLAY_PARTS = ("lists", "lists_s", "transfers", "transfers_s", "present_s", "draws", "groups",
                  "up_bytes", "down_bytes", "buffers_made", "conflicts", "textures_s", "up_s", "down_s",
                  "device_s", "buffers_s")
+
+
+def parse_gpu_time(text):
+    """The submissions in a Mesa INTEL_MEASURE=batch file and the seconds the
+    device itself spent on them, from the time each one took between the
+    device's own timestamps. What the host waited for beyond that is latency.
+    Mesa now and then leaves a short line of three fields among the rows (one
+    in 3,155 in a boot to frame 1101); it names no submission and is skipped."""
+    rows = [row for row in csv.DictReader(text.splitlines()) if row.get("time_us") is not None]
+    return len(rows), sum(float(row["time_us"]) for row in rows) / 1e6
 
 
 def parse_run(text):
@@ -137,8 +149,11 @@ def summarise(runs_by_config, frames):
         if runs[0]["display"]:
             for part in DISPLAY_PARTS:
                 display[part] = statistics.median(run["display"][part] for run in runs)
+        gpu = [run["gpu"] for run in runs if "gpu" in run]
         summary[name] = {"stretches": medians, "display": display,
-                         "total": statistics.median(run["seconds"] for run in runs)}
+                         "total": statistics.median(run["seconds"] for run in runs),
+                         "gpu": (statistics.median(g[0] for g in gpu),
+                                 statistics.median(g[1] for g in gpu)) if gpu else None}
     return summary
 
 
@@ -163,9 +178,17 @@ def run_boot(arguments, config):
         environment["SDL_VIDEODRIVER"] = "dummy"
     cores = set(arguments.cores)
     pin = lambda: os.sched_setaffinity(0, cores)
-    finished = subprocess.run(command, capture_output=True, text=True, check=True,
-                              preexec_fn=pin, env=environment)
-    return parse_run(finished.stdout)
+    with tempfile.TemporaryDirectory() as directory:
+        measured = os.path.join(directory, "batches.csv")
+        if arguments.gpu_time and "vulkan" in CONFIGS[config]:
+            environment["INTEL_MEASURE"] = f"batch,file={measured},buffer_size=200000"
+        finished = subprocess.run(command, capture_output=True, text=True, check=True,
+                                  preexec_fn=pin, env=environment)
+        run = parse_run(finished.stdout)
+        if os.path.exists(measured):
+            with open(measured) as batches:
+                run["gpu"] = parse_gpu_time(batches.read())
+    return run
 
 
 def measure(arguments):
@@ -215,6 +238,11 @@ def print_summary(summary, configs):
               f"present {display['present_s']:.2f} s; {int(display['groups'])} groups, "
               f"{int(display['conflicts'])} conflicts, "
               f"{display['up_bytes'] / 1e6:.0f} MB up, {display['down_bytes'] / 1e6:.0f} MB down")
+        if summary[name]["gpu"]:
+            submissions, seconds = summary[name]["gpu"]
+            waited = display["device_s"]
+            print(f"{name}: the device worked {seconds:.2f} s over {int(submissions)} submissions; "
+                  f"the host waited {waited:.2f} s, so {waited - seconds:.2f} s was latency")
 
 
 def performance_cores():
@@ -283,6 +311,15 @@ def self_test():
     assert command[command.index("--device") + 1] == "Intel", command
     assert "--window" not in boot_command(arguments, "none")
     assert parse_frames("400,227,400") == [227, 400]
+    csv_text = ("draw_start,draw_end,frame,batch,batch_size,renderpass,event_index,event_count,"
+                "type,count,vs,tcs,tes,gs,fs,cs,ms,ts,idle_us,time_us\n"
+                "1,2,0,1,4416,0,0,1,copy,0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,5.0,500.5\n"
+                "3,4,0,2,1152,0,0,1,copy,0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,5.0,40.0\n"
+                "x0,2298.906,37.135\n"
+                "5,6,0,3,2344,0,0,1,draw,0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,5.0,1459.5\n")
+    submissions, seconds = parse_gpu_time(csv_text)
+    assert submissions == 3 and abs(seconds - 0.002) < 1e-9, (submissions, seconds)
+    assert parse_gpu_time("draw_start,time_us\n") == (0, 0.0)
     print("self-test passed")
 
 
@@ -305,6 +342,9 @@ def main():
     parser.add_argument("--cores", type=measure_lift_speed.parse_cpu_list,
                         help="the cores to run on, such as 0-3; the performance cores by default")
     parser.add_argument("--max-load", type=float, default=1.0)
+    parser.add_argument("--gpu-time", action="store_true",
+                        help="ask Mesa's Intel driver for the device's own time on each submission "
+                             "(INTEL_MEASURE) and report it beside the time the host waited")
     parser.add_argument("--dummy-video", action="store_true",
                         help="open no real window (SDL_VIDEODRIVER=dummy), to leave out the "
                              "desktop's part of presenting")
