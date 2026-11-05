@@ -4,6 +4,7 @@
 #include "core/result.h"
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -32,6 +33,10 @@ struct VulkanOptions {
     // gives at warning level or above is counted.
     bool validation = true;
 };
+
+// Names a submission that has been handed to the queue, in the order they
+// were: waiting for one is waiting for every one before it. Zero is none.
+using Ticket = std::uint64_t;
 
 // A Vulkan instance and device with one graphics and compute queue, no
 // window and no surface: what is drawn is read back into memory.
@@ -76,6 +81,25 @@ public:
     // for it to finish.
     core::Status Submit(const std::function<void(VkCommandBuffer)>& record);
 
+    // The same without the wait. Whatever the commands read has to stay
+    // as it is, and what they write is not there to be read, until Wait
+    // returns for the ticket or Finished says it is over. The queue runs
+    // submissions in the order they were made, but the second only sees what
+    // the first wrote if its commands say so with a barrier.
+    core::Result<Ticket> SubmitWithoutWaiting(const std::function<void(VkCommandBuffer)>& record);
+
+    // The ticket of the last submission, which is the one to wait for to wait
+    // for all of them.
+    [[nodiscard]] Ticket LastTicket() const {
+        return last_ticket_;
+    }
+
+    // Blocks until the submission, and so every one before it, has finished.
+    core::Status Wait(Ticket ticket);
+
+    // Whether the submission has finished, without blocking.
+    [[nodiscard]] bool Finished(Ticket ticket);
+
     // A memory type with the properties, among those the mask allows.
     [[nodiscard]] std::optional<std::uint32_t> MemoryType(std::uint32_t allowed,
                                                           VkMemoryPropertyFlags properties) const;
@@ -89,6 +113,18 @@ private:
     core::Status ChooseDevice(const VulkanOptions& options);
     core::Status CreateDevice();
 
+    // A submission the device may still be running: its fence, and the
+    // command buffer that is freed when it is over.
+    struct InFlight {
+        Ticket ticket;
+        VkFence fence;
+        VkCommandBuffer commands;
+    };
+
+    // Frees the submissions up to the ticket that have finished, waiting for
+    // each when asked to.
+    core::Status Retire(Ticket upto, bool wait);
+
     VkInstance instance_ = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT messenger_ = VK_NULL_HANDLE;
     VkPhysicalDevice physical_ = VK_NULL_HANDLE;
@@ -101,6 +137,9 @@ private:
     bool can_draw_ = false;
     std::uint64_t validation_messages_ = 0;
     std::string first_validation_message_;
+    std::deque<InFlight> in_flight_;
+    Ticket last_ticket_ = 0;
+    Ticket finished_ = 0;
 };
 
 // What the host does with a buffer's bytes. One it reads back is put in

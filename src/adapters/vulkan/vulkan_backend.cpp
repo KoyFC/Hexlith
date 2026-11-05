@@ -404,10 +404,23 @@ struct Slot {
 
 // The host-visible buffers a submission reads or fills. They are made when a
 // group first needs one, kept between groups, and made again only when a group
-// needs more than the one kept holds. A submission is waited for before the
-// next is made, so one of each is enough.
+// needs more than the one kept holds.
 enum class Scratch : std::uint8_t { Staging, Vertices, Inputs, Words, Texels };
 constexpr std::size_t ScratchCount = 5;
+
+// What a group of draws owns until the device has finished with it: its
+// buffers and the descriptor set that points at two of them. A group takes the
+// next frame of the ring, and waits for the device only if that frame's last
+// group has not finished. ADR 0032.
+struct Frame {
+    std::array<std::unique_ptr<HostBuffer>, ScratchCount> buffers;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    Ticket ticket = 0;
+};
+
+// How many groups of draws may be with the device at once. A game that draws
+// more than this in one frame waits for the oldest.
+constexpr std::size_t FramesInFlight = 4;
 
 // How many targets stay resident; the least recently used is written back to
 // make room. The title draws to a handful.
@@ -457,6 +470,7 @@ public:
                 .downloaded_bytes = downloaded_bytes_,
                 .allocations = allocations_,
                 .conflicts = conflicts_,
+                .waits = waits_,
                 .pipelines = pipelines_.size(),
                 .fragment_configurations = fragment_numbers_.size(),
                 .fallback_draws = fallback_draws_,
@@ -529,7 +543,8 @@ private:
     core::Status MakeTrue(const gpu::MemoryRange& range);
     core::Status Forget(const gpu::MemoryRange& range, bool overwritten, const Slot* except);
     core::Status WriteBackAll();
-    core::Result<HostBuffer*> ScratchBuffer(Scratch which, VkDeviceSize size);
+    core::Result<HostBuffer*>
+    Reserve(std::unique_ptr<HostBuffer>& kept, Scratch which, VkDeviceSize size);
     void TakeSnapshot(Part& part, const gpu::MemoryRange& range);
     [[nodiscard]] bool MemoryChanged(const Part& part, const gpu::MemoryRange& range) const;
     core::Status CreateImage(Image& image,
@@ -565,7 +580,6 @@ private:
     VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
-    VkDescriptorSet descriptor_set_ = VK_NULL_HANDLE;
     VkRenderPass render_pass_ = VK_NULL_HANDLE;
     VkShaderModule vertex_module_ = VK_NULL_HANDLE;
     VkShaderModule fragment_module_ = VK_NULL_HANDLE;
@@ -585,7 +599,11 @@ private:
     std::map<std::uint64_t, VkShaderModule> shaded_modules_;
     std::vector<std::unique_ptr<Slot>> slots_;
     std::uint64_t clock_ = 0;
-    std::array<std::unique_ptr<HostBuffer>, ScratchCount> scratch_;
+    std::array<Frame, FramesInFlight> frames_;
+    std::size_t next_frame_ = 0;
+    // Where a writeback's copy lands. It is waited for before it is read, so
+    // one is enough.
+    std::unique_ptr<HostBuffer> readback_;
 
     // What the pending draws of the current list need.
     std::vector<PendingDraw> pending_;
@@ -604,6 +622,7 @@ private:
     std::uint64_t downloaded_bytes_ = 0;
     std::uint64_t allocations_ = 0;
     std::uint64_t conflicts_ = 0;
+    std::uint64_t waits_ = 0;
     ports::GpuBackendTimes times_;
     bool unsupported_ = false;
 };
@@ -1029,6 +1048,9 @@ core::Result<Slot*> VulkanGpuBackend::Implementation::SlotFor(const Target& targ
         if (const core::Status written = WriteBack(**oldest, true, true); !written) {
             return written.Failure();
         }
+        if (const core::Status idle = context_->Wait(context_->LastTicket()); !idle) {
+            return idle.Failure();
+        }
         DestroyAttachments((*oldest)->images);
         slots_.erase(oldest);
     }
@@ -1058,7 +1080,7 @@ core::Status VulkanGpuBackend::Implementation::WriteBack(Slot& slot, bool color,
     const VkDeviceSize depth_size = pixels * 4;
     const VkDeviceSize stencil_size = pixels;
     const core::Result<HostBuffer*> staging =
-        ScratchBuffer(Scratch::Staging, color_size + depth_size + stencil_size);
+        Reserve(readback_, Scratch::Staging, color_size + depth_size + stencil_size);
     if (!staging) {
         return staging.Failure();
     }
@@ -1080,38 +1102,62 @@ core::Status VulkanGpuBackend::Implementation::WriteBack(Slot& slot, bool color,
         region(color_size + depth_size, VK_IMAGE_ASPECT_STENCIL_BIT)};
     VkBuffer staging_buffer = staging.Value()->Buffer();
     std::optional<Stopwatch> waiting{times_.wait};
-    const core::Status copied = context_->Submit([&](VkCommandBuffer commands) {
-        if (color) {
-            vkCmdCopyImageToBuffer(commands,
-                                   slot.images.color.image,
-                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                   staging_buffer,
-                                   1,
-                                   &color_region);
-        }
-        if (depth) {
-            vkCmdCopyImageToBuffer(commands,
-                                   slot.images.depth.image,
-                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                   staging_buffer,
-                                   2,
-                                   depth_regions.data());
-        }
-        VkMemoryBarrier host{};
-        host.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-        vkCmdPipelineBarrier(commands,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_HOST_BIT,
-                             0,
-                             1,
-                             &host,
-                             0,
-                             nullptr,
-                             0,
-                             nullptr);
-    });
+    ++waits_;
+    const core::Result<Ticket> submitted =
+        context_->SubmitWithoutWaiting([&](VkCommandBuffer commands) {
+            // What earlier groups drew, in submissions that may still be running,
+            // is made visible to the copy; the render pass left the images in the
+            // layout it reads them in.
+            VkMemoryBarrier drawn{};
+            drawn.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            drawn.srcAccessMask =
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            drawn.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            vkCmdPipelineBarrier(commands,
+                                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0,
+                                 1,
+                                 &drawn,
+                                 0,
+                                 nullptr,
+                                 0,
+                                 nullptr);
+            if (color) {
+                vkCmdCopyImageToBuffer(commands,
+                                       slot.images.color.image,
+                                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                       staging_buffer,
+                                       1,
+                                       &color_region);
+            }
+            if (depth) {
+                vkCmdCopyImageToBuffer(commands,
+                                       slot.images.depth.image,
+                                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                       staging_buffer,
+                                       2,
+                                       depth_regions.data());
+            }
+            VkMemoryBarrier host{};
+            host.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+            vkCmdPipelineBarrier(commands,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_HOST_BIT,
+                                 0,
+                                 1,
+                                 &host,
+                                 0,
+                                 nullptr,
+                                 0,
+                                 nullptr);
+        });
+    if (!submitted) {
+        return submitted.Failure();
+    }
+    const core::Status copied = context_->Wait(submitted.Value());
     waiting.reset();
     if (!copied) {
         return copied;
@@ -1136,13 +1182,12 @@ core::Status VulkanGpuBackend::Implementation::WriteBack(Slot& slot, bool color,
 }
 
 // The buffer kept for a use, as large as asked for. One that is too small is
-// made again, and nothing in flight reads it, since every submission is waited
-// for before the next is made.
-core::Result<HostBuffer*> VulkanGpuBackend::Implementation::ScratchBuffer(Scratch which,
-                                                                          VkDeviceSize size) {
+// made again, which is only done to a buffer whose last submission has
+// finished.
+core::Result<HostBuffer*> VulkanGpuBackend::Implementation::Reserve(
+    std::unique_ptr<HostBuffer>& kept, Scratch which, VkDeviceSize size) {
     constexpr VkDeviceSize Smallest = 16;
     size = std::max(size, Smallest);
-    std::unique_ptr<HostBuffer>& kept = scratch_.at(static_cast<std::size_t>(which));
     if (kept && kept->Bytes().size() >= size) {
         return kept.get();
     }
@@ -1268,14 +1313,29 @@ core::Status VulkanGpuBackend::Implementation::DrawGroup(std::size_t first, std:
     const VkDeviceSize color_size = pixels * 4;
     const VkDeviceSize depth_size = pixels * 4;
     const VkDeviceSize stencil_size = pixels;
+    // The next frame of the ring is free once the group that last used it has
+    // finished; that is the only time a list waits for the device.
+    Frame& frame = frames_.at(next_frame_);
+    next_frame_ = (next_frame_ + 1) % FramesInFlight;
+    if (frame.ticket != 0 && !context_->Finished(frame.ticket)) {
+        const Stopwatch waiting{times_.wait};
+        ++waits_;
+        if (const core::Status finished = context_->Wait(frame.ticket); !finished) {
+            return finished;
+        }
+    }
+    frame.ticket = 0;
+    const auto reserve = [&](Scratch which, VkDeviceSize size) {
+        return Reserve(frame.buffers.at(static_cast<std::size_t>(which)), which, size);
+    };
     const core::Result<HostBuffer*> staging =
-        ScratchBuffer(Scratch::Staging, color_size + depth_size + stencil_size);
+        reserve(Scratch::Staging, color_size + depth_size + stencil_size);
     const core::Result<HostBuffer*> vertices =
-        ScratchBuffer(Scratch::Vertices, vertex_data_.size() * sizeof(float));
-    const core::Result<HostBuffer*> words = ScratchBuffer(Scratch::Words, draw_words_.size() * 4);
-    const core::Result<HostBuffer*> texels = ScratchBuffer(Scratch::Texels, texels_.size() * 4);
+        reserve(Scratch::Vertices, vertex_data_.size() * sizeof(float));
+    const core::Result<HostBuffer*> words = reserve(Scratch::Words, draw_words_.size() * 4);
+    const core::Result<HostBuffer*> texels = reserve(Scratch::Texels, texels_.size() * 4);
     const core::Result<HostBuffer*> inputs =
-        ScratchBuffer(Scratch::Inputs, input_data_.size() * sizeof(float));
+        reserve(Scratch::Inputs, input_data_.size() * sizeof(float));
     for (const auto* buffer : {&staging, &vertices, &inputs, &words, &texels}) {
         if (!*buffer) {
             return buffer->Failure();
@@ -1312,7 +1372,7 @@ core::Status VulkanGpuBackend::Implementation::DrawGroup(std::size_t first, std:
     std::array<VkWriteDescriptorSet, 2> writes{};
     for (std::uint32_t binding = 0; binding < 2; ++binding) {
         writes.at(binding).sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes.at(binding).dstSet = descriptor_set_;
+        writes.at(binding).dstSet = frame.set;
         writes.at(binding).dstBinding = binding;
         writes.at(binding).descriptorCount = 1;
         writes.at(binding).descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -1333,158 +1393,162 @@ core::Status VulkanGpuBackend::Implementation::DrawGroup(std::size_t first, std:
     VkBuffer staging_buffer = staging.Value()->Buffer();
     VkBuffer vertex_buffer = vertices.Value()->Buffer();
     VkBuffer input_buffer = inputs.Value()->Buffer();
-    std::optional<Stopwatch> waiting{times_.wait};
-    core::Status drawn = context_->Submit([&](VkCommandBuffer commands) {
-        const auto barrier = [&](VkImage image,
-                                 VkImageAspectFlags aspect,
-                                 VkImageLayout from,
-                                 VkImageLayout to,
-                                 VkAccessFlags source,
-                                 VkAccessFlags destination) {
-            VkImageMemoryBarrier change{};
-            change.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            change.srcAccessMask = source;
-            change.dstAccessMask = destination;
-            change.oldLayout = from;
-            change.newLayout = to;
-            change.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            change.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            change.image = image;
-            change.subresourceRange = {.aspectMask = aspect,
-                                       .baseMipLevel = 0,
-                                       .levelCount = 1,
-                                       .baseArrayLayer = 0,
-                                       .layerCount = 1};
-            vkCmdPipelineBarrier(commands,
-                                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                 0,
-                                 0,
-                                 nullptr,
-                                 0,
-                                 nullptr,
-                                 1,
-                                 &change);
-        };
-        constexpr VkImageAspectFlags DepthStencil =
-            VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-        constexpr VkAccessFlags ColorUse =
-            VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        constexpr VkAccessFlags DepthUse = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        const VkExtent3D extent{.width = target.width, .height = target.height, .depth = 1};
-        const auto region = [&](VkDeviceSize offset, VkImageAspectFlags aspect) {
-            return VkBufferImageCopy{.bufferOffset = offset,
-                                     .bufferRowLength = 0,
-                                     .bufferImageHeight = 0,
-                                     .imageSubresource = {.aspectMask = aspect,
-                                                          .mipLevel = 0,
-                                                          .baseArrayLayer = 0,
-                                                          .layerCount = 1},
-                                     .imageOffset = {.x = 0, .y = 0, .z = 0},
-                                     .imageExtent = extent};
-        };
-        // A part taken from memory is copied in; one that was kept comes from
-        // the layout the last pass left it in. Either way it ends as an
-        // attachment.
-        if (upload_color) {
-            const VkBufferImageCopy color_region = region(0, VK_IMAGE_ASPECT_COLOR_BIT);
-            barrier(images.color.image,
-                    VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    0,
-                    VK_ACCESS_TRANSFER_WRITE_BIT);
-            vkCmdCopyBufferToImage(commands,
-                                   staging_buffer,
-                                   images.color.image,
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                   1,
-                                   &color_region);
-            barrier(images.color.image,
-                    VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                    VK_ACCESS_TRANSFER_WRITE_BIT,
-                    ColorUse);
-        } else {
-            barrier(images.color.image,
-                    VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                    0,
-                    ColorUse);
-        }
-        if (upload_depth) {
-            const std::array<VkBufferImageCopy, 2> depth_regions = {
-                region(color_size, VK_IMAGE_ASPECT_DEPTH_BIT),
-                region(color_size + depth_size, VK_IMAGE_ASPECT_STENCIL_BIT)};
-            barrier(images.depth.image,
-                    DepthStencil,
-                    VK_IMAGE_LAYOUT_UNDEFINED,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    0,
-                    VK_ACCESS_TRANSFER_WRITE_BIT);
-            vkCmdCopyBufferToImage(commands,
-                                   staging_buffer,
-                                   images.depth.image,
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                   2,
-                                   depth_regions.data());
-            barrier(images.depth.image,
-                    DepthStencil,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                    VK_ACCESS_TRANSFER_WRITE_BIT,
-                    DepthUse);
-        } else {
-            barrier(images.depth.image,
-                    DepthStencil,
-                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                    0,
-                    DepthUse);
-        }
+    const core::Result<Ticket> drawn =
+        context_->SubmitWithoutWaiting([&](VkCommandBuffer commands) {
+            const auto barrier = [&](VkImage image,
+                                     VkImageAspectFlags aspect,
+                                     VkImageLayout from,
+                                     VkImageLayout to,
+                                     VkAccessFlags source,
+                                     VkAccessFlags destination) {
+                VkImageMemoryBarrier change{};
+                change.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                change.srcAccessMask = source;
+                change.dstAccessMask = destination;
+                change.oldLayout = from;
+                change.newLayout = to;
+                change.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                change.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                change.image = image;
+                change.subresourceRange = {.aspectMask = aspect,
+                                           .baseMipLevel = 0,
+                                           .levelCount = 1,
+                                           .baseArrayLayer = 0,
+                                           .layerCount = 1};
+                vkCmdPipelineBarrier(commands,
+                                     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                     0,
+                                     0,
+                                     nullptr,
+                                     0,
+                                     nullptr,
+                                     1,
+                                     &change);
+            };
+            constexpr VkImageAspectFlags DepthStencil =
+                VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+            constexpr VkAccessFlags ColorUse =
+                VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            constexpr VkAccessFlags DepthUse = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                               VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            const VkExtent3D extent{.width = target.width, .height = target.height, .depth = 1};
+            const auto region = [&](VkDeviceSize offset, VkImageAspectFlags aspect) {
+                return VkBufferImageCopy{.bufferOffset = offset,
+                                         .bufferRowLength = 0,
+                                         .bufferImageHeight = 0,
+                                         .imageSubresource = {.aspectMask = aspect,
+                                                              .mipLevel = 0,
+                                                              .baseArrayLayer = 0,
+                                                              .layerCount = 1},
+                                         .imageOffset = {.x = 0, .y = 0, .z = 0},
+                                         .imageExtent = extent};
+            };
+            // A part taken from memory is copied in; one that was kept comes from
+            // the layout the last pass left it in. Either way it ends as an
+            // attachment.
+            if (upload_color) {
+                const VkBufferImageCopy color_region = region(0, VK_IMAGE_ASPECT_COLOR_BIT);
+                barrier(images.color.image,
+                        VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        ColorUse,
+                        VK_ACCESS_TRANSFER_WRITE_BIT);
+                vkCmdCopyBufferToImage(commands,
+                                       staging_buffer,
+                                       images.color.image,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                       1,
+                                       &color_region);
+                barrier(images.color.image,
+                        VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                        VK_ACCESS_TRANSFER_WRITE_BIT,
+                        ColorUse);
+            } else {
+                barrier(images.color.image,
+                        VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                        ColorUse,
+                        ColorUse);
+            }
+            if (upload_depth) {
+                const std::array<VkBufferImageCopy, 2> depth_regions = {
+                    region(color_size, VK_IMAGE_ASPECT_DEPTH_BIT),
+                    region(color_size + depth_size, VK_IMAGE_ASPECT_STENCIL_BIT)};
+                barrier(images.depth.image,
+                        DepthStencil,
+                        VK_IMAGE_LAYOUT_UNDEFINED,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        DepthUse,
+                        VK_ACCESS_TRANSFER_WRITE_BIT);
+                vkCmdCopyBufferToImage(commands,
+                                       staging_buffer,
+                                       images.depth.image,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                       2,
+                                       depth_regions.data());
+                barrier(images.depth.image,
+                        DepthStencil,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                        VK_ACCESS_TRANSFER_WRITE_BIT,
+                        DepthUse);
+            } else {
+                barrier(images.depth.image,
+                        DepthStencil,
+                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                        DepthUse,
+                        DepthUse);
+            }
 
-        VkRenderPassBeginInfo begin{};
-        begin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        begin.renderPass = render_pass_;
-        begin.framebuffer = images.framebuffer;
-        begin.renderArea = {.offset = {.x = 0, .y = 0},
-                            .extent = {.width = target.width, .height = target.height}};
-        vkCmdBeginRenderPass(commands, &begin, VK_SUBPASS_CONTENTS_INLINE);
-        vkCmdBindDescriptorSets(commands,
-                                VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                pipeline_layout_,
-                                0,
-                                1,
-                                &descriptor_set_,
-                                0,
-                                nullptr);
-        const VkDeviceSize no_offset = 0;
-        const VkRect2D scissor{.offset = {.x = 0, .y = 0},
-                               .extent = {.width = target.width, .height = target.height}};
-        for (std::size_t at = first; at < end; ++at) {
-            const PendingDraw& draw = pending_[at];
-            vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.at(at - first));
-            vkCmdBindVertexBuffers(
-                commands, 0, 1, draw.shaded_on_gpu ? &input_buffer : &vertex_buffer, &no_offset);
-            vkCmdSetViewport(commands, 0, 1, &draw.viewport);
-            vkCmdSetScissor(commands, 0, 1, &scissor);
-            vkCmdPushConstants(commands,
-                               pipeline_layout_,
-                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0,
-                               sizeof(PushConstants),
-                               &draw.push);
-            vkCmdDraw(commands, draw.vertices, 1, draw.first_vertex, 0);
-        }
-        vkCmdEndRenderPass(commands);
-    });
-    waiting.reset();
+            VkRenderPassBeginInfo begin{};
+            begin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            begin.renderPass = render_pass_;
+            begin.framebuffer = images.framebuffer;
+            begin.renderArea = {.offset = {.x = 0, .y = 0},
+                                .extent = {.width = target.width, .height = target.height}};
+            vkCmdBeginRenderPass(commands, &begin, VK_SUBPASS_CONTENTS_INLINE);
+            vkCmdBindDescriptorSets(commands,
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipeline_layout_,
+                                    0,
+                                    1,
+                                    &frame.set,
+                                    0,
+                                    nullptr);
+            const VkDeviceSize no_offset = 0;
+            const VkRect2D scissor{.offset = {.x = 0, .y = 0},
+                                   .extent = {.width = target.width, .height = target.height}};
+            for (std::size_t at = first; at < end; ++at) {
+                const PendingDraw& draw = pending_[at];
+                vkCmdBindPipeline(
+                    commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.at(at - first));
+                vkCmdBindVertexBuffers(commands,
+                                       0,
+                                       1,
+                                       draw.shaded_on_gpu ? &input_buffer : &vertex_buffer,
+                                       &no_offset);
+                vkCmdSetViewport(commands, 0, 1, &draw.viewport);
+                vkCmdSetScissor(commands, 0, 1, &scissor);
+                vkCmdPushConstants(commands,
+                                   pipeline_layout_,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0,
+                                   sizeof(PushConstants),
+                                   &draw.push);
+                vkCmdDraw(commands, draw.vertices, 1, draw.first_vertex, 0);
+            }
+            vkCmdEndRenderPass(commands);
+        });
     if (!drawn) {
-        return drawn;
+        return drawn.Failure();
     }
+    frame.ticket = drawn.Value();
     slot.color.state = PartState::Dirty;
     slot.depth.state = PartState::Dirty;
     return {};
@@ -1647,10 +1711,10 @@ core::Status VulkanGpuBackend::Implementation::CreateLayouts() {
         return made;
     }
     const VkDescriptorPoolSize size{.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                    .descriptorCount = 2};
+                                    .descriptorCount = 2 * FramesInFlight};
     VkDescriptorPoolCreateInfo pool{};
     pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pool.maxSets = 1;
+    pool.maxSets = FramesInFlight;
     pool.poolSizeCount = 1;
     pool.pPoolSizes = &size;
     if (const core::Status made =
@@ -1662,10 +1726,20 @@ core::Status VulkanGpuBackend::Implementation::CreateLayouts() {
     VkDescriptorSetAllocateInfo allocate{};
     allocate.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocate.descriptorPool = descriptor_pool_;
-    allocate.descriptorSetCount = 1;
-    allocate.pSetLayouts = &set_layout_;
-    return Check(vkAllocateDescriptorSets(device_, &allocate, &descriptor_set_),
-                 "vkAllocateDescriptorSets");
+    allocate.descriptorSetCount = FramesInFlight;
+    const std::array<VkDescriptorSetLayout, FramesInFlight> layouts = {
+        set_layout_, set_layout_, set_layout_, set_layout_};
+    allocate.pSetLayouts = layouts.data();
+    std::array<VkDescriptorSet, FramesInFlight> sets{};
+    if (const core::Status made = Check(vkAllocateDescriptorSets(device_, &allocate, sets.data()),
+                                        "vkAllocateDescriptorSets");
+        !made) {
+        return made;
+    }
+    for (std::size_t at = 0; at < FramesInFlight; ++at) {
+        frames_.at(at).set = sets.at(at);
+    }
+    return {};
 }
 
 // One render pass for every draw: the buffers loaded as memory had them and

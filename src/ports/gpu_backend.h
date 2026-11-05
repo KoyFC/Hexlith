@@ -44,6 +44,8 @@ struct GpuBackendStatistics {
     // A part of a target that was dirty and whose memory was written to by
     // someone who did not say so, which the backend then took as the truth.
     std::uint64_t conflicts = 0;
+    // Times the host stopped to wait for the device.
+    std::uint64_t waits = 0;
     // Pipelines made, and the different configurations of the fragment stage
     // the draws had: how many shaders specialised for a draw would have been
     // made (docs/gpu-speed.md).

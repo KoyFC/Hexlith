@@ -178,6 +178,7 @@ core::Status VulkanContext::CreateDevice() {
 VulkanContext::~VulkanContext() {
     if (device_ != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(device_);
+        static_cast<void>(Retire(last_ticket_, true));
         vkDestroyCommandPool(device_, pool_, nullptr);
         vkDestroyDevice(device_, nullptr);
     }
@@ -199,7 +200,8 @@ void VulkanContext::NoteValidationMessage(const char* message) {
     }
 }
 
-core::Status VulkanContext::Submit(const std::function<void(VkCommandBuffer)>& record) {
+core::Result<Ticket>
+VulkanContext::SubmitWithoutWaiting(const std::function<void(VkCommandBuffer)>& record) {
     VkCommandBufferAllocateInfo allocate{};
     allocate.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     allocate.commandPool = pool_;
@@ -209,7 +211,7 @@ core::Status VulkanContext::Submit(const std::function<void(VkCommandBuffer)>& r
     if (const core::Status allocated = Check(
             vkAllocateCommandBuffers(device_, &allocate, &commands), "vkAllocateCommandBuffers");
         !allocated) {
-        return allocated;
+        return allocated.Failure();
     }
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -217,16 +219,64 @@ core::Status VulkanContext::Submit(const std::function<void(VkCommandBuffer)>& r
     vkBeginCommandBuffer(commands, &begin);
     record(commands);
     vkEndCommandBuffer(commands);
-    VkSubmitInfo submit{};
-    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submit.commandBufferCount = 1;
-    submit.pCommandBuffers = &commands;
-    core::Status status = Check(vkQueueSubmit(queue_, 1, &submit, VK_NULL_HANDLE), "vkQueueSubmit");
+    VkFenceCreateInfo fence_info{};
+    fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    VkFence fence = VK_NULL_HANDLE;
+    core::Status status =
+        Check(vkCreateFence(device_, &fence_info, nullptr, &fence), "vkCreateFence");
     if (status) {
-        status = Check(vkQueueWaitIdle(queue_), "vkQueueWaitIdle");
+        VkSubmitInfo submit{};
+        submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit.commandBufferCount = 1;
+        submit.pCommandBuffers = &commands;
+        status = Check(vkQueueSubmit(queue_, 1, &submit, fence), "vkQueueSubmit");
     }
-    vkFreeCommandBuffers(device_, pool_, 1, &commands);
+    if (!status) {
+        vkDestroyFence(device_, fence, nullptr);
+        vkFreeCommandBuffers(device_, pool_, 1, &commands);
+        return status.Failure();
+    }
+    in_flight_.push_back({.ticket = ++last_ticket_, .fence = fence, .commands = commands});
+    return last_ticket_;
+}
+
+core::Status VulkanContext::Retire(Ticket upto, bool wait) {
+    core::Status status;
+    while (!in_flight_.empty() && in_flight_.front().ticket <= upto) {
+        const InFlight& front = in_flight_.front();
+        if (wait) {
+            if (const core::Status waited =
+                    Check(vkWaitForFences(device_, 1, &front.fence, VK_TRUE, UINT64_MAX),
+                          "vkWaitForFences");
+                !waited) {
+                return waited;
+            }
+        } else if (vkGetFenceStatus(device_, front.fence) != VK_SUCCESS) {
+            break;
+        }
+        vkDestroyFence(device_, front.fence, nullptr);
+        vkFreeCommandBuffers(device_, pool_, 1, &front.commands);
+        finished_ = front.ticket;
+        in_flight_.pop_front();
+    }
     return status;
+}
+
+core::Status VulkanContext::Wait(Ticket ticket) {
+    return Retire(ticket, true);
+}
+
+bool VulkanContext::Finished(Ticket ticket) {
+    static_cast<void>(Retire(ticket, false));
+    return ticket <= finished_;
+}
+
+core::Status VulkanContext::Submit(const std::function<void(VkCommandBuffer)>& record) {
+    const core::Result<Ticket> ticket = SubmitWithoutWaiting(record);
+    if (!ticket) {
+        return ticket.Failure();
+    }
+    return Wait(ticket.Value());
 }
 
 std::optional<std::uint32_t> VulkanContext::MemoryType(std::uint32_t allowed,

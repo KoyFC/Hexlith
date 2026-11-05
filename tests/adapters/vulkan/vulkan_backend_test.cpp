@@ -439,8 +439,29 @@ TEST(VulkanGpuBackend, KeepsATargetOnTheDeviceUntilSomethingReadsIt) {
     EXPECT_EQ(run.context->ValidationMessages(), 0U) << run.context->FirstValidationMessage();
 }
 
-// The buffers a group reads are made for the first one and kept: a list the
-// same size as the last needs none of its own, and the pictures are as before.
+// ADR 0032: a list is submitted and the game goes on while the device draws
+// it. The host stops only when something needs what was drawn, and what it
+// finds then is what the reference draws.
+TEST(VulkanGpuBackend, ReturnsFromAListWithoutWaitingForTheDevice) {
+    Resident run = MakeResident();
+    if (!run.backend) {
+        GTEST_SKIP() << "no Vulkan device that can draw";
+    }
+    const auto reference = Reference({Scene(), Scene()}, [](gpu::GpuMemory&) {});
+
+    ASSERT_TRUE(run.backend->RunCommandList(Scene().Bytes()).Ok());
+    ASSERT_TRUE(run.backend->RunCommandList(Scene().Bytes()).Ok());
+    EXPECT_EQ(run.backend->Statistics().waits, 0U) << "two lists, nothing has needed them";
+
+    ASSERT_TRUE(run.backend->BeforeRead(ColorAddress, ColorBytes).Ok());
+    EXPECT_EQ(run.backend->Statistics().waits, 1U) << "the read waits for the copy, once";
+    EXPECT_EQ(Differences(*run.memory, *reference, ColorAddress), "");
+    EXPECT_EQ(run.context->ValidationMessages(), 0U) << run.context->FirstValidationMessage();
+}
+
+// The buffers a group reads are made for the first groups and kept: once every
+// frame of the ring has been used, a list the same size as the last needs none
+// of its own, and the pictures are as before.
 TEST(VulkanGpuBackend, ReusesItsBuffersFromGroupToGroup) {
     Resident run = MakeResident();
     if (!run.backend) {
@@ -449,15 +470,17 @@ TEST(VulkanGpuBackend, ReusesItsBuffersFromGroupToGroup) {
     const std::vector<List> lists(10, Scene());
     const auto reference = Reference(lists, [](gpu::GpuMemory&) {});
 
-    for (std::size_t at = 0; at < 2; ++at) {
+    // The backend keeps four groups in flight, each with buffers of its own.
+    constexpr std::size_t FramesInFlight = 4;
+    for (std::size_t at = 0; at < FramesInFlight; ++at) {
         ASSERT_TRUE(run.backend->RunCommandList(lists.at(at).Bytes()).Ok());
     }
     const std::uint64_t made = run.backend->Statistics().allocations;
-    for (std::size_t at = 2; at < lists.size(); ++at) {
+    for (std::size_t at = FramesInFlight; at < lists.size(); ++at) {
         ASSERT_TRUE(run.backend->RunCommandList(lists.at(at).Bytes()).Ok());
     }
 
-    EXPECT_EQ(run.backend->Statistics().allocations, made) << "eight more groups, no new buffer";
+    EXPECT_EQ(run.backend->Statistics().allocations, made) << "six more groups, no new buffer";
     ASSERT_TRUE(run.backend->BeforeRead(ColorAddress, ColorBytes).Ok());
     EXPECT_EQ(Differences(*run.memory, *reference, ColorAddress), "");
     EXPECT_EQ(run.context->ValidationMessages(), 0U) << run.context->FirstValidationMessage();
